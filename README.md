@@ -7,7 +7,7 @@
 
 ### No proof, no "done".
 
-done-done won't let a task be called done until the real product has been seen working.
+done-done won't accept "done" without real, fresh proof from your product, captured at the exact commit being called done.
 
 [![Node 22.5+](https://img.shields.io/badge/node-22.5%2B-3fb950?logo=nodedotjs&logoColor=white)](https://nodejs.org) [![Status: early preview](https://img.shields.io/badge/status-early%20preview-d29922)](#whats-next) [![npm: not published yet](https://img.shields.io/badge/npm-not%20published%20yet-8b949e?logo=npm&logoColor=white)](#quick-start)
 
@@ -15,7 +15,7 @@ done-done won't let a task be called done until the real product has been seen w
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/media/hero-dark.svg">
-  <img src="docs/media/hero-light.svg" alt="A terminal: done-done records a run of a demo notes app and the check passes. After a code change, the same check fails because the proof is for an older commit." width="760">
+  <img src="docs/media/hero-light.svg" alt="A terminal: done-done records a run of a demo notes app and the check passes. After a code change, the same check fails because the proof is for an older commit." width="620">
 </picture>
 
 </div>
@@ -24,7 +24,7 @@ done-done won't let a task be called done until the real product has been seen w
 
 "Done" is easy to say. Screenshots get reused, recordings go stale, and a green test run is not the app.
 
-done-done ties every screenshot, recording and log to the exact commit it came from. When someone says "done", it checks the proof they point to: is it really there, is it a real picture or video, is it from this commit, and has it not been used before? If not, it says no.
+done-done runs your capture and ties every screenshot, recording and log it saves to the exact commit. When someone says "done", it checks the proof they point to: is it really there, is it a real picture or video, is it from this commit, and is it new? If not, the check fails. If it can't tell, it says so instead of passing.
 
 ## See it work
 
@@ -55,24 +55,32 @@ evidence:
   root: .proof
 journeys:
   smoke:
-    command: mkdir -p .proof/${RUN_ID} && npm test > .proof/${RUN_ID}/smoke.log
+    command: npm test > .proof/${RUN_ID}.log
+```
+
+Keep proof out of git, and commit, because proof only counts from a clean tree:
+
+```sh
+echo .proof/ >> .gitignore
+git add .gitignore .done-done.yaml
+git commit -m "Add done-done"
 ```
 
 **3. Run it, then check it**
 
 ```sh
 done-done run smoke
-done-done check --outcome "the app starts" .proof/*/smoke.log
+done-done check --outcome "it starts" .proof/*.log
 ```
 
-You should see `result: PASS` twice. After later runs, name the run id that `done-done run` prints instead of `*`.
+You should see `result: PASS` twice. After later runs, use the run id that `done-done run` prints in place of `*`.
 
 ## What it checks
 
 - 🔗 **Tied to a commit**: Every run records the commit, and whether there were uncommitted changes.
-- 🖼️ **Real media**: Empty, cut-off, blank or tiny screenshots fail. Videos must hold real frames.
+- 🖼️ **Real media**: Empty, cut-off, blank or tiny screenshots fail. Videos must hold real frames (needs `ffprobe`).
 - ⏱️ **Fresh**: Proof from an older commit fails. Commits that only touch docs can be set to keep it fresh.
-- ♻️ **Not reused**: The same file can't prove two different claims, or be cited twice in one.
+- ♻️ **Not reused**: Proof made only of files already used for a different claim fails, and so does citing the same file twice.
 - 🧾 **Honest claims**: Reads a pull request's `## Checks` block and makes sure every line is filled in.
 - 🔒 **Safe in CI**: `--trusted-ref origin/main` reads the rules from your main branch, so a pull request can't loosen them.
 
@@ -85,7 +93,7 @@ Every answer is an exit code: **0** pass, **1** fail, **2** usage or config erro
 
 ## What's next
 
-This is the first slice: `run` and `check`. Coming next: receipts, a vision judge that checks a capture really shows the claim, `init`, and creating and maintaining verify skills.
+This is the first slice: `run` and `check`. Coming next: a saved receipt for each passing check, an AI check that a screenshot really shows what it claims, a setup command, and help writing the proof steps for your app.
 
 ## Develop
 

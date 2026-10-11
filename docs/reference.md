@@ -76,8 +76,8 @@ evidence: <paths of the evidence files, or "not proven: <cause>">
 **Form rules for the Checks block:**
 - all four lines must be present;
 - `proof` names a command or path;
-- `proof` names the repo's verify skill (`.agents/skills/verify-<app>`) when it has one, otherwise it says "no verify skill";
-- a fix PR needs a repro.
+- if the repo has its verify skill (`.agents/skills/verify-<app>`), `proof` names it (`verify-<app>`); otherwise `proof` names some `verify-` skill or says "no verify skill";
+- a fix PR needs a repro (checked against the PR title, so only for a PR URL; a local file has no title).
 
 **Each cited file must pass these checks:**
 

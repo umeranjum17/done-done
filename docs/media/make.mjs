@@ -14,6 +14,7 @@ const CLI = join(OUT, '..', '..', 'dist', 'cli.js');
 // ---- 1. A fictional app, driven for real -------------------------------------------------
 
 const home = mkdtempSync(join(tmpdir(), 'done-done-media-'));
+process.on('exit', () => rmSync(home, { recursive: true, force: true }));
 const repo = join(home, 'notes');
 const env = {
   PATH: `${join(home, 'bin')}:${process.env.PATH}`, HOME: home, DONE_DONE_HOME: join(home, '.done-done'),
@@ -51,7 +52,8 @@ const term = (cmd) => {
 const checks = (evidence) => `## Checks\noutcome: notes sync between two devices\nrepro: n/a: no bug\nproof: no verify skill - done-done run sync\nevidence: ${evidence}\n`;
 
 const run = term('done-done run sync');
-const id = run.out.match(/^run: (\S+)/m)[1];
+const id = run.out.match(/^run: (\S+)/m)?.[1];
+if (run.code !== 0 || !id) throw new Error(`done-done run sync failed (exit ${run.code}):\n${run.out}`);
 writeFileSync(join(repo, 'pr-body.md'), checks(`.proof/${id}/after.png`));
 const body = term('cat pr-body.md');
 const pass = term('done-done check --from pr-body.md');
@@ -67,8 +69,6 @@ const reasons = term('done-done check --from pr-body.md');
 
 writeFileSync(join(repo, '.done-done.yaml'), yaml.replace('evidence:', 'evidance:'));
 const config = term('done-done run sync');
-rmSync(home, { recursive: true, force: true });
-
 for (const [name, r, want] of [['run', run, 0], ['pass', pass, 0], ['stale', stale, 1], ['reasons', reasons, 1], ['config', config, 2]])
   if (r.code !== want) throw new Error(`${name}: expected exit ${want}, got ${r.code}\n${r.out}`);
 
@@ -125,7 +125,7 @@ function rows(session) {
 const text = (row, y, extra = '') => {
   const len = row.spans.reduce((n, [, t]) => n + t.length, 0);
   const body = row.spans.map(([c, t]) => (c ? `<tspan class="${c}">${esc(t)}</tspan>` : esc(t))).join('');
-  return `<text xml:space="preserve" x="${PAD}" y="${y}"${len ? ` textLength="${(len * CW).toFixed(1)}" lengthAdjust="spacingAndGlyphs"` : ''}${extra}>${body}</text>`;
+  return `<text xml:space="preserve" x="${PAD}" y="${y}"${len ? ` textLength="${(len * CW).toFixed(1)}" lengthAdjust="spacing"` : ''}${extra}>${body}</text>`;
 };
 
 function frame(t, height, title, inner, css = '') {
@@ -141,7 +141,8 @@ text{font:${FS}px ui-monospace,SFMono-Regular,'SF Mono',Menlo,Consolas,'Liberati
 <path d="M0.5 ${BAR}V10.5a10 10 0 0 1 10-10h${W - 21}a10 10 0 0 1 10 10V${BAR}z" fill="${t.bar}" stroke="${t.border}"/>
 <circle cx="20" cy="19" r="6" fill="#ff5f57"/><circle cx="40" cy="19" r="6" fill="#febc2e"/><circle cx="60" cy="19" r="6" fill="#28c840"/>
 <text class="t" x="${W / 2}" y="23" text-anchor="middle">${esc(title)}</text>
-${inner}
+<clipPath id="body"><rect x="1" y="${BAR + 1}" width="${W - 2}" height="${height - BAR - 2}"/></clipPath>
+<g clip-path="url(#body)">${inner}</g>
 </svg>
 `;
 }
@@ -201,7 +202,7 @@ function animated(t, session, title) {
 const exit = (r) => `exit ${r.code}`;
 for (const [name, t] of Object.entries(THEMES)) {
   const put = (file, svg) => writeFileSync(join(OUT, `${file}-${name}.svg`), svg);
-  COLS = 80;
+  COLS = 60;
   put('hero', animated(t, [run, pass, commit, stale], 'done-done in a demo notes app'));
   COLS = 54;
   put('run', still(t, [run], `Record a run · ${exit(run)}`));

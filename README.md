@@ -14,8 +14,15 @@ done-done won't accept "done" without real, fresh proof from your product, captu
 <br>
 
 <picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/media/flow-dark.svg">
+  <img src="docs/media/flow-light.svg" alt="How it works: capture your real app, tie every file to the exact commit, then check: pass with exit 0 or fail with exit 1." width="710">
+</picture>
+
+<br><br>
+
+<picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/media/hero-dark.svg">
-  <img src="docs/media/hero-light.svg" alt="A terminal: done-done records a run of a demo notes app and the check passes. After a code change, the same check fails because the proof is for an older commit." width="620">
+  <img src="docs/media/hero-light.svg" alt="A terminal: done-done records a run of a demo notes app and the check passes. After a code change, the same check fails because the proof is for an older commit." width="560">
 </picture>
 
 </div>

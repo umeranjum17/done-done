@@ -38,7 +38,7 @@ export const png = (w, h, px) => { const hd = Buffer.alloc(13); hd.writeUInt32BE
 if (id) {
   mkdirSync('.proof/' + id, { recursive: true });
   writeFileSync('.proof/' + id + '/after.png', png(320, 200, (x, y) => [(x + seed) % 256, (y * 2) % 256, 180]));
-  console.log('  synced one note across two devices, saved after.png');
+  console.log('  synced a note on two devices, saved after.png');
 }
 `);
 const sh = (cmd) => execFileSync('sh', ['-c', cmd], { cwd: repo, env, encoding: 'utf8' });
@@ -78,7 +78,7 @@ const THEMES = {
   light: { page: '#ffffff', bg: '#f6f8fa', bar: '#eaeef2', border: '#d0d7de', fg: '#1f2328', dim: '#59636e', prompt: '#8250df', pass: '#1a7f37', fail: '#cf222e', warn: '#9a6700' },
   dark: { page: '#0d1117', bg: '#161b22', bar: '#21262d', border: '#30363d', fg: '#e6edf3', dim: '#8b949e', prompt: '#d2a8ff', pass: '#3fb950', fail: '#ff7b72', warn: '#e3b341' },
 };
-const FS = 14, CW = 8.4, LH = 21, PAD = 22, BAR = 38;
+const FS = 16, CW = 9.6, LH = 24, PAD = 22, BAR = 40; // big enough to read on a phone
 let COLS = 80; // set per picture
 const esc = (s) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 const PROMPT = '~/notes $ ';
@@ -103,12 +103,13 @@ function rows(session) {
     out.push({ kind: 'cmd', spans: [['c', PROMPT], ['b', r.cmd]], cmdLen: r.cmd.length });
     if (!r.out) continue;
     for (const line of r.out.split('\n')) {
-      // Wrap long lines at a space (or mid-word if they must), indenting the rest; colours carry over.
+      // Wrap long lines at a space or after a slash (or mid-word if they must), indenting the rest; colours carry over.
       let flat = spans(line).flatMap(([c, t]) => [...t].map((ch) => [c, ch]));
       do {
         let cut = flat.length;
         if (cut > COLS) {
-          cut = flat.slice(0, COLS + 1).map(([, ch]) => ch).lastIndexOf(' ');
+          const chars = flat.slice(0, COLS + 1).map(([, ch]) => ch);
+          cut = Math.max(chars.lastIndexOf(' '), chars.slice(0, COLS).lastIndexOf('/') + 1);
           if (cut < COLS / 2) cut = COLS;
         }
         const piece = [];
@@ -135,79 +136,79 @@ function frame(t, height, title, inner, css = '') {
 <style>
 text{font:${FS}px ui-monospace,SFMono-Regular,'SF Mono',Menlo,Consolas,'Liberation Mono',monospace;fill:${t.fg};white-space:pre}
 .d{fill:${t.dim}}.c{fill:${t.prompt}}.p{fill:${t.pass}}.f{fill:${t.fail}}.w{fill:${t.warn}}.b{font-weight:600}
-.t{font-size:13px;font-weight:600;fill:${t.dim}}${css}
+.t{font-size:14px;font-weight:600;fill:${t.dim}}${css}
 </style>
 <rect x="0.5" y="0.5" width="${W - 1}" height="${height - 1}" rx="10" fill="${t.bg}" stroke="${t.border}"/>
 <path d="M0.5 ${BAR}V10.5a10 10 0 0 1 10-10h${W - 21}a10 10 0 0 1 10 10V${BAR}z" fill="${t.bar}" stroke="${t.border}"/>
-<circle cx="20" cy="19" r="6" fill="#ff5f57"/><circle cx="40" cy="19" r="6" fill="#febc2e"/><circle cx="60" cy="19" r="6" fill="#28c840"/>
-<text class="t" x="${W / 2}" y="23" text-anchor="middle">${esc(title)}</text>
+<circle cx="20" cy="20" r="6" fill="#ff5f57"/><circle cx="40" cy="20" r="6" fill="#febc2e"/><circle cx="60" cy="20" r="6" fill="#28c840"/>
+<text class="t" x="${W / 2}" y="25" text-anchor="middle">${esc(title)}</text>
 <clipPath id="body"><rect x="1" y="${BAR + 1}" width="${W - 2}" height="${height - BAR - 2}"/></clipPath>
 <g clip-path="url(#body)">${inner}</g>
 </svg>
 `;
 }
 
-// A still picture of one or more commands.
+// A still picture of one or more commands, ending with the exit code of the last one.
 function still(t, session, title) {
-  const rs = rows(session);
+  const rs = [...rows(session), { kind: 'out', spans: [['d', `exit ${session.at(-1).code}`]] }];
   const height = BAR + 32 + (rs.length - 1) * LH + 22;
   return frame(t, height, title, rs.map((r, i) => text(r, BAR + 32 + i * LH)).join('\n'));
 }
 
-// The hero: commands type out, output appears, holds, then loops.
-function animated(t, session, title) {
-  const rs = rows(session);
-  const steps = []; // {row, start, typed}
-  let now = 0.1;
-  for (const r of rs) {
-    if (r.kind === 'cmd') {
-      now += 0.5;
-      steps.push({ r, start: now, typing: r.cmdLen * 0.045 });
-      now += r.cmdLen * 0.045 + 0.45;
-    } else {
-      steps.push({ r, start: now });
-      now += 0.07;
-    }
-    if (r.kind === 'out' && /^result/.test(r.spans.map((s) => s[1]).join(''))) now += 1.6;
+// The hero: commands type out, output appears; each scene clears the screen; then it loops.
+function animated(t, scenes, title) {
+  const steps = []; // {r, start, end, row, typing}
+  let now = 0.1, maxRows = 0, last = 0;
+  for (const session of scenes) {
+    const rs = rows(session);
+    last = steps.length;
+    rs.forEach((r, row) => {
+      if (r.kind === 'cmd') {
+        now += 0.5;
+        steps.push({ r, row, start: now, typing: r.cmdLen * 0.045 });
+        now += r.cmdLen * 0.045 + 0.45;
+      } else {
+        steps.push({ r, row, start: now });
+        now += 0.07;
+      }
+      if (r.kind === 'out' && /^result/.test(r.spans.map((x) => x[1]).join(''))) now += 1.6;
+    });
+    steps.push({ r: { spans: [['c', PROMPT]] }, row: rs.length, start: now, idle: true });
+    now += 2.6; // hold on the finished scene
+    for (const st of steps.slice(last)) st.end = now - 0.3;
+    maxRows = Math.max(maxRows, rs.length + 1);
   }
-  const idleY = rs.length;
-  now += 1.2;
-  const T = now + 2.4; // hold on the finished screen, then restart
-  const pct = (s) => ((s / T) * 100).toFixed(2);
-  const fadeAt = pct(T - 0.5);
+  const T = now;
+  const pct = (x) => ((x / T) * 100).toFixed(2);
   let css = '', inner = '';
-  const show = (name, s) => (css += `\n@keyframes ${name}{0%,${pct(s)}%{opacity:0}${pct(s + 0.01)}%,${fadeAt}%{opacity:1}100%{opacity:0}}.${name}{opacity:0;animation:${name} ${T.toFixed(2)}s linear infinite}`);
-  steps.forEach((s, i) => {
-    const y = BAR + 32 + i * LH;
-    show(`l${i}`, s.start);
-    if (s.typing) {
+  steps.forEach((st, i) => {
+    const y = BAR + 32 + st.row * LH;
+    css += `\n@keyframes l${i}{0%,${pct(st.start)}%{opacity:0}${pct(st.start + 0.01)}%,${pct(st.end)}%{opacity:1}${pct(st.end + 0.01)}%,100%{opacity:0}}.l${i}{opacity:0;animation:l${i} ${T.toFixed(2)}s linear infinite}`;
+    if (st.idle) {
+      inner += `\n<g class="l${i}">${text(st.r, y)}<rect class="cur" x="${PAD + PROMPT.length * CW}" y="${y - 16}" width="${CW}" height="20" fill="${t.fg}" opacity=".7"/></g>`;
+    } else if (st.typing) {
       // A cover in the background colour slides right one character at a time; the cursor rides its edge.
-      const n = s.r.cmdLen, x0 = PAD + PROMPT.length * CW, end = s.start + s.typing;
-      css += `\n@keyframes k${i}{0%,${pct(s.start)}%{transform:translateX(0)}${pct(end)}%,100%{transform:translateX(${(n * CW).toFixed(1)}px)}}.k${i}{animation:k${i} ${T.toFixed(2)}s steps(${n},end) infinite}`;
+      const n = st.r.cmdLen, x0 = PAD + PROMPT.length * CW, end = st.start + st.typing;
+      css += `\n@keyframes k${i}{0%,${pct(st.start)}%{transform:translateX(0)}${pct(end)}%,100%{transform:translateX(${(n * CW).toFixed(1)}px)}}.k${i}{animation:k${i} ${T.toFixed(2)}s steps(${n},end) infinite}`;
       css += `\n@keyframes h${i}{0%,${pct(end + 0.45)}%{opacity:1}${pct(end + 0.46)}%,100%{opacity:0}}.h${i}{animation:h${i} ${T.toFixed(2)}s linear infinite}`;
-      inner += `\n<g class="l${i}">${text(s.r, y)}<g class="k${i}"><rect x="${x0}" y="${y - 15}" width="${(n * CW + 20).toFixed(1)}" height="${LH}" fill="${t.bg}"/><rect class="h${i}" x="${x0}" y="${y - 14}" width="${CW}" height="18" fill="${t.fg}" opacity=".7"/></g></g>`;
-    } else inner += `\n<g class="l${i}">${text(s.r, y)}</g>`;
+      inner += `\n<g class="l${i}">${text(st.r, y)}<g class="k${i}"><rect x="${x0}" y="${y - 17}" width="${(n * CW + 20).toFixed(1)}" height="${LH}" fill="${t.bg}"/><rect class="h${i}" x="${x0}" y="${y - 16}" width="${CW}" height="20" fill="${t.fg}" opacity=".7"/></g></g>`;
+    } else inner += `\n<g class="l${i}">${text(st.r, y)}</g>`;
   });
-  // Final idle prompt with a blinking cursor.
-  const y = BAR + 32 + idleY * LH;
-  show('idle', now - 1.2);
   css += `\n@keyframes blink{50%{opacity:0}}.cur{animation:blink 1s steps(1) infinite}`;
-  inner += `\n<g class="idle">${text({ spans: [['c', PROMPT]] }, y)}<rect class="cur" x="${PAD + PROMPT.length * CW}" y="${y - 14}" width="${CW}" height="18" fill="${t.fg}" opacity=".7"/></g>`;
-  // Without motion, show the finished screen.
-  css += `\n@media (prefers-reduced-motion:reduce){g[class]{animation:none!important;opacity:1!important}${steps.map((_, i) => `.k${i}`).join(',')}{display:none}}`;
-  const height = BAR + 32 + rs.length * LH + 22;
+  // Without motion, show the last scene finished.
+  css += `\n@media (prefers-reduced-motion:reduce){g[class]{animation:none!important}${steps.map((_, i) => `.k${i}`).join(',')}{display:none}${steps.slice(last).map((_, i) => `.l${i + last}`).join(',')}{opacity:1!important}}`;
+  const height = BAR + 32 + (maxRows - 1) * LH + 22;
   return frame(t, height, title, inner, css);
 }
 
-const exit = (r) => `exit ${r.code}`;
 for (const [name, t] of Object.entries(THEMES)) {
   const put = (file, svg) => writeFileSync(join(OUT, `${file}-${name}.svg`), svg);
-  COLS = 60;
-  put('hero', animated(t, [run, pass, commit, stale], 'done-done in a demo notes app'));
-  COLS = 54;
-  put('run', still(t, [run], `Record a run · ${exit(run)}`));
-  put('pass', still(t, [body, pass], `Fresh proof passes · ${exit(pass)}`));
-  put('reasons', still(t, [reasons], `Weak proof is blocked · ${exit(reasons)}`));
-  put('config', still(t, [config], `Mistakes stop early · ${exit(config)}`));
+  COLS = 48;
+  put('hero', animated(t, [[run, pass], [commit, stale]], 'done-done in a demo notes app'));
+  put('run', still(t, [run], 'Record a run'));
+  put('pass', still(t, [body, pass], 'Fresh proof passes'));
+  put('reasons', still(t, [reasons], 'Weak proof is blocked'));
+  // Only the error line: the usage help that follows it adds nothing here.
+  put('config', still(t, [{ ...config, out: config.out.split('\n')[0] }], 'Mistakes stop early'));
 }
 console.log(`wrote hero, run, pass, reasons and config (light and dark) to ${OUT}`);

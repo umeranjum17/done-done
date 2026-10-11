@@ -319,7 +319,7 @@ const INIT_EVIDENCE_ROOT = '.proof';
 // Append `<rel>/` to .gitignore unless git already ignores it. Never rewrites existing bytes.
 function ensureIgnored(repo: string, rel: string): boolean {
   const entry = `${rel.replace(/\/+$/, '')}/`;
-  if (spawnSync('git', ['check-ignore', '-q', '--', entry], { cwd: repo }).status === 0) return false;
+  if (spawnSync('git', ['check-ignore', '--no-index', '-q', '--', entry], { cwd: repo }).status === 0) return false;
   const file = join(repo, '.gitignore');
   if (!existsSync(file)) {
     writeFileSync(file, `${entry}\n`);

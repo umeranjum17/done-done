@@ -7,8 +7,11 @@ import { dirname, join } from 'node:path';
 import { after, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { crc32, deflateSync } from 'node:zlib';
+import { parse } from 'yaml';
 
 const CLI = join(dirname(fileURLToPath(import.meta.url)), '..', 'dist', 'cli.js');
+
+const isIgnored = (repo, path) => spawnSync('git', ['check-ignore', '--no-index', '-q', '--', path], { cwd: repo }).status === 0;
 
 function png(w, h, pixel) {
   const chunk = (type, data) => {
@@ -228,8 +231,8 @@ test('init writes a minimal config, ignores the evidence root, and is idempotent
   const r = dd('init');
   assert.equal(r.code, 0, r.out);
   const yml = join(repo, '.done-done.yaml');
-  assert.match(readFileSync(yml, 'utf8'), /evidence:\n  root: \.proof/);
-  assert.match(readFileSync(join(repo, '.gitignore'), 'utf8'), /^\.proof\/$/m);
+  assert.equal(parse(readFileSync(yml, 'utf8')).evidence.root, '.proof');
+  assert.ok(isIgnored(repo, '.proof/'), 'git ignores the evidence root');
   const before = [readFileSync(yml), readFileSync(join(repo, '.gitignore'))];
   const again = dd('init');
   assert.equal(again.code, 0, again.out);
@@ -245,12 +248,24 @@ test('init leaves a customized config untouched and only appends a missing ignor
   const ymlBefore = readFileSync(join(repo, '.done-done.yaml'));
   assert.equal(dd('init').code, 0);
   assert.deepEqual(readFileSync(join(repo, '.done-done.yaml')), ymlBefore, 'customized config is byte-preserved');
-  const gitignore = readFileSync(join(repo, '.gitignore'), 'utf8');
-  assert.match(gitignore, /^node_modules\/$/m, 'existing entries kept');
-  assert.match(gitignore, /^\.verify\/$/m, 'configured evidence root is now ignored');
+  assert.ok(isIgnored(repo, 'node_modules/'), 'existing ignore entries kept');
+  assert.ok(isIgnored(repo, '.verify/'), 'configured evidence root is now ignored by git');
   const snapshot = readFileSync(join(repo, '.gitignore'));
   assert.equal(dd('init').code, 0);
   assert.deepEqual(readFileSync(join(repo, '.gitignore')), snapshot, 'the second init appends nothing');
+});
+
+test('init is a no-op when the evidence root is already tracked and ignored', () => {
+  const { repo, sh, dd } = bareRepo();
+  writeFileSync(join(repo, '.gitignore'), '.proof/\n');
+  mkdirSync(join(repo, '.proof'), { recursive: true });
+  writeFileSync(join(repo, '.proof', 'old.log'), '$ notes add milk\n');
+  sh('add', '-f', '.gitignore', '.proof/old.log');
+  sh('commit', '-qm', 'tracked evidence');
+  assert.equal(dd('init').code, 0);
+  const snapshot = readFileSync(join(repo, '.gitignore'));
+  assert.equal(dd('init').code, 0);
+  assert.deepEqual(readFileSync(join(repo, '.gitignore')), snapshot, 'a tracked evidence root does not grow .gitignore');
 });
 
 test('init refuses a malformed config with a clear error and no rewrite', () => {
@@ -270,7 +285,7 @@ test('init works in a repo path with a space', () => {
   const r = dd('init');
   assert.equal(r.code, 0, r.out);
   assert.ok(existsSync(join(repo, '.done-done.yaml')));
-  assert.match(readFileSync(join(repo, '.gitignore'), 'utf8'), /^\.proof\/$/m);
+  assert.ok(isIgnored(repo, '.proof/'), 'git ignores the evidence root');
 });
 
 test('init outside a git repository reports a clear usage error', () => {

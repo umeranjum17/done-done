@@ -1,7 +1,7 @@
 // End-to-end: drives the built CLI against throwaway git repos with fictional fixtures.
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { after, test } from 'node:test';
@@ -202,4 +202,99 @@ test('videos are probed for real frames', { skip: spawnSync('ffmpeg', ['-version
   const cut = dd('check', '--outcome', 'cut clip', '.proof/cut.mp4');
   assert.equal(cut.code, 1, cut.out);
   assert.match(cut.out, /does not decode/);
+});
+
+// A bare git repo with no done-done config yet, for exercising `init`.
+function bareRepo(dirName = 'repo') {
+  const dir = mkdtempSync(join(tmpdir(), 'done-done-init-'));
+  after(() => rmSync(dir, { recursive: true, force: true }));
+  const repo = join(dir, dirName);
+  const env = { ...process.env, DONE_DONE_HOME: join(dir, 'home'), GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@example.com', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@example.com' };
+  mkdirSync(repo, { recursive: true });
+  const sh = (...a) => execFileSync('git', a, { cwd: repo, env, stdio: 'pipe' });
+  sh('init', '-q', '-b', 'main');
+  writeFileSync(join(repo, 'app.js'), 'export const app = 1;\n');
+  sh('add', '-A');
+  sh('commit', '-qm', 'init');
+  const dd = (...args) => {
+    const r = spawnSync(process.execPath, [CLI, ...args], { cwd: repo, env, encoding: 'utf8' });
+    return { code: r.status, out: r.stdout + r.stderr };
+  };
+  return { dir, repo, env, sh, dd };
+}
+
+test('init writes a minimal config, ignores the evidence root, and is idempotent', () => {
+  const { repo, dd } = bareRepo();
+  const r = dd('init');
+  assert.equal(r.code, 0, r.out);
+  const yml = join(repo, '.done-done.yaml');
+  assert.match(readFileSync(yml, 'utf8'), /evidence:\n  root: \.proof/);
+  assert.match(readFileSync(join(repo, '.gitignore'), 'utf8'), /^\.proof\/$/m);
+  const before = [readFileSync(yml), readFileSync(join(repo, '.gitignore'))];
+  const again = dd('init');
+  assert.equal(again.code, 0, again.out);
+  assert.match(again.out, /already exists/);
+  assert.deepEqual([readFileSync(yml), readFileSync(join(repo, '.gitignore'))], before, 'repeat init preserves both files');
+});
+
+test('init leaves a customized config untouched and only appends a missing ignore line', () => {
+  const { repo, dd } = bareRepo();
+  const custom = 'app: notes\nevidence:\n  root: .verify\n  ignore_paths: ["docs/**"]\njourneys:\n  smoke:\n    command: node x.mjs\n';
+  writeFileSync(join(repo, '.done-done.yaml'), custom);
+  writeFileSync(join(repo, '.gitignore'), 'node_modules/\n');
+  const ymlBefore = readFileSync(join(repo, '.done-done.yaml'));
+  assert.equal(dd('init').code, 0);
+  assert.deepEqual(readFileSync(join(repo, '.done-done.yaml')), ymlBefore, 'customized config is byte-preserved');
+  const gitignore = readFileSync(join(repo, '.gitignore'), 'utf8');
+  assert.match(gitignore, /^node_modules\/$/m, 'existing entries kept');
+  assert.match(gitignore, /^\.verify\/$/m, 'configured evidence root is now ignored');
+  const snapshot = readFileSync(join(repo, '.gitignore'));
+  assert.equal(dd('init').code, 0);
+  assert.deepEqual(readFileSync(join(repo, '.gitignore')), snapshot, 'the second init appends nothing');
+});
+
+test('init refuses a malformed config with a clear error and no rewrite', () => {
+  const { repo, dd } = bareRepo();
+  writeFileSync(join(repo, '.done-done.yaml'), 'evidence:\n  root: [unterminated\n');
+  const before = readFileSync(join(repo, '.done-done.yaml'));
+  const r = dd('init');
+  assert.equal(r.code, 2, r.out);
+  assert.match(r.out, /\.done-done\.yaml/);
+  assert.deepEqual(readFileSync(join(repo, '.done-done.yaml')), before, 'the bad file is not rewritten');
+  writeFileSync(join(repo, '.done-done.yaml'), 'unknown_key: 1\n');
+  assert.equal(dd('init').code, 2, 'an invalid key is refused too');
+});
+
+test('init works in a repo path with a space', () => {
+  const { repo, dd } = bareRepo('my project');
+  const r = dd('init');
+  assert.equal(r.code, 0, r.out);
+  assert.ok(existsSync(join(repo, '.done-done.yaml')));
+  assert.match(readFileSync(join(repo, '.gitignore'), 'utf8'), /^\.proof\/$/m);
+});
+
+test('init outside a git repository reports a clear usage error', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'done-done-nogit-'));
+  after(() => rmSync(dir, { recursive: true, force: true }));
+  const r = spawnSync(process.execPath, [CLI, 'init'], { cwd: dir, env: { ...process.env, DONE_DONE_HOME: join(dir, 'home') }, encoding: 'utf8' });
+  assert.equal(r.status, 2, r.stdout + r.stderr);
+  assert.match(r.stdout + r.stderr, /not inside a git repository/);
+});
+
+test('a repo set up by init captures and checks real evidence, then catches stale and missing', () => {
+  const { repo, sh, dd } = bareRepo();
+  assert.equal(dd('init').code, 0);
+  writeFileSync(join(repo, 'make-log.mjs'), "import { mkdirSync, writeFileSync } from 'node:fs';\nconst out = '.proof/' + process.argv[2];\nmkdirSync(out, { recursive: true });\nwriteFileSync(out + '/session.log', '$ notes add milk\\nadded: milk\\nexit 0\\n');\n");
+  sh('add', '-A');
+  sh('commit', '-qm', 'config and capture script');
+  const r = dd('run', '--', 'node make-log.mjs ${RUN_ID}');
+  assert.equal(r.code, 0, r.out);
+  const id = r.out.match(/^run: (\S+)/m)[1];
+  assert.equal(dd('check', '--outcome', 'notes add works', `.proof/${id}/session.log`).code, 0);
+  assert.equal(dd('check', '--outcome', 'gone', `.proof/${id}/missing.log`).code, 1, 'a missing file fails');
+  writeFileSync(join(repo, 'app.js'), 'export const app = 2;\n');
+  sh('commit', '-qam', 'code');
+  const stale = dd('check', '--outcome', 'notes add works', `.proof/${id}/session.log`);
+  assert.equal(stale.code, 1, stale.out);
+  assert.match(stale.out, /evidence is for commit/);
 });

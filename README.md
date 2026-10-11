@@ -55,20 +55,24 @@ cd done-done
 npm install && npm run build && npm link
 ```
 
-**2. Tell it how to capture proof.** In your app's repo, add `.done-done.yaml`. Swap `npm test` for whatever drives your real app and saves screenshots, recordings or logs.
+**2. Set it up in your app's repo**
+
+```sh
+cd your-app
+done-done init
+```
+
+`init` writes a minimal `.done-done.yaml` (only if you don't already have one) and adds the evidence root `.proof/` to `.gitignore`. It never overwrites an existing config. Then describe how to capture proof — swap the command for whatever drives your real app and saves screenshots, recordings or logs:
 
 ```yaml
-evidence:
-  root: .proof
 journeys:
   smoke:
     command: npm test > .proof/${RUN_ID}.log
 ```
 
-Keep proof out of git, and commit, because proof only counts from a clean tree:
+Commit the config, because proof only counts from a clean tree:
 
 ```sh
-echo .proof/ >> .gitignore
 git add .gitignore .done-done.yaml
 git commit -m "Add done-done"
 ```
@@ -100,7 +104,7 @@ Every answer is an exit code: **0** pass, **1** fail, **2** usage or config erro
 
 ## What's next
 
-This is the first slice: `run` and `check`. Coming next: a saved receipt for each passing check, an AI check that a screenshot really shows what it claims, a setup command, and help writing the proof steps for your app.
+This is the first slice: `run` and `check`. Coming next: a saved receipt for each passing check, an AI check that a screenshot really shows what it claims, and help writing the proof steps for your app.
 
 ## Develop
 

@@ -11,10 +11,10 @@ text{font:16px ui-monospace,SFMono-Regular,'SF Mono',Menlo,Consolas,'Liberation 
 <text class="t" x="252.5" y="25" text-anchor="middle">Weak proof is blocked</text>
 <clipPath id="body"><rect x="1" y="41" width="503" height="268"/></clipPath>
 <g clip-path="url(#body)"><text xml:space="preserve" x="22" y="72" textLength="412.8" lengthAdjust="spacing"><tspan class="c">~/notes $ </tspan><tspan class="b">done-done check --from pr-body.md</tspan></text>
-<text xml:space="preserve" x="22" y="96" textLength="374.4" lengthAdjust="spacing"><tspan class="f b">fail: </tspan>.proof/20261011T052325Z-ed5ed34a/</text>
+<text xml:space="preserve" x="22" y="96" textLength="374.4" lengthAdjust="spacing"><tspan class="f b">fail: </tspan>.proof/20261011T062108Z-8d4667e2/</text>
 <text xml:space="preserve" x="22" y="120" textLength="355.2" lengthAdjust="spacing">    after.png: evidence is for commit</text>
-<text xml:space="preserve" x="22" y="144" textLength="460.8" lengthAdjust="spacing">    ed5ed34a07f4, HEAD is d406bfe92368 (changed:</text>
-<text xml:space="preserve" x="22" y="168" textLength="460.8" lengthAdjust="spacing">    src/sync.js) (run 20261011T052325Z-ed5ed34a)</text>
+<text xml:space="preserve" x="22" y="144" textLength="460.8" lengthAdjust="spacing">    8d4667e2a010, HEAD is 559fb7bfe76a (changed:</text>
+<text xml:space="preserve" x="22" y="168" textLength="460.8" lengthAdjust="spacing">    src/sync.js) (run 20261011T062108Z-8d4667e2)</text>
 <text xml:space="preserve" x="22" y="192" textLength="307.2" lengthAdjust="spacing"><tspan class="f b">fail: </tspan>empty.png: empty (0 bytes)</text>
 <text xml:space="preserve" x="22" y="216" textLength="460.8" lengthAdjust="spacing"><tspan class="f b">fail: </tspan>blank.png: png is a blank frame (luminance</text>
 <text xml:space="preserve" x="22" y="240" textLength="172.8" lengthAdjust="spacing">    spread 0.0000)</text>

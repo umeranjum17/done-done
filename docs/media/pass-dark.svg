@@ -15,7 +15,7 @@ text{font:16px ui-monospace,SFMono-Regular,'SF Mono',Menlo,Consolas,'Liberation 
 <text xml:space="preserve" x="22" y="120" textLength="374.4" lengthAdjust="spacing">outcome: notes sync between two devices</text>
 <text xml:space="preserve" x="22" y="144" textLength="172.8" lengthAdjust="spacing">repro: n/a: no bug</text>
 <text xml:space="preserve" x="22" y="168" textLength="412.8" lengthAdjust="spacing">proof: no verify skill - done-done run sync</text>
-<text xml:space="preserve" x="22" y="192" textLength="412.8" lengthAdjust="spacing">evidence: .proof/20261011T052325Z-ed5ed34a/</text>
+<text xml:space="preserve" x="22" y="192" textLength="412.8" lengthAdjust="spacing">evidence: .proof/20261011T062108Z-8d4667e2/</text>
 <text xml:space="preserve" x="22" y="216" textLength="124.8" lengthAdjust="spacing">    after.png</text>
 <text xml:space="preserve" x="22" y="240" textLength="412.8" lengthAdjust="spacing"><tspan class="c">~/notes $ </tspan><tspan class="b">done-done check --from pr-body.md</tspan></text>
 <text xml:space="preserve" x="22" y="264" textLength="288.0" lengthAdjust="spacing"><tspan class="d">result: </tspan><tspan class="p b">PASS (1 evidence file)</tspan></text>

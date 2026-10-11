@@ -152,15 +152,17 @@ function still(t, session, title) {
   return frame(t, height, title, rs.map((r, i) => text(r, BAR + 32 + i * LH)).join('\n'));
 }
 
-// The hero: commands type out, output appears; each scene clears the screen; then it loops.
-function animated(t, scenes, title) {
-  const steps = []; // {r, start, end, row, typing}
-  let now = 0.1, maxRows = 0, last = 0;
-  for (const session of scenes) {
-    const rs = rows(session);
-    last = steps.length;
+// The hero opens on a finished screen, which is also what static previews and no-motion
+// readers see; then each scene types out on a cleared screen; then it loops.
+function animated(t, finished, scenes, title) {
+  const steps = []; // {r, start, end, row, typing, shown}
+  let now = 0, maxRows = 0;
+  for (const [n, session] of [finished, ...scenes].entries()) {
+    const rs = rows(session), first = steps.length;
     rs.forEach((r, row) => {
-      if (r.kind === 'cmd') {
+      if (!n) {
+        steps.push({ r, row, start: 0, shown: true });
+      } else if (r.kind === 'cmd') {
         now += 0.5;
         steps.push({ r, row, start: now, typing: r.cmdLen * 0.045 });
         now += r.cmdLen * 0.045 + 0.45;
@@ -170,9 +172,9 @@ function animated(t, scenes, title) {
       }
       if (r.kind === 'out' && /^result/.test(r.spans.map((x) => x[1]).join(''))) now += 1.6;
     });
-    steps.push({ r: { spans: [['c', PROMPT]] }, row: rs.length, start: now, idle: true });
-    now += 2.6; // hold on the finished scene
-    for (const st of steps.slice(last)) st.end = now - 0.3;
+    steps.push({ r: { spans: [['c', PROMPT]] }, row: rs.length, start: now, idle: true, shown: !n });
+    now += n ? 2.6 : 4.5; // hold on the finished scene
+    for (const st of steps.slice(first)) st.end = now - 0.3;
     maxRows = Math.max(maxRows, rs.length + 1);
   }
   const T = now;
@@ -180,7 +182,9 @@ function animated(t, scenes, title) {
   let css = '', inner = '';
   steps.forEach((st, i) => {
     const y = BAR + 32 + st.row * LH;
-    css += `\n@keyframes l${i}{0%,${pct(st.start)}%{opacity:0}${pct(st.start + 0.01)}%,${pct(st.end)}%{opacity:1}${pct(st.end + 0.01)}%,100%{opacity:0}}.l${i}{opacity:0;animation:l${i} ${T.toFixed(2)}s linear infinite}`;
+    css += st.shown
+      ? `\n@keyframes l${i}{0%,${pct(st.end)}%{opacity:1}${pct(st.end + 0.01)}%,100%{opacity:0}}.l${i}{animation:l${i} ${T.toFixed(2)}s linear infinite}`
+      : `\n@keyframes l${i}{0%,${pct(st.start)}%{opacity:0}${pct(st.start + 0.01)}%,${pct(st.end)}%{opacity:1}${pct(st.end + 0.01)}%,100%{opacity:0}}.l${i}{opacity:0;animation:l${i} ${T.toFixed(2)}s linear infinite}`;
     if (st.idle) {
       inner += `\n<g class="l${i}">${text(st.r, y)}<rect class="cur" x="${PAD + PROMPT.length * CW}" y="${y - 16}" width="${CW}" height="20" fill="${t.fg}" opacity=".7"/></g>`;
     } else if (st.typing) {
@@ -192,8 +196,8 @@ function animated(t, scenes, title) {
     } else inner += `\n<g class="l${i}">${text(st.r, y)}</g>`;
   });
   css += `\n@keyframes blink{50%{opacity:0}}.cur{animation:blink 1s steps(1) infinite}`;
-  // Without motion, show the last scene finished.
-  css += `\n@media (prefers-reduced-motion:reduce){g[class]{animation:none!important}${steps.map((_, i) => `.k${i}`).join(',')}{display:none}${steps.slice(last).map((_, i) => `.l${i + last}`).join(',')}{opacity:1!important}}`;
+  // Without motion, only the finished screen shows (its lines are the only ones visible by default).
+  css += `\n@media (prefers-reduced-motion:reduce){g[class]{animation:none!important}}`;
   const height = BAR + 32 + (maxRows - 1) * LH + 22;
   return frame(t, height, title, inner, css);
 }
@@ -201,7 +205,7 @@ function animated(t, scenes, title) {
 for (const [name, t] of Object.entries(THEMES)) {
   const put = (file, svg) => writeFileSync(join(OUT, `${file}-${name}.svg`), svg);
   COLS = 48;
-  put('hero', animated(t, [[run, pass], [commit, stale]], 'done-done in a demo notes app'));
+  put('hero', animated(t, [pass, commit, stale], [[run, pass], [commit, stale]], 'done-done in a demo notes app'));
   put('run', still(t, [run], 'Record a run'));
   put('pass', still(t, [body, pass], 'Fresh proof passes'));
   put('reasons', still(t, [reasons], 'Weak proof is blocked'));

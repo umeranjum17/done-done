@@ -12,12 +12,12 @@ text{font:16px ui-monospace,SFMono-Regular,'SF Mono',Menlo,Consolas,'Liberation 
 <clipPath id="body"><rect x="1" y="41" width="503" height="292"/></clipPath>
 <g clip-path="url(#body)"><text xml:space="preserve" x="22" y="72" textLength="268.8" lengthAdjust="spacing"><tspan class="c">~/notes $ </tspan><tspan class="b">done-done run sync</tspan></text>
 <text xml:space="preserve" x="22" y="96" textLength="451.2" lengthAdjust="spacing">  synced a note on two devices, saved after.png</text>
-<text xml:space="preserve" x="22" y="120" textLength="288.0" lengthAdjust="spacing"><tspan class="d">run: </tspan>20261011T052325Z-ed5ed34a</text>
+<text xml:space="preserve" x="22" y="120" textLength="288.0" lengthAdjust="spacing"><tspan class="d">run: </tspan>20261011T062108Z-8d4667e2</text>
 <text xml:space="preserve" x="22" y="144" textLength="374.4" lengthAdjust="spacing"><tspan class="d">record: </tspan>~/notes/.proof/.done-done/runs/</text>
-<text xml:space="preserve" x="22" y="168" textLength="326.4" lengthAdjust="spacing">    20261011T052325Z-ed5ed34a.json</text>
-<text xml:space="preserve" x="22" y="192" textLength="460.8" lengthAdjust="spacing"><tspan class="d">commit: </tspan>ed5ed34a07f4c07d3e366df6365590f5921434bd</text>
+<text xml:space="preserve" x="22" y="168" textLength="326.4" lengthAdjust="spacing">    20261011T062108Z-8d4667e2.json</text>
+<text xml:space="preserve" x="22" y="192" textLength="460.8" lengthAdjust="spacing"><tspan class="d">commit: </tspan>8d4667e2a0104ce1d63d8a284013cefd206ea624</text>
 <text xml:space="preserve" x="22" y="216" textLength="76.8" lengthAdjust="spacing"><tspan class="d">files: </tspan>1</text>
-<text xml:space="preserve" x="22" y="240" textLength="412.8" lengthAdjust="spacing">  ~/notes/.proof/20261011T052325Z-ed5ed34a/</text>
+<text xml:space="preserve" x="22" y="240" textLength="412.8" lengthAdjust="spacing">  ~/notes/.proof/20261011T062108Z-8d4667e2/</text>
 <text xml:space="preserve" x="22" y="264" textLength="124.8" lengthAdjust="spacing">    after.png</text>
 <text xml:space="preserve" x="22" y="288" textLength="115.2" lengthAdjust="spacing"><tspan class="d">result: </tspan><tspan class="p b">PASS</tspan></text>
 <text xml:space="preserve" x="22" y="312" textLength="57.6" lengthAdjust="spacing"><tspan class="d">exit 0</tspan></text></g>

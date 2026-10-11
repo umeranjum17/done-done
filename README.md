@@ -1,141 +1,106 @@
-# done-done
+<div align="center">
 
-A task isn't done until the real product has been seen working. `done-done` records the evidence a real-product run produces (screenshots, recordings, logs) against the exact commit it ran on. It then checks that the evidence a claim cites is real: present, valid media, and fresh for the current commit. If any of that fails, it blocks.
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/media/wordmark-dark.svg">
+  <img src="docs/media/wordmark-light.svg" alt="done-done" width="300">
+</picture>
 
-Status: first slice. It ships `run` and `check`. Receipts, a vision judge that checks a capture shows the claim, `init`, and verify-skill create/maintain are planned next.
+### No proof, no "done".
 
-## Install
+done-done won't accept "done" without real, fresh proof from your product, captured at the exact commit being called done.
+
+[![Node 22.5+](https://img.shields.io/badge/node-22.5%2B-3fb950?logo=nodedotjs&logoColor=white)](https://nodejs.org) [![Status: early preview](https://img.shields.io/badge/status-early%20preview-d29922)](#whats-next) [![npm: not published yet](https://img.shields.io/badge/npm-not%20published%20yet-8b949e?logo=npm&logoColor=white)](#quick-start)
+
+<br>
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/media/flow-dark.svg">
+  <img src="docs/media/flow-light.svg" alt="How it works: capture your real app, tie every file to the exact commit, then check: pass with exit 0 or fail with exit 1." width="710">
+</picture>
+
+<br><br>
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/media/hero-dark.svg">
+  <img src="docs/media/hero-light.svg" alt="A terminal: done-done records a run of a demo notes app and the check passes. After a code change, the same check fails because the proof is for an older commit." width="560">
+</picture>
+
+</div>
+
+## Why
+
+"Done" is easy to say. Screenshots get reused, recordings go stale, and a green test run is not the app.
+
+done-done runs your capture and ties every screenshot, recording and log it saves to the exact commit. When someone says "done", it checks the proof they point to: is it really there, is it a real picture or video, is it from this commit, and is it new? If not, the check fails. If it can't tell, it says so instead of passing.
+
+## See it work
+
+Four moments from a demo notes app. Every picture is real output from the current build.
+
+<picture><source media="(prefers-color-scheme: dark)" srcset="docs/media/run-dark.svg"><img src="docs/media/run-light.svg" alt="done-done run sync records one screenshot for the current commit and passes." width="400" align="top"></picture>
+<picture><source media="(prefers-color-scheme: dark)" srcset="docs/media/pass-dark.svg"><img src="docs/media/pass-light.svg" alt="A Checks block cites the new screenshot, and done-done check passes." width="400" align="top"></picture>
+
+<picture><source media="(prefers-color-scheme: dark)" srcset="docs/media/reasons-dark.svg"><img src="docs/media/reasons-light.svg" alt="done-done check fails: one screenshot is from an older commit, one file is empty, one is a blank frame." width="400" align="top"></picture>
+<picture><source media="(prefers-color-scheme: dark)" srcset="docs/media/config-dark.svg"><img src="docs/media/config-light.svg" alt="done-done run stops with exit 2 because the config has an unknown key." width="400" align="top"></picture>
+
+## Quick start
+
+You need Node 22.5 or later and git. done-done is not on npm yet, so install it from source.
+
+**1. Install**
 
 ```sh
-npm install -g done-done   # not published yet; for now: npm install && npm run build && npm link
+git clone https://github.com/umeranjum17/done-done
+cd done-done
+npm install && npm run build && npm link
 ```
 
-Requires Node 22.5 or later and git. `ffprobe` is optional. Without it, videos are reported as "not verified" and the check is inconclusive, never a pass.
-
-## Use
-
-### Run a journey
-
-Describe your journeys in `.done-done.yaml` at the repo root:
+**2. Tell it how to capture proof.** In your app's repo, add `.done-done.yaml`. Swap `npm test` for whatever drives your real app and saves screenshots, recordings or logs.
 
 ```yaml
-app: notes
 evidence:
-  root: .verify-artifacts          # gitignore this; evidence never goes in the repo
-  ignore_paths: ["docs/**", "*.md"]  # commits touching only these keep evidence fresh
+  root: .proof
 journeys:
-  review:
-    command: node scripts/capture-review.mjs --out .verify-artifacts/${RUN_ID}
+  smoke:
+    command: npm test > .proof/${RUN_ID}.log
 ```
 
-Then run it:
+Keep proof out of git, and commit, because proof only counts from a clean tree:
 
 ```sh
-done-done run review
+echo .proof/ >> .gitignore
+git add .gitignore .done-done.yaml
+git commit -m "Add done-done"
 ```
 
-`run` does four things:
-- records HEAD, its tree, and whether tracked files were dirty;
-- runs the command, with `${RUN_ID}` substituted and `DONE_DONE_RUN_ID` / `DONE_DONE_EVIDENCE_ROOT` exported;
-- hashes every file the command created or changed under the evidence root;
-- writes a run record to `<root>/.done-done/runs/<run-id>.json`.
-
-A non-zero command exit, or a run that wrote nothing, fails.
-
-For a proof you drive by hand or through an agent:
+**3. Run it, then check it**
 
 ```sh
-done-done run --open      # prints a run id
-# ...capture into the evidence root...
-done-done run --close <run-id>
+done-done run smoke
+done-done check --outcome "it starts" .proof/*.log
 ```
 
-You can also run a one-off command without a journey: `done-done run -- <command>`.
-Run `done-done` outside wrappers that expand `${...}` themselves (`systemd-run` does): put such a wrapper inside the command, or it eats `${RUN_ID}`.
+You should see `result: PASS` twice. After later runs, use the run id that `done-done run` prints in place of `*`.
 
-### Check a claim
+## What it checks
 
-```sh
-done-done check --outcome "notes sync between two devices" .verify-artifacts/<run-id>/after.png
-done-done check --from pr-body.md                 # or a GitHub PR URL (needs gh)
-```
+- 🔗 **Tied to a commit**: Every run records the commit, and whether there were uncommitted changes.
+- 🖼️ **Real media**: Empty, cut-off, blank or tiny screenshots fail. Videos must hold real frames (needs `ffprobe`).
+- ⏱️ **Fresh**: Proof from an older commit fails. Commits that only touch docs can be set to keep it fresh.
+- ♻️ **Not reused**: Proof made only of files already used for a different claim fails, and so does citing the same file twice.
+- 🧾 **Honest claims**: Reads a pull request's `## Checks` block and makes sure every line is filled in.
+- 🔒 **Safe in CI**: `--trusted-ref origin/main` reads the rules from your main branch, so a pull request can't loosen them.
 
-`check` looks only at the files the claim names. It never scans the whole folder.
+Every answer is an exit code: **0** pass, **1** fail, **2** usage or config error, **3** can't tell either way.
 
-With `--from`, it reads the newest `## Checks` block:
+## Learn more
 
-```
-## Checks
-outcome: <what a user can now do>
-repro: <command that failed before and passes now, or n/a>
-proof: <verify skill or command that drove the real product>
-evidence: <paths of the evidence files, or "not proven: <cause>">
-```
+- [Full reference](docs/reference.md): every `run` and `check` option, the Checks block rules, each file check, and both config files.
+- [Report a problem or ask a question](https://github.com/umeranjum17/done-done/issues)
 
-**Form rules for the Checks block:**
-- all four lines must be present;
-- `proof` names a command or path;
-- `proof` names the repo's verify skill (`.agents/skills/verify-<app>`) when it has one, otherwise it says "no verify skill";
-- a fix PR needs a repro.
+## What's next
 
-**Each cited file must pass these checks:**
-
-| Check | Rule |
-|---|---|
-| Not empty | The file must contain bytes. |
-| Valid media | The magic bytes match the extension. PNG and JPEG are complete (end markers present) and at least 64×64. PNG is not a blank frame. WebP and GIF are not truncated. MP4/MOV and WebM/MKV decode at least two video packets (`ffprobe`). Text and log files hold text; JSON parses. |
-| Fresh | The file is in a run record whose commit is HEAD. The one exception: if the only commits since the run touch `ignore_paths`, the evidence still counts. An empty commit does not count as touching only `ignore_paths`. |
-| Clean | The run was not dirty, unless `evidence.allow_dirty: true`. The run command also exited 0. |
-| Not reused | Fails when the files are byte-identical within one claim. Also fails when every file was already used to prove a different claim in this repo; the ledger is `$DONE_DONE_HOME/hashes`. |
-
-Files that are in no run record give an inconclusive result: nothing ties them to a commit.
-
-`evidence: not proven: <cause>` is inconclusive too. A repo can set `checks.not_proven: allow`, but that setting is honoured only when the config is read from a trusted ref (`--trusted-ref`).
-
-### Exit codes
-
-| Code | Meaning |
-|---|---|
-| 0 | pass |
-| 1 | fail |
-| 2 | usage or config error |
-| 3 | inconclusive (could not be proven either way) |
-
-### In CI or a merge gate
-
-```sh
-done-done check --from "$PR_URL" --trusted-ref origin/main
-```
-
-`--trusted-ref` reads `.done-done.yaml` from that ref instead of the PR branch. This matters because repo keys can loosen the bar and journeys run commands.
-
-## Config
-
-There are two files. Unknown keys are an error in both.
-
-**Global:** `~/.done-done/config.yaml`. Override the location with `DONE_DONE_HOME`.
-
-```yaml
-evidence:
-  local_root: ~/.done-done/evidence   # evidence root for repos that set none (<local_root>/<app>)
-```
-
-**Project:** `<repo>/.done-done.yaml`.
-
-| Key | Default |
-|---|---|
-| `app` | repo directory name |
-| `skill` | `.agents/skills/verify-<app>` |
-| `journeys.<name>.command` | none |
-| `evidence.root` | `<local_root>/<app>` |
-| `evidence.allow_dirty` | `false` |
-| `evidence.ignore_paths` | `[]` |
-| `checks.not_proven` | `inconclusive`; `allow` is honoured only from `--trusted-ref` |
-| `checks.fix_title` | `^(fix\|bugfix\|hotfix)\b`: titles that need a repro |
-
-**Precedence:** built-in defaults, then the global file, then the project file.
-
-Global-only keys describe the machine. Project-only keys describe the project. Setting a key in the wrong file is an error (exit 2), not something silently ignored.
+This is the first slice: `run` and `check`. Coming next: a saved receipt for each passing check, an AI check that a screenshot really shows what it claims, a setup command, and help writing the proof steps for your app.
 
 ## Develop
 
@@ -143,3 +108,5 @@ Global-only keys describe the machine. Project-only keys describe the project. S
 npm install
 npm test   # builds, then runs the end-to-end tests against throwaway git repos
 ```
+
+The terminal pictures (hero, run, pass, reasons, config) are real output from the current build; redraw them with `npm run build && node docs/media/make.mjs`. The wordmark and the flow picture are hand-made SVGs.

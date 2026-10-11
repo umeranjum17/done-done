@@ -88,11 +88,8 @@ function spans(line) {
   let m;
   if ((m = line.match(/^(result: )(PASS.*)$/))) return [['d', m[1]], ['p b', m[2]]];
   if ((m = line.match(/^(result: )(FAIL.*)$/))) return [['d', m[1]], ['f b', m[2]]];
-  if ((m = line.match(/^(result: )(INCONCLUSIVE.*)$/))) return [['d', m[1]], ['w b', m[2]]];
   if ((m = line.match(/^(fail: |error: )(.*)$/))) return [['f b', m[1]], ['', m[2]]];
-  if ((m = line.match(/^(inconclusive: )(.*)$/))) return [['w b', m[1]], ['', m[2]]];
   if ((m = line.match(/^(run: |record: |commit: |files: )(.*)$/))) return [['d', m[1]], ['', m[2]]];
-  if (/^(usage:|exit codes:| {2}done-done )/.test(line)) return [['d', line]];
   return [['', line]];
 }
 
@@ -135,7 +132,7 @@ function frame(t, height, title, inner, css = '') {
 <title>${esc(title)}</title>
 <style>
 text{font:${FS}px ui-monospace,SFMono-Regular,'SF Mono',Menlo,Consolas,'Liberation Mono',monospace;fill:${t.fg};white-space:pre}
-.d{fill:${t.dim}}.c{fill:${t.prompt}}.p{fill:${t.pass}}.f{fill:${t.fail}}.w{fill:${t.warn}}.b{font-weight:600}
+.d{fill:${t.dim}}.c{fill:${t.prompt}}.p{fill:${t.pass}}.f{fill:${t.fail}}.b{font-weight:600}
 .t{font-size:14px;font-weight:600;fill:${t.dim}}${css}
 </style>
 <rect x="0.5" y="0.5" width="${W - 1}" height="${height - 1}" rx="10" fill="${t.bg}" stroke="${t.border}"/>

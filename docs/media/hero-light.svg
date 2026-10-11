@@ -2,7 +2,7 @@
 <title>done-done in a demo notes app</title>
 <style>
 text{font:16px ui-monospace,SFMono-Regular,'SF Mono',Menlo,Consolas,'Liberation Mono',monospace;fill:#1f2328;white-space:pre}
-.d{fill:#59636e}.c{fill:#8250df}.p{fill:#1a7f37}.f{fill:#cf222e}.w{fill:#9a6700}.b{font-weight:600}
+.d{fill:#59636e}.c{fill:#8250df}.p{fill:#1a7f37}.f{fill:#cf222e}.b{font-weight:600}
 .t{font-size:14px;font-weight:600;fill:#59636e}
 @keyframes l0{0%,2.98%{opacity:0}3.03%,52.15%{opacity:1}52.20%,100%{opacity:0}}.l0{opacity:0;animation:l0 20.13s linear infinite}
 @keyframes k0{0%,2.98%{transform:translateX(0)}7.01%,100%{transform:translateX(172.8px)}}.k0{animation:k0 20.13s steps(18,end) infinite}

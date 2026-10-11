@@ -2,7 +2,7 @@
 <title>Fresh proof passes</title>
 <style>
 text{font:16px ui-monospace,SFMono-Regular,'SF Mono',Menlo,Consolas,'Liberation Mono',monospace;fill:#1f2328;white-space:pre}
-.d{fill:#59636e}.c{fill:#8250df}.p{fill:#1a7f37}.f{fill:#cf222e}.w{fill:#9a6700}.b{font-weight:600}
+.d{fill:#59636e}.c{fill:#8250df}.p{fill:#1a7f37}.f{fill:#cf222e}.b{font-weight:600}
 .t{font-size:14px;font-weight:600;fill:#59636e}
 </style>
 <rect x="0.5" y="0.5" width="504" height="309" rx="10" fill="#f6f8fa" stroke="#d0d7de"/>

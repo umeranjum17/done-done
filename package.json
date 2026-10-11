@@ -1,0 +1,15 @@
+{
+  "name": "done-done",
+  "version": "0.1.0",
+  "description": "Proof that the real product works before a task is called done: commit-bound evidence runs and evidence checks.",
+  "type": "module",
+  "bin": { "done-done": "dist/cli.js" },
+  "files": ["dist"],
+  "engines": { "node": ">=22.5" },
+  "scripts": {
+    "build": "tsc",
+    "test": "tsc && node --test"
+  },
+  "dependencies": { "yaml": "^2.9.1" },
+  "devDependencies": { "@types/node": "^26.6.5", "typescript": "^7.0.2" }
+}

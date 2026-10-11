@@ -99,12 +99,12 @@ Every answer is an exit code: **0** pass, **1** fail, **2** usage or config erro
 
 ## Learn more
 
-- [Full reference](docs/reference.md): every `run` and `check` option, the Checks block rules, each file check, and both config files.
+- [Full reference](docs/reference.md): every `init`, `run` and `check` option, the Checks block rules, each file check, and both config files.
 - [Report a problem or ask a question](https://github.com/umeranjum17/done-done/issues)
 
 ## What's next
 
-This is the first slice: `run` and `check`. Coming next: a saved receipt for each passing check, an AI check that a screenshot really shows what it claims, and help writing the proof steps for your app.
+This is the first slice: `init`, `run` and `check`. Coming next: a saved receipt for each passing check, an AI check that a screenshot really shows what it claims, and help writing the proof steps for your app.
 
 ## Develop
 

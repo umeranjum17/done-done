@@ -75,8 +75,8 @@ for (const [name, r, want] of [['run', run, 0], ['pass', pass, 0], ['stale', sta
 // ---- 2. Draw it ----------------------------------------------------------------------------
 
 const THEMES = {
-  light: { page: '#ffffff', bg: '#f6f8fa', bar: '#eaeef2', border: '#d0d7de', fg: '#1f2328', dim: '#59636e', prompt: '#8250df', pass: '#1a7f37', fail: '#cf222e', warn: '#9a6700' },
-  dark: { page: '#0d1117', bg: '#161b22', bar: '#21262d', border: '#30363d', fg: '#e6edf3', dim: '#8b949e', prompt: '#d2a8ff', pass: '#3fb950', fail: '#ff7b72', warn: '#e3b341' },
+  light: { bg: '#f6f8fa', bar: '#eaeef2', border: '#d0d7de', fg: '#1f2328', dim: '#59636e', prompt: '#8250df', pass: '#1a7f37', fail: '#cf222e' },
+  dark: { bg: '#161b22', bar: '#21262d', border: '#30363d', fg: '#e6edf3', dim: '#8b949e', prompt: '#d2a8ff', pass: '#3fb950', fail: '#ff7b72' },
 };
 const FS = 16, CW = 9.6, LH = 24, PAD = 22, BAR = 40; // big enough to read on a phone
 let COLS = 80; // set per picture
@@ -120,10 +120,10 @@ function rows(session) {
   return out;
 }
 
-const text = (row, y, extra = '') => {
+const text = (row, y) => {
   const len = row.spans.reduce((n, [, t]) => n + t.length, 0);
   const body = row.spans.map(([c, t]) => (c ? `<tspan class="${c}">${esc(t)}</tspan>` : esc(t))).join('');
-  return `<text xml:space="preserve" x="${PAD}" y="${y}"${len ? ` textLength="${(len * CW).toFixed(1)}" lengthAdjust="spacing"` : ''}${extra}>${body}</text>`;
+  return `<text xml:space="preserve" x="${PAD}" y="${y}"${len ? ` textLength="${(len * CW).toFixed(1)}" lengthAdjust="spacing"` : ''}>${body}</text>`;
 };
 
 function frame(t, height, title, inner, css = '') {

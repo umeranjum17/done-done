@@ -109,4 +109,4 @@ npm install
 npm test   # builds, then runs the end-to-end tests against throwaway git repos
 ```
 
-The README pictures are real output from the current build. To redraw them: `npm run build && node docs/media/make.mjs`.
+The terminal pictures (hero, run, pass, reasons, config) are real output from the current build; redraw them with `npm run build && node docs/media/make.mjs`. The wordmark and the flow picture are hand-made SVGs.

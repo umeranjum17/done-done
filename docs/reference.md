@@ -4,14 +4,7 @@ Everything `run`, `check` and the config files do. For the overview and quick st
 
 ## Install
 
-Not on npm yet, so install from source:
-
-```sh
-git clone https://github.com/umeranjum17/done-done
-cd done-done && npm install && npm run build && npm link
-```
-
-Requires Node 22.5 or later and git. `ffprobe` is optional. Without it, videos are reported as "not verified" and the check is inconclusive, never a pass.
+For the install steps, see the [README quick start](../README.md#quick-start). done-done needs Node 22.5 or later and git. `ffprobe` is optional. Without it, videos are reported as "not verified" and the check is inconclusive, never a pass.
 
 ## Use
 

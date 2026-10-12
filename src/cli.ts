@@ -1,15 +1,15 @@
 #!/usr/bin/env node
 import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import { createHash, randomBytes } from 'node:crypto';
-import { appendFileSync, closeSync, existsSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
+import { accessSync, appendFileSync, closeSync, constants, existsSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { dirname, isAbsolute, join, matchesGlob, relative, resolve, sep } from 'node:path';
+import { delimiter, dirname, isAbsolute, join, matchesGlob, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import { encode } from '@toon-format/toon';
 import { Document, parseDocument } from 'yaml';
 import { type Config, home, loadConfig, parseDuration, UsageError } from './config.js';
-import { type Capture, judge, type Judged } from './judge.js';
+import { backend, type Capture, judge, type Judged, onPath } from './judge.js';
 import { checkMedia } from './media.js';
 
 const PASS = 0, FAIL = 1, USAGE = 2, INCONCLUSIVE = 3, WAITING = 4;
@@ -29,6 +29,12 @@ const CHECKS_TEXT = `Checks block (--from): the newest "## Checks" heading, then
   evidence: <the evidence file paths, or "not proven: <cause>">`;
 const RUNS_TEXT = `runs: each verify run lives in $DONE_DONE_HOME/runs/<app>/<run-id> (run.json, events.jsonl, logs/<step>.log)
   and goes on when the command that started it ends; its steps are resolve, drive (the journey), check, receipt, report`;
+const AGENTS = ['claude', 'codex', 'opencode'];
+const DOCTOR_TEXT = `doctor is read-only and exits 0 when every required item is ok, 2 otherwise.
+  required: git (inside a repository), config (a valid .done-done.yaml), evidence_root (writable).
+  optional: verify_skill (.agents/skills/verify-<app>/), agent (claude, codex or opencode on PATH),
+  judge (an executable claude binary, a sign-in folder and the judge kit; the model is never called), ffprobe (video evidence only).
+  doctor lists every check; --full changes nothing. Missing optionals never fail the run.`;
 
 // One table drives `--help` and every `<command> --help`: each command's usage lines and the flags it takes.
 const FLAGS: Record<string, string> = {
@@ -62,6 +68,13 @@ const COMMANDS: Record<string, { usage: [string, string][]; flags: string[]; mor
     ],
     flags: ['--agent <agent>', '--journey <name>', '-- <command...>'],
     more: [JOURNEYS_TEXT],
+  },
+  doctor: {
+    usage: [
+      ['done-done doctor', 'check this repo is worth driving: git, config, evidence root, skill, agent, judge, ffprobe'],
+    ],
+    flags: [],
+    more: [DOCTOR_TEXT],
   },
   run: {
     usage: [
@@ -1261,7 +1274,7 @@ function cmdInit(argv: string[]): number {
   });
   const parts = dash < 0 ? [] : argv.slice(dash + 1);
   const journey = values.journey ?? null;
-  if (values.agent !== undefined && values.agent !== 'claude' && values.agent !== 'codex' && values.agent !== 'opencode')
+  if (values.agent !== undefined && !AGENTS.includes(values.agent))
     throw new UsageError(`--agent ${values.agent} is not supported; the supported values are claude, codex, opencode`, 'Run: done-done init --agent <claude|codex|opencode>');
   if (journey === null && parts.length) throw new UsageError('init needs --journey <name> to record a command after --');
   if (journey !== null && !parts.some((p) => p.trim())) throw new UsageError(`init --journey ${journey} needs a command after --`);
@@ -1364,6 +1377,122 @@ function errorHelp(msg: string, cmd?: string): string[] {
   return [`Run \`done-done ${cmd} --help\` for its usage and flags`];
 }
 
+// Whether `p` could hold evidence without writing anything: the nearest existing
+// ancestor must be a writable directory. Read-only, so doctor creates nothing.
+function writableDir(p: string): boolean {
+  let cur = p;
+  for (;;) {
+    try {
+      if (!statSync(cur).isDirectory()) return false;
+      accessSync(cur, constants.W_OK | constants.X_OK);
+      return true;
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code !== 'ENOENT') return false;
+      const parent = dirname(cur);
+      if (parent === cur) return false;
+      cur = parent;
+    }
+  }
+}
+
+type DoctorCheck = { check: string; status: 'ok' | 'missing'; detail: string; fix: string };
+const unknownRow = (check: string): DoctorCheck => ({ check, status: 'missing', detail: 'unknown without a valid config', fix: '' });
+
+// Is this repo worth driving: git, a valid config and a writable evidence root are
+// required; the verify skill, an agent CLI, the judge binary and ffprobe are optional.
+// Read-only: a missing repo or config is a finding, never a crash, and nothing is created.
+async function cmdDoctor(argv: string[]): Promise<number> {
+  if (argv.length) throw new UsageError('doctor takes no arguments', 'Run `done-done doctor` with no arguments');
+  let repo: string | null = null;
+  try {
+    repo = git(process.cwd(), 'rev-parse', '--show-toplevel');
+  } catch {
+    repo = null;
+  }
+  const checks: DoctorCheck[] = [];
+  checks.push(
+    repo
+      ? { check: 'git', status: 'ok', detail: `inside a git repository at ${repo}`, fix: '' }
+      : { check: 'git', status: 'missing', detail: 'not inside a git repository', fix: 'Run done-done from inside a git repository' },
+  );
+  let cfg: Config | null = null;
+  if (!repo) {
+    checks.push({ check: 'config', status: 'missing', detail: 'unknown without a git repository', fix: 'Run done-done from inside a git repository' });
+  } else {
+    try {
+      cfg = loadConfig(repo);
+      if (existsSync(join(repo, '.done-done.yaml'))) {
+        checks.push({ check: 'config', status: 'ok', detail: `.done-done.yaml is valid (app ${cfg.app})`, fix: '' });
+      } else {
+        checks.push({ check: 'config', status: 'missing', detail: 'no .done-done.yaml', fix: 'Run `done-done init` to write a minimal .done-done.yaml' });
+      }
+    } catch (e) {
+      checks.push({ check: 'config', status: 'missing', detail: (e as Error).message, fix: 'Fix the config file named above, then re-run: done-done doctor' });
+    }
+  }
+  if (!cfg || !repo) {
+    checks.push(unknownRow('evidence_root'));
+  } else if (writableDir(cfg.evidence.root)) {
+    checks.push({ check: 'evidence_root', status: 'ok', detail: `writable: ${shown(repo, cfg.evidence.root)}`, fix: '' });
+  } else {
+    checks.push({ check: 'evidence_root', status: 'missing', detail: `not writable: ${shown(repo, cfg.evidence.root)}`, fix: `Make ${cfg.evidence.root} writable, or set evidence.root to a writable folder in .done-done.yaml` });
+  }
+  if (!cfg || !repo) {
+    checks.push(unknownRow('verify_skill'));
+  } else {
+    const dir = join(repo, cfg.skill);
+    const skillFile = join(dir, 'SKILL.md');
+    if (existsSync(skillFile)) checks.push({ check: 'verify_skill', status: 'ok', detail: `present at ${shown(repo, skillFile)}`, fix: '' });
+    else
+      checks.push({
+        check: 'verify_skill',
+        status: 'missing',
+        detail: `no ${shown(repo, skillFile)}; checks still pass with "no verify skill"`,
+        fix: `Write ${shown(repo, skillFile)} describing how to drive this app (a later done-done init will scaffold it)`,
+      });
+  }
+  const agent = AGENTS.map((n) => ({ name: n, path: onPath(n) })).find((a) => a.path);
+  checks.push(
+    agent
+      ? { check: 'agent', status: 'ok', detail: `found ${agent.name} at ${agent.path}`, fix: '' }
+      : { check: 'agent', status: 'missing', detail: 'no claude, codex or opencode binary on PATH', fix: 'Install an agent CLI (claude, codex or opencode); without one, init stays scaffold-only' },
+  );
+  if (!cfg) {
+    checks.push(unknownRow('judge'));
+  } else {
+    try {
+      const { bin } = await backend(cfg);
+      checks.push({ check: 'judge', status: 'ok', detail: `claude binary at ${bin}, a sign-in folder and the judge kit are present (login is checked only when a capture is judged); the model is never called`, fix: '' });
+    } catch (e) {
+      checks.push({ check: 'judge', status: 'missing', detail: (e as Error).message, fix: (e as UsageError).help ?? 'Re-run done-done doctor after fixing the error above' });
+    }
+  }
+  const ffprobe = onPath('ffprobe');
+  checks.push(
+    ffprobe
+      ? { check: 'ffprobe', status: 'ok', detail: `found at ${ffprobe}`, fix: '' }
+      : { check: 'ffprobe', status: 'missing', detail: 'no ffprobe on PATH; video evidence is unverified, never a pass', fix: 'Install ffprobe (ffmpeg) to verify video evidence' },
+  );
+  const required = ['git', 'config', 'evidence_root'];
+  const missingRequired = checks.filter((c) => c.status === 'missing' && required.includes(c.check));
+  const result: Record<string, unknown> = { command: 'doctor', result: missingRequired.length ? 'fail' : 'pass', checks };
+  // Several missing items can share one fix (set up the config once); name each fix only once.
+  const fixes = [...new Set(missingRequired.map((c) => c.fix).filter(Boolean))];
+  if (cfg && repo) {
+    const names = Object.keys(cfg.journeys);
+    const check = '`done-done check --outcome "<what you proved>" <files it recorded>`';
+    result.help = missingRequired.length
+      ? fixes
+      : names.length
+        ? [`Capture proof with \`done-done run ${names[0]}\`, then check it with ${check}`]
+        : [`Add a journey to .done-done.yaml (${journeyExample}), commit, then \`done-done run smoke\` and ${check}`];
+  } else {
+    result.help = fixes;
+  }
+  emit(result);
+  return missingRequired.length ? USAGE : PASS;
+}
+
 // Bare `done-done`: orient a new user or agent with the config state and the next step.
 function cmdBare(): number {
   let repo: string;
@@ -1412,6 +1541,7 @@ async function main(argv: string[]): Promise<number> {
   }
   try {
     if (cmd === 'init') return cmdInit(rest);
+    if (cmd === 'doctor') return await cmdDoctor(rest);
     if (cmd === 'run') return cmdRun(rest);
     if (cmd === 'check') return await cmdCheck(rest);
     if (cmd === 'receipt') return await cmdReceipt(rest);

@@ -131,6 +131,8 @@ git commit -m "Add done-done"
 
 A `run -- <command>` whose command matches no recorded journey still runs, but its result hints that the recipe is not in the repo.
 
+At any point, `done-done doctor` checks the setup without changing anything: git, a valid `.done-done.yaml`, a writable evidence root (all required), plus the verify skill, an agent CLI, the judge setup and `ffprobe` (all optional). Each item reports `ok` or `missing`, and each missing item names its fix command.
+
 **3. Run it, then check it**
 
 ```sh
@@ -182,12 +184,12 @@ Another fleet works the same way: add the include text to whatever your workers 
 
 ## Learn more
 
-- [Full reference](docs/reference.md): every `init`, `run`, `check` and `receipt` option, the Checks block rules, each file check, and both config files.
+- [Full reference](docs/reference.md): every `init`, `doctor`, `run`, `check` and `receipt` option, the Checks block rules, each file check, and both config files.
 - [Report a problem or ask a question](https://github.com/umeranjum17/done-done-axi/issues)
 
 ## What's next
 
-So far: `init`, `run`, `check`, `receipt`, the opt-in screenshot judge and the opt-in Claude Code, Codex and opencode session hooks. Coming next: help writing the proof steps for your app.
+So far: `init`, `doctor`, `run`, `check`, `receipt`, the opt-in screenshot judge and the opt-in Claude Code, Codex and opencode session hooks. Coming next: help writing the proof steps for your app.
 
 ## Develop
 

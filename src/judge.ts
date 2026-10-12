@@ -1,6 +1,6 @@
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { accessSync, constants, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { accessSync, constants, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { delimiter, isAbsolute, join } from 'node:path';
 import type { Backend, Question } from '@byokit/decide';
@@ -31,13 +31,19 @@ const QUESTION: Question = {
   images: ['capture'],
 };
 
-function onPath(name: string): string {
+function isExecutable(path: string): boolean {
+  try {
+    accessSync(path, constants.X_OK);
+    return statSync(path).isFile();
+  } catch {
+    return false;
+  }
+}
+
+export function onPath(name: string): string {
   for (const dir of (process.env.PATH ?? '').split(delimiter)) {
     const path = join(dir, name);
-    try {
-      accessSync(path, constants.X_OK);
-      if (isAbsolute(path)) return path;
-    } catch {}
+    if (isAbsolute(path) && isExecutable(path)) return path;
   }
   return '';
 }
@@ -58,12 +64,13 @@ async function kit() {
   }
 }
 
-async function backend(cfg: Config): Promise<{ ask: Backend['ask']; resolve: typeof import('@byokit/decide').resolve; signIn: string; signedIn: () => boolean }> {
+export async function backend(cfg: Config): Promise<{ bin: string; ask: Backend['ask']; resolve: typeof import('@byokit/decide').resolve; signIn: string; signedIn: () => boolean }> {
   const bin = cfg.judge.bin || onPath('claude');
   const dir = cfg.judge.config_dir;
   const signIn = `CLAUDE_CONFIG_DIR=${dir} ${bin || 'claude'} auth login`;
   if (!bin) throw new UsageError('judge: no claude binary on PATH; install Claude Code or set judge.bin in ~/.done-done/config.yaml', 'Install Claude Code, or set judge.bin to its absolute path');
   if (!isAbsolute(bin) || !isAbsolute(dir)) throw new UsageError(`judge: judge.bin and judge.config_dir must be absolute paths (got ${bin}, ${dir})`, 'Fix judge.bin or judge.config_dir in ~/.done-done/config.yaml');
+  if (!isExecutable(bin)) throw new UsageError(`judge: judge.bin ${bin} is not an executable file`, 'Fix judge.bin in ~/.done-done/config.yaml or install Claude Code');
   if (!existsSync(dir)) throw new UsageError(`judge: no Claude sign-in at ${dir}`, `Sign in once with your Claude plan: mkdir -p ${dir} && ${signIn}`);
   const { claudeCode, resolve } = await kit();
   // The real folder, so a link to ~/.claude is refused here as a config error, not later per capture.
@@ -81,7 +88,7 @@ async function backend(cfg: Config): Promise<{ ask: Backend['ask']; resolve: typ
     }
   };
   try {
-    return { ask: claudeCode({ bin, configDir: real, model: cfg.judge.model, timeoutMs: TIMEOUT_MS }).ask, resolve, signIn, signedIn };
+    return { bin, ask: claudeCode({ bin, configDir: real, model: cfg.judge.model, timeoutMs: TIMEOUT_MS }).ask, resolve, signIn, signedIn };
   } catch (e) {
     throw new UsageError(`judge: ${(e as Error).message} (judge.bin ${bin}, judge.config_dir ${dir})`, 'Set judge.config_dir to a folder of its own, not your ~/.claude');
   }

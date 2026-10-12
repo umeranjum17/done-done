@@ -1,6 +1,6 @@
 # done-done reference
 
-Everything `init`, `run`, `check`, `receipt` and the config files do. For the overview and quick start, see the [README](../README.md).
+Everything `init`, `doctor`, `run`, `check`, `receipt` and the config files do. For the overview and quick start, see the [README](../README.md).
 
 ## Install
 
@@ -43,6 +43,14 @@ done-done init --agent opencode
 ```
 
 `--agent opencode` instead writes a session-start plugin to the repo's `.opencode/plugins/done-done.js` (project scope; your `~/.config/opencode` is never touched), so the bare `done-done` state is added to the first message of each session, not at session open (opencode's plugin hooks cannot add context when a session is created). The plugin remembers sessions in memory, so a resumed session gets the state again after opencode restarts. That `chat.message` hook runs `command -v done-done >/dev/null && done-done || true` and waits for it (up to 30 seconds) before appending the output to the message: without done-done on PATH it appends nothing and never throws, so it never breaks a session. Other files in `.opencode/plugins/` are untouched; re-running adds no duplicate. The result's `opencode_plugin` says `added to .opencode/plugins/done-done.js` or `unchanged`. Delete the file to opt out. Commit it to share the plugin.
+
+### Check the setup
+
+```sh
+done-done doctor
+```
+
+`doctor` answers "is this repo worth driving" and changes nothing. It checks seven items, each reported `ok` or `missing`, and each missing item names its fix command: `git` (inside a repository), `config` (a valid `.done-done.yaml`), `evidence_root` (writable), `verify_skill` (`.agents/skills/verify-<app>/SKILL.md`), `agent` (`claude`, `codex` or `opencode` on PATH; the first one wins), `judge` (an executable `claude` binary, a sign-in folder and the judge kit are present, and login is checked only when a capture is judged; the model is never called) and `ffprobe` (video evidence only). Only the first three are required: `doctor` exits 0 when they are all ok and 2 otherwise, so missing optionals never fail the run. In a fresh repo with nothing set up, `doctor` names each missing piece, starting with `done-done init`.
 
 ### Run a journey
 
@@ -156,7 +164,7 @@ done-done receipt --judge --from pr-body.md
 | `fail`: wrong screen | fail | 1 |
 | `unsure`: the model said it cannot tell, was less than 80% sure, or did not answer (a model error or a used-up plan) | inconclusive | 3 |
 
-The result gains a `judge` block with the model and, for each judged file, its verdict, a short reason and whether it came from the cache. A missing or signed-out sign-in folder, a sign-in that is not a Claude subscription, a sign-in folder that is (or links to) your own `~/.claude`, a missing `claude` binary, a missing `@byokit/decide` kit or a Node older than 22.18 is a config error (exit 2) whose `help` line is the command to fix it. The kit cannot tell a bad `judge.model` from a used-up plan, so both are `unsure` with a reason naming each. The judge's confidence is the model's own estimate, not a calibrated score.
+The result gains a `judge` block with the model and, for each judged file, its verdict, a short reason and whether it came from the cache. A missing or signed-out sign-in folder, a sign-in that is not a Claude subscription, a sign-in folder that is (or links to) your own `~/.claude`, a missing or non-executable `claude` binary, a missing `@byokit/decide` kit or a Node older than 22.18 is a config error (exit 2) whose `help` line is the command to fix it. The kit cannot tell a bad `judge.model` from a used-up plan, so both are `unsure` with a reason naming each. The judge's confidence is the model's own estimate, not a calibrated score.
 
 ### Record a receipt
 
@@ -182,7 +190,7 @@ done-done status [--run <run-id>]                                   # the newest
 
 ### Output
 
-Every command prints one machine-readable result on stdout. By default it is [TOON](https://github.com/toon-format/spec) in the AXI convention (the shape `no-mistakes axi status` uses): scalar `key: value` lines, tabular arrays, and a `help` list that names the exact next command. `--json` prints the same result as JSON. `--full` lists every evidence file or finding; without it, lists longer than five rows are truncated and the count of dropped rows is reported (`evidence_omitted` or `findings_omitted`).
+Every command prints one machine-readable result on stdout. By default it is [TOON](https://github.com/toon-format/spec) in the AXI convention (the shape `no-mistakes axi status` uses): scalar `key: value` lines, tabular arrays, and a `help` list that names the exact next command. `--json` prints the same result as JSON. `--full` lists every evidence file or finding; without it, lists longer than five rows are truncated and the count of dropped rows is reported (`evidence_omitted` or `findings_omitted`). `doctor` always lists every check: its seven rows never truncate.
 
 Running `done-done` with no subcommand prints the repo's config state (`config: present | missing | none`), its journeys and run count, and the next step. Usage and config errors also print one result: the `command` that failed, an `error` field and a `help` line with the recovery command (for example `done-done init` when no config exists, or the command's valid flags after an unknown one).
 
@@ -197,6 +205,8 @@ Running `done-done` with no subcommand prints the repo's config state (`config: 
 | 2 | usage or config error |
 | 3 | inconclusive (could not be proven either way) |
 | 4 | the run is still running (`verify`, `status`) |
+
+`doctor` exits 2 when a required item (`git`, `config`, `evidence_root`) is missing.
 
 ### In CI or a merge gate
 
@@ -228,7 +238,7 @@ evidence:
   local_root: ~/.done-done/evidence   # evidence root for repos that set none (<local_root>/<app>)
 judge:                                # used only when the judge is on
   model: claude-haiku-5-5              # the default: cheap and reads images; set any model you like
-  bin: /usr/local/bin/claude          # default: the first `claude` on PATH
+  bin: /usr/local/bin/claude          # default: the first `claude` on PATH; an absolute path to an executable
   config_dir: ~/.done-done/claude     # the default; a sign-in folder for done-done only
 ```
 

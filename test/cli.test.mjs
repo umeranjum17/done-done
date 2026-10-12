@@ -1689,7 +1689,7 @@ test('judge with no sign-in is a config error naming the sign-in command, and wr
   const v = j.dd('receipt', '--verify', j.head());
   assert.equal(v.code, 0, v.out);
   const vd = toon(v);
-  assert.deepEqual([vd.schema, vd.judge.route, vd.judge.model, vd.judge.independence, vd.judge.author.agent], [2, 'claude-code', 'claude-test-1', 'agent', 'opencode']);
+  assert.deepEqual([vd.schema, vd.judge.route, vd.judge.model, vd.judge.independence, vd.judge.author], [2, 'claude-code', 'claude-test-1', 'agent', { agent: 'opencode', model: 'opencode-go/muse-spark-1.3-contributor' }]);
   assert.deepEqual(vd.judge.verdicts.map((x) => [x.path, x.verdict]), [[files[0], 'pass']]);
   const file = join(j.repo, toon(ok).receipt);
   const rec = JSON.parse(readFileSync(file, 'utf8'));

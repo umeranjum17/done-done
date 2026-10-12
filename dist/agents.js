@@ -142,7 +142,7 @@ export const JUDGES = AGENTS.filter(canJudge);
 export function selectJudge(cfg, author) {
     const pick = (agent, model, from) => {
         const independence = agent !== author.agent ? 'agent' : model !== author.model ? 'model' : 'session-only';
-        return { route: routeOf(agent), agent, model, independence, from, author };
+        return { route: routeOf(agent), agent, model, independence, from, author: { agent: author.agent, model: author.model } };
     };
     const route = cfg.judge.route;
     if (route === 'auto') {

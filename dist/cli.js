@@ -859,8 +859,9 @@ async function runVerify(dir) {
         }
         let rec;
         if (done('drive') && run.record) {
+            begin('drive');
             rec = JSON.parse(readFileSync(run.record, 'utf8'));
-            logEvent(dir, { step: 'drive', status: 'completed', reused: true });
+            set(step, 'completed');
         }
         else {
             begin('drive');
@@ -1088,10 +1089,10 @@ async function cmdRerun(argv) {
     const group = src.runner?.journey_pgid;
     if (group && alive(-group))
         throw new UsageError(`the journey of run ${srcId} is still running, so it cannot be rerun yet`, `Read it: done-done status --run ${srcId}`);
+    const inputs = inputsOf(src.repo, loadConfig(src.repo), src.journey);
     const id = newRunId(git(repo, 'rev-parse', 'HEAD'));
     const dir = join(root, id);
     mkdirSync(join(dir, 'logs'), { recursive: true });
-    const inputs = inputsOf(src.repo, loadConfig(src.repo), src.journey);
     const reuse = !!src.inputs && ['head', 'journey', 'skill'].every((k) => src.inputs[k] === inputs[k]);
     const steps = src.steps.map((s) => (reuse && ['resolve', 'drive'].includes(s.name) && s.status === 'completed' ? { ...s } : { name: s.name, status: 'pending' }));
     const created = now();

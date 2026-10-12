@@ -369,6 +369,27 @@ test('receipt --verify fails on a changed file and on a missing receipt', () => 
   assert.match(missing.out, /no receipt/);
 });
 
+test('receipt --verify resolves HEAD, a branch name and a tag to the commit', () => {
+  const { sh, dd, head, shots } = setup();
+  const { files } = shots();
+  const h = head();
+  assert.equal(dd('receipt', '--outcome', 'home and settings render', ...files).code, 0);
+  const sha = dd('receipt', '--verify', h);
+  assert.equal(sha.code, 0, sha.out);
+  for (const ref of ['HEAD', 'main']) {
+    const v = dd('receipt', '--verify', ref);
+    assert.equal(v.code, 0, `${ref}: ${v.out}`);
+    assert.deepEqual(toon(v), toon(sha), `${ref} verifies exactly as the sha form`);
+  }
+  sh('tag', 'v1');
+  const t = dd('receipt', '--verify', 'v1');
+  assert.equal(t.code, 0, t.out);
+  assert.equal(toon(t).head, h, 'a tag resolves to the commit before lookup');
+  const bad = dd('receipt', '--verify', 'no-such-ref');
+  assert.equal(bad.code, 1, bad.out);
+  assert.match(bad.out, /no receipt for no-such-ref/, 'an unresolvable argument keeps the missing-receipt shape');
+});
+
 test('receipt refuses a not-proven pass that cites no evidence, and writes nothing', () => {
   const { repo, sh, dd, head } = setup();
   writeFileSync(join(repo, '.done-done.yaml'), 'app: notes\nevidence:\n  root: .proof\nchecks:\n  not_proven: allow\n');

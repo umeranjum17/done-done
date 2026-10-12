@@ -94,13 +94,13 @@ npm install -g --prefix ~/.local --allow-git=all github:umeranjum17/done-done-ax
 
 To skip the install, run `npx -y --allow-git=all github:umeranjum17/done-done-axi` wherever this README says `done-done`.
 
-Once 0.1.0 is published, the registry line takes over as the install:
+Once done-done-axi is published to npm, the registry line takes over as the install:
 
 ```sh
 npm install -g --prefix ~/.local done-done-axi
 ```
 
-<!-- TODO(dd-npm-name): when done-done-axi 0.1.0 is published, flip the primary back to the registry line above and make `npx -y done-done-axi` the skip-the-install path. -->
+<!-- TODO(dd-npm-name): when done-done-axi is published to npm, flip the primary back to the registry line above and make `npx -y done-done-axi` the skip-the-install path. -->
 
 **2. Set it up in your app's repo**
 
@@ -176,7 +176,7 @@ cp "$(npm root -g)/done-done-axi/integrations/firstmate/merge-gate" "$FM_HOME/co
 ```
 
 - **`brief-include.md`**: Firstmate adds `config/brief-include.md` to every worker brief. It tells the worker to set up done-done, run a journey on its committed change, write a `## Checks` block, pass `check`, and record a `receipt`. The evidence and receipt stay in `~/.done-done/evidence/<app>` after teardown deletes the worktree.
-- **`merge-gate`** (optional): `merge-gate <task-id> <worktree> <head> <pr-url|->`. In the worktree, it refuses a PR whose head is not `<head>`, then runs `done-done check --from <PR URL or $FM_HOME/data/<task-id>/checks.md> --trusted-ref <default branch>` (`origin/HEAD`, else `origin/main` or `origin/master`, else the local `main` or `master` in a repo with no remote), then `done-done receipt --verify <head>`. Both paths read done-done's rules from your default branch, never from the task's own branch, so merge `.done-done.yaml` there before you rely on it. The gate does not fetch: it reads the local `origin` refs, so run `git fetch origin` before you run it. It needs `done-done` on PATH (the `npm install` line above). A nonzero exit refuses the merge, and done-done's output says why. Upstream Firstmate does not call a merge gate yet, so this file has no effect until it does; you can run it by hand before a merge.
+- **`merge-gate`** (optional): `merge-gate <task-id> <worktree|-> <head> <pr-url|->`. In the worktree, it refuses a PR whose head is not `<head>`, then runs `done-done check --from <PR URL or $FM_HOME/data/<task-id>/checks.md> --trusted-ref <default branch>` (`origin/HEAD`, else `origin/main` or `origin/master`, else the local `main` or `master` in a repo with no remote), then `done-done receipt --verify <head>`. Both paths read done-done's rules from your default branch, never from the task's own branch, so merge `.done-done.yaml` there before you rely on it. The gate does not fetch: it reads the local `origin` refs, so run `git fetch origin` before you run it. It needs `done-done` on PATH (the `npm install` line above). A nonzero exit refuses the merge, and done-done's output says why. A worktree of `-` means the task recorded none: the gate does not cd and runs git and done-done in the current directory (the caller's project clone). Upstream Firstmate does not call a merge gate yet, so this file has no effect until it does; you can run it by hand before a merge.
 
 Another fleet works the same way: add the include text to whatever your workers read first, and run `merge-gate` before each merge, with `FM_HOME` set to the folder that holds `data/<task-id>/checks.md` for local-only tasks.
 

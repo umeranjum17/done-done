@@ -9,7 +9,7 @@
 
 done-done won't accept "done" without real, fresh proof from your product, captured at the exact commit being called done.
 
-[![Node 22.5+](https://img.shields.io/badge/node-22.5%2B-3fb950?logo=nodedotjs&logoColor=white)](https://nodejs.org) [![Status: early preview](https://img.shields.io/badge/status-early%20preview-d29922)](#whats-next) [![npm: not published yet](https://img.shields.io/badge/npm-not%20published%20yet-8b949e?logo=npm&logoColor=white)](#quick-start)
+[![Node 22.18+](https://img.shields.io/badge/node-22.18%2B-3fb950?logo=nodedotjs&logoColor=white)](https://nodejs.org) [![Status: early preview](https://img.shields.io/badge/status-early%20preview-d29922)](#whats-next) [![npm: not published yet](https://img.shields.io/badge/npm-not%20published%20yet-8b949e?logo=npm&logoColor=white)](#quick-start)
 
 <br>
 
@@ -45,7 +45,7 @@ Four moments from a demo notes app. Every picture is real output from the curren
 
 ## Quick start
 
-You need Node 22.5 or later and git. done-done is not on npm yet, so install it from source.
+You need Node 22.18 or later and git. done-done is not on npm yet, so install it from source.
 
 **1. Install**
 
@@ -103,6 +103,7 @@ Run `done-done` with no arguments to see the current config and the next step.
 - ♻️ **Not reused**: Proof made only of files already used for a different claim fails, and so does citing the same file twice.
 - 🧾 **Honest claims**: Reads a pull request's `## Checks` block — from a file, a URL, or stdin — and makes sure every line is filled in.
 - 📌 **Verifiable later**: `receipt` records a passing check against the exact commit and the sha256 of every file it cited; `receipt --verify` re-checks it in CI or at merge.
+- 👀 **Shows the outcome** (opt-in): `--judge` asks a model on your own Claude plan whether each screenshot is the right screen for the claim; a wrong screen fails.
 - 🔒 **Safe in CI**: `--trusted-ref origin/main` reads the rules from your main branch, so a pull request can't loosen them.
 
 Every answer is an exit code: **0** pass, **1** fail, **2** usage or config error, **3** can't tell either way.
@@ -114,7 +115,7 @@ Every answer is an exit code: **0** pass, **1** fail, **2** usage or config erro
 
 ## What's next
 
-So far: `init`, `run`, `check` and `receipt`. Coming next: an AI check that a screenshot really shows what it claims, and help writing the proof steps for your app.
+So far: `init`, `run`, `check`, `receipt` and the opt-in screenshot judge. Coming next: help writing the proof steps for your app.
 
 ## Develop
 

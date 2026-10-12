@@ -6,6 +6,7 @@ import { basename, dirname, join, matchesGlob, relative, resolve } from 'node:pa
 import { parseArgs } from 'node:util';
 import { encode } from '@toon-format/toon';
 import { type Config, home, loadConfig, UsageError } from './config.js';
+import { type Capture, judge, type Judged } from './judge.js';
 import { checkMedia } from './media.js';
 
 const PASS = 0, FAIL = 1, USAGE = 2, INCONCLUSIVE = 3;
@@ -16,12 +17,14 @@ const USAGE_TEXT = `usage:
   done-done run [<journey>] [-- <command...>]   run a journey (or command) and record the evidence it writes
   done-done run --open [<journey>]              open a run for a hand- or agent-driven proof; prints its id
   done-done run --close <run-id>                seal an open run
-  done-done check --outcome "<claim>" <files...> [--trusted-ref <ref>]
-  done-done check --from <file | - | PR URL> [--trusted-ref <ref>]
-  done-done receipt --outcome "<claim>" <files...>   record a passing check for HEAD
-  done-done receipt --from <file | - | PR URL>       record from a claim's Checks block
+  done-done check --outcome "<claim>" <files...> [--trusted-ref <ref>] [--judge]
+  done-done check --from <file | - | PR URL> [--trusted-ref <ref>] [--judge]
+  done-done receipt --outcome "<claim>" <files...> [--judge]   record a passing check for HEAD
+  done-done receipt --from <file | - | PR URL> [--judge]       record from a claim's Checks block
   done-done receipt --verify <head>                  read-only: verify a recorded receipt
 global flags: --json (JSON instead of TOON), --full (do not truncate lists)
+--judge (or judge.enabled: true): a model on your Claude plan, through BYOKit, says whether each PNG/JPEG
+  capture shows the outcome; a wrong screen fails, an unsure answer is inconclusive. Off by default.
 exit codes: 0 pass, 1 fail, 2 usage or config error, 3 inconclusive
 
 Results are printed as one TOON document (the AXI convention); pass --json for JSON.`;
@@ -257,6 +260,7 @@ function loadRecords(cfg: Config): RunRecord[] {
 
 type CheckOutcome = {
   code: number;
+  judge?: Record<string, unknown>;
   result: Record<string, unknown>;
   claim?: string;
   files: string[];
@@ -265,10 +269,10 @@ type CheckOutcome = {
 };
 
 // Run a check and return its result without printing it, so `check` and `receipt` share one path.
-function runCheck(argv: string[]): CheckOutcome {
+async function runCheck(argv: string[]): Promise<CheckOutcome> {
   const { values, positionals } = parseArgs({
     args: argv,
-    options: { outcome: { type: 'string' }, from: { type: 'string' }, 'trusted-ref': { type: 'string' } },
+    options: { outcome: { type: 'string' }, from: { type: 'string' }, 'trusted-ref': { type: 'string' }, judge: { type: 'boolean' } },
     allowPositionals: true,
   });
   if (!!values.outcome === !!values.from) throw new UsageError('check needs exactly one of --outcome or --from');
@@ -310,6 +314,7 @@ function runCheck(argv: string[]): CheckOutcome {
   const seen = new Map<string, string>();
   const hashes: string[] = [];
   const cited: { path: string; sha256: string }[] = [];
+  const captures: Capture[] = [];
   for (const name of files) {
     const path = resolve(name);
     let bytes: Buffer;
@@ -328,6 +333,7 @@ function runCheck(argv: string[]): CheckOutcome {
     if (seen.has(hash)) findings.push({ level: 'fail', why: `${name}: byte-identical to ${seen.get(hash)}` });
     seen.set(hash, name);
     if (v.status === 'fail') continue;
+    if (v.status === 'ok') captures.push({ name, bytes, sha256: hash, media: v });
     const rec = records.filter((r) => r.files.some((f) => f.sha256 === hash)).sort((a, b) => b.started_at.localeCompare(a.started_at))[0];
     if (!rec) {
       findings.push({ level: 'inconclusive', why: `${name}: not in any done-done run record, so it is not tied to a commit` });
@@ -349,16 +355,34 @@ function runCheck(argv: string[]): CheckOutcome {
     }
   const reusedElsewhere = (h: string) => [...(used.get(h) ?? [])].some((k) => k !== key && k.startsWith(key.split(':')[0]));
   if (hashes.length && hashes.every(reusedElsewhere)) findings.push({ level: 'fail', why: 'every evidence file was already used as proof of a different claim' });
-  const rep = report(findings, files, { cfg, claim: claim?.outcome, source: values.from });
+  let judged: Record<string, unknown> | undefined;
+  let judgeLevel: Finding['level'] | undefined;
+  if ((values.judge || cfg.judge.enabled) && claim) {
+    if (findings.some((f) => f.level === 'fail')) judged = { skipped: 'the check already failed, so no capture was judged' };
+    else {
+      const j = await judge(cfg, claim.outcome, captures);
+      // The judge's next step leads the help when its verdict decides the result.
+      if (j.judged.some((r) => r.verdict === 'fail')) judgeLevel = 'fail';
+      else if (!findings.length && j.judged.some((r) => r.verdict === 'unsure')) judgeLevel = 'inconclusive';
+      for (const r of j.judged.filter((r) => r.verdict !== 'pass'))
+        findings.push({ level: r.verdict === 'fail' ? 'fail' : 'inconclusive', why: `${r.path}: judge says ${r.verdict === 'fail' ? 'wrong screen' : 'unsure'}: ${r.reason}` });
+      const rows = cap<Judged>(j.judged);
+      judged = { model: j.model, judged: rows.items };
+      if (rows.omitted) judged.judged_omitted = rows.omitted;
+      if (j.notJudged.length) judged.not_judged = j.notJudged;
+      judged.note = 'only PNG and JPEG captures are judged; text, log and video evidence are not';
+    }
+  }
+  const rep = report(findings, files, { cfg, claim: claim?.outcome, source: values.from, judge: judged, judgeLevel });
   if (rep.code === PASS) {
     mkdirSync(dirname(ledger), { recursive: true });
     appendFileSync(ledger, hashes.filter((h) => !used.get(h)?.has(key)).map((h) => `${h} ${key}\n`).join(''));
   }
-  return { code: rep.code, result: rep.result, claim: claim?.outcome, files, cited, head: now };
+  return { code: rep.code, result: rep.result, judge: judged, claim: claim?.outcome, files, cited, head: now };
 }
 
-function cmdCheck(argv: string[]): number {
-  const r = runCheck(argv);
+async function cmdCheck(argv: string[]): Promise<number> {
+  const r = await runCheck(argv);
   emit(r.result);
   return r.code;
 }
@@ -421,7 +445,7 @@ function verifyReceipt(repo: string, cfg: Config, headArg: string): number {
   return PASS;
 }
 
-function cmdReceipt(argv: string[]): number {
+async function cmdReceipt(argv: string[]): Promise<number> {
   const vi = argv.indexOf('--verify');
   let verifyHead: string | null = null;
   let rest = argv;
@@ -437,7 +461,7 @@ function cmdReceipt(argv: string[]): number {
     return verifyReceipt(repo, cfg, verifyHead);
   }
   if (!rest.length) throw new UsageError('receipt needs a claim (--outcome "<claim>" <files...> or --from <file|->) or --verify <head>');
-  const r = runCheck(rest);
+  const r = await runCheck(rest);
   if (r.code !== PASS) {
     emit({ ...r.result, command: 'receipt', reason: 'the check did not pass, so no receipt was written' });
     return r.code;
@@ -460,6 +484,7 @@ function cmdReceipt(argv: string[]): number {
     claim: rec.claim,
     files: rec.files.length,
     receipt: relative(repo, path) || path,
+    ...(r.judge && { judge: r.judge }),
     help: [`Verify this receipt (CI or merge): done-done receipt --verify ${r.head.commit}`],
   });
   return PASS;
@@ -479,10 +504,12 @@ function staleness(repo: string, cfg: Config, from: string, to: string): string 
   return `evidence is for commit ${from.slice(0, 12)}, HEAD is ${to.slice(0, 12)}${outside.length ? ` (changed: ${outside.slice(0, 3).join(', ')}${outside.length > 3 ? ', ...' : ''})` : ''}`;
 }
 
-type ReportContext = { cfg: Config; claim?: string; source?: string; notProven?: boolean };
+type ReportContext = { cfg: Config; claim?: string; source?: string; notProven?: boolean; judge?: Record<string, unknown>; judgeLevel?: Finding['level'] };
 
-function checkHelp(cfg: Config, code: number, notProven = false): string[] {
+function checkHelp(cfg: Config, code: number, notProven = false, judgeLevel?: Finding['level']): string[] {
   if (notProven) return ['Capture real proof and replace "not proven:", or set checks.not_proven: allow and re-check from a trusted ref'];
+  if (judgeLevel === 'fail' && code === FAIL) return [`Capture the screen the outcome describes, then re-run this check: ${captureHint(cfg)}`];
+  if (judgeLevel && code === INCONCLUSIVE) return ['Look at the capture yourself, or capture a clearer screen of the outcome and re-run this check'];
   if (code === PASS) return ['Gate CI on this proof: done-done check --from <PR URL> --trusted-ref origin/main'];
   const capture = captureHint(cfg);
   if (code === INCONCLUSIVE) return [`Capture this proof through a run so it is tied to a commit, then re-run this check: ${capture}`];
@@ -504,10 +531,11 @@ function report(findings: Finding[], files: string[], ctx: ReportContext, note =
     result.evidence = ev.items;
     if (ev.omitted) result.evidence_omitted = ev.omitted;
   }
+  if (ctx.judge) result.judge = ctx.judge;
   const rows = cap(findings.map((f) => ({ level: f.level, why: f.why })));
   if (rows.items.length) result.findings = rows.items;
   if (rows.omitted) result.findings_omitted = rows.omitted;
-  result.help = checkHelp(ctx.cfg, code, ctx.notProven);
+  result.help = checkHelp(ctx.cfg, code, ctx.notProven, ctx.judgeLevel);
   return { code, result };
 }
 
@@ -590,7 +618,7 @@ function cmdBare(): number {
   return PASS;
 }
 
-function main(argv: string[]): number {
+async function main(argv: string[]): Promise<number> {
   const dash = argv.indexOf('--');
   const head = dash < 0 ? argv : argv.slice(0, dash);
   const kept: string[] = [];
@@ -603,8 +631,8 @@ function main(argv: string[]): number {
   try {
     if (cmd === 'init') return cmdInit(rest);
     if (cmd === 'run') return cmdRun(rest);
-    if (cmd === 'check') return cmdCheck(rest);
-    if (cmd === 'receipt') return cmdReceipt(rest);
+    if (cmd === 'check') return await cmdCheck(rest);
+    if (cmd === 'receipt') return await cmdReceipt(rest);
     if (cmd === '--help' || cmd === '-h' || cmd === 'help') {
       console.log(USAGE_TEXT);
       return PASS;
@@ -613,9 +641,9 @@ function main(argv: string[]): number {
     throw new UsageError(`unknown command ${cmd}`);
   } catch (e) {
     const msg = ((e as { stderr?: string }).stderr || (e as Error).message || String(e)).trim();
-    emit({ command: 'done-done', error: msg, help: errorHelp(msg) });
+    emit({ command: 'done-done', error: msg, help: e instanceof UsageError && e.help ? [e.help] : errorHelp(msg) });
     return USAGE;
   }
 }
 
-process.exitCode = main(process.argv.slice(2));
+process.exitCode = await main(process.argv.slice(2));

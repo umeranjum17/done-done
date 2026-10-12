@@ -85,6 +85,12 @@ media (magic bytes match the extension, complete, not blank or tiny; video is de
 fresh); be clean (the run was not dirty and exited 0); and not reused (not byte-identical within the
 claim, and not already used to prove a different claim in this repo).
 
+Add `--judge` (to `check` or `receipt`) to also ask, through BYOKit and the person's own Claude
+plan, whether each PNG/JPEG shows the outcome: a wrong screen fails (1), an unsure answer is
+inconclusive (3). It is off by default and needs a one-time sign-in
+(`mkdir -p ~/.done-done/claude && CLAUDE_CONFIG_DIR=~/.done-done/claude claude auth login`); a
+missing sign-in exits 2 with that command. Text, log and video evidence are not judged.
+
 ## Record and re-verify a receipt
 
 ```sh

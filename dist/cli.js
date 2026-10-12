@@ -29,7 +29,7 @@ const CHECKS_TEXT = `Checks block (--from): the newest "## Checks" heading, then
 const RUNS_TEXT = `runs: each verify or maintain run lives in $DONE_DONE_HOME/runs/<app>/<run-id> (run.json, events.jsonl, logs/<step>.log,
   agents/<n>-<name>.json for each agent call) and goes on when the command that started it ends;
   verify steps: resolve, drive (the journey), check, receipt, report; maintain steps: locate, hygiene, source-wave, reconcile, report`;
-const MAINTAIN_TEXT = `maintain reads the verify skill and the source and edits nothing; HEAD and git status must be the same before and after.
+const MAINTAIN_TEXT = `maintain reads the verify skill and the source and edits nothing; HEAD, git status and the content of changed files must be the same before and after.
   locate: the verify skill (.agents/skills/verify-<app>/SKILL.md); none: blocked, create it with done-done init
   hygiene: every local link in the skill resolves; features/README.md lists each features/*.md file once
   source-wave: one fresh read-only reader per feature file at the configured agent (agent, agent_config) explains it from source

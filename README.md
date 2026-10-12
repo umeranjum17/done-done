@@ -131,7 +131,7 @@ git commit -m "Add done-done"
 
 A `run -- <command>` whose command matches no recorded journey still runs, but its result hints that the recipe is not in the repo.
 
-At any point, `done-done doctor` checks the setup without changing anything: git, a valid `.done-done.yaml`, a writable evidence root (all required), plus the verify skill, an agent CLI, the judge setup and `ffprobe` (all optional). Each item reports `ok` or `missing` with the exact fix command.
+At any point, `done-done doctor` checks the setup without changing anything: git, a valid `.done-done.yaml`, a writable evidence root (all required), plus the verify skill, your coding agent and its model (`agent:` in config, or the first of claude, codex, opencode, pi, gemini on PATH), the judge setup and `ffprobe` (all optional). Each item reports `ok` or `missing` with the exact fix command. `done-done doctor --probe` also asks the agent one question to prove it answers.
 
 **3. Run it, then check it**
 

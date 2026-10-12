@@ -11,17 +11,27 @@ export class UsageError extends Error {
 }
 
 export type Config = {
+  agent: 'auto' | string[]; // the author agent: auto, or the user's fallback list
+  agent_config: Record<string, { model?: string }>;
   app: string;
   skill: string;
   journeys: Record<string, { command: string }>;
   evidence: { local_root: string; root: string; allow_dirty: boolean; ignore_paths: string[] };
   checks: { not_proven: 'inconclusive' | 'allow'; fix_title: string };
-  judge: { enabled: boolean; model: string; bin: string; config_dir: string };
+  judge: { enabled: boolean; model: string; bin: string; config_dir: string; route: string; allow_same: boolean };
   trusted: boolean; // project file came from --trusted-ref
 };
 
-// Where each key may be set. Global-only keys describe the machine; repo-only keys describe the project.
-const KEYS: Record<string, { scope: 'global' | 'repo'; type: 'string' | 'boolean' | 'string[]' | 'journeys' }> = {
+// The coding agents done-done can start, in the order `agent: auto` looks for them on PATH.
+export const AGENTS = ['claude', 'codex', 'opencode', 'pi', 'gemini'];
+// The cost guard is this table: a default model is always the agent's cheap one, never a flagship,
+// whatever the vendor; any other model runs only when the user names it. pi and gemini get theirs with their adapters.
+export const CHEAP_MODELS: Record<string, string> = { claude: 'claude-haiku-5-5', codex: 'gpt-6-luna', opencode: 'opencode-go/muse-spark-1.3-contributor' };
+
+// Where each key may be set. Global-only keys describe the machine; repo-only keys describe the project; `any` may be in either.
+const KEYS: Record<string, { scope: 'global' | 'repo' | 'any'; type: 'string' | 'boolean' | 'string[]' | 'journeys' | 'agent' | 'agent_config' }> = {
+  agent: { scope: 'any', type: 'agent' },
+  agent_config: { scope: 'any', type: 'agent_config' },
   'evidence.local_root': { scope: 'global', type: 'string' },
   app: { scope: 'repo', type: 'string' },
   skill: { scope: 'repo', type: 'string' },
@@ -35,17 +45,13 @@ const KEYS: Record<string, { scope: 'global' | 'repo'; type: 'string' | 'boolean
   'judge.model': { scope: 'global', type: 'string' },
   'judge.bin': { scope: 'global', type: 'string' },
   'judge.config_dir': { scope: 'global', type: 'string' },
+  'judge.route': { scope: 'global', type: 'string' },
+  'judge.allow_same': { scope: 'any', type: 'boolean' },
 };
 const SECTIONS = new Set(['evidence', 'checks', 'judge']);
 
-// The judge default stays cheap: Haiku reads images (Anthropic vision docs list
-// text-and-image input for Haiku, and the Bedrock model card marks image input
-// supported), and the judge runs through the user's own `claude` binary, which
-// only accepts Claude model ids — so an opencode model id can never be the default here.
-// Users may still set any model they like via judge.model.
-export const DEFAULT_JUDGE_MODEL = 'claude-haiku-5-5';
-// Flagship models must never become a default again; the cheap-default test guards this.
-export const FLAGSHIP_MODEL_PATTERN = /opus|sonnet/i;
+// The judge runs through the user's own `claude` binary until judge routes land, so its default is Claude's cheap model.
+export const DEFAULT_JUDGE_MODEL = CHEAP_MODELS.claude;
 
 export const home = () => process.env.DONE_DONE_HOME || join(homedir(), '.done-done');
 
@@ -54,6 +60,7 @@ function flatten(doc: unknown, file: string): Map<string, unknown> {
   if (doc == null) return out;
   if (typeof doc !== 'object' || Array.isArray(doc)) throw new UsageError(`${file}: top level must be a mapping`);
   for (const [k, v] of Object.entries(doc)) {
+    if (k === 'judge' && v === 'auto') continue; // the default judge choice, spelled out
     if (SECTIONS.has(k)) {
       if (v == null) continue;
       if (typeof v !== 'object' || Array.isArray(v)) throw new UsageError(`${file}: ${k} must be a mapping`);
@@ -74,16 +81,21 @@ function apply(target: Record<string, any>, text: string | undefined, file: stri
   for (const [key, value] of flatten(doc, file)) {
     const spec = KEYS[key];
     if (!spec) throw new UsageError(`${file}: unknown key ${key}`);
-    if (spec.scope !== scope) throw new UsageError(`${file}: ${key} may only be set in the ${spec.scope === 'global' ? 'global config' : 'project .done-done.yaml'}`);
+    if (spec.scope !== scope && spec.scope !== 'any') throw new UsageError(`${file}: ${key} may only be set in the ${spec.scope === 'global' ? 'global config' : 'project .done-done.yaml'}`);
     const ok =
       spec.type === 'string' ? typeof value === 'string'
       : spec.type === 'boolean' ? typeof value === 'boolean'
       : spec.type === 'string[]' ? Array.isArray(value) && value.every((v) => typeof v === 'string')
+      : spec.type === 'agent' ? value === 'auto' || [value].flat().every((v) => AGENTS.includes(v as string)) && [value].flat().length > 0
+      : spec.type === 'agent_config' ? !!value && typeof value === 'object' && Object.entries(value).every(([a, c]) => AGENTS.includes(a) && !!c && typeof c === 'object' && Object.entries(c).every(([k, m]) => k === 'model' && typeof m === 'string'))
       : !!value && typeof value === 'object' && Object.values(value).every((j: any) => j && typeof j.command === 'string');
-    if (!ok) throw new UsageError(`${file}: ${key} must be ${spec.type === 'journeys' ? 'a map of name: {command: <string>}' : `a ${spec.type}`}`);
+    const want = { journeys: 'a map of name: {command: <string>}', agent: `auto, or one or a list of ${AGENTS.join(', ')}`, agent_config: `a map of <agent>: {model: <string>} for ${AGENTS.join(', ')}` } as Record<string, string>;
+    if (!ok) throw new UsageError(`${file}: ${key} must be ${want[spec.type] ?? `a ${spec.type}`}`);
     if (key === 'checks.not_proven' && value !== 'inconclusive' && value !== 'allow') throw new UsageError(`${file}: checks.not_proven must be inconclusive or allow`);
     const [a, b] = key.split('.');
     if (b) target[a][b] = value;
+    else if (key === 'agent') target.agent = value === 'auto' ? 'auto' : [value].flat();
+    else if (key === 'agent_config') target.agent_config = { ...target.agent_config, ...(value as object) };
     else target[a] = value;
   }
 }
@@ -101,12 +113,14 @@ function readOptional(path: string): string | undefined {
 // `projectText` overrides reading <repo>/.done-done.yaml (used for --trusted-ref).
 export function loadConfig(repo: string, projectText?: string | null): Config {
   const cfg: Config = {
+    agent: 'auto',
+    agent_config: {},
     app: basename(repo),
     skill: '',
     journeys: {},
     evidence: { local_root: join(home(), 'evidence'), root: '', allow_dirty: false, ignore_paths: [] },
     checks: { not_proven: 'inconclusive', fix_title: '^(fix|bugfix|hotfix)\\b' },
-    judge: { enabled: false, model: DEFAULT_JUDGE_MODEL, bin: '', config_dir: join(home(), 'claude') },
+    judge: { enabled: false, model: DEFAULT_JUDGE_MODEL, bin: '', config_dir: join(home(), 'claude'), route: '', allow_same: false },
     trusted: projectText != null,
   };
   const globalFile = join(home(), 'config.yaml');

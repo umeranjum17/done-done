@@ -19,41 +19,42 @@ const DESCRIPTION =
 const SKILL = `---
 name: done-done
 description: ${JSON.stringify(DESCRIPTION)}
-user-invocable: false
+argument-hint: "[what to prove, e.g. the app in this repo works]"
+metadata:
+  author: umeranjum17
+  hermes:
+    tags: [proof, evidence, verification, screenshots, ci, axi]
+    category: devops
 ---
 
 # done-done
 
-"No proof, no done." done-done is a CLI you drive for the user: they say what should be proven, you
-run the commands, read the results and report them. It is deterministic, offline and model-free.
+"No proof, no done." done-done captures proof from the real product, ties every screenshot, recording
+and log to the exact commit, and checks that cited proof is real, fresh and not reused. You run it for
+the user; they only say what should be proven.
 
-## Run it
+## Current guidance lives in the CLI
 
-Use \`done-done\` when it is on PATH. Otherwise run it with nothing installed:
+Do not follow command or config details from memory or from this file - installed copies go stale.
+Get the current source of truth from the CLI:
 
-\`\`\`sh
-${NPX}
-\`\`\`
+- \`${NPX}\` (no arguments, inside the repo) for this repo's proof setup and the next step
+- \`${NPX} --help\` for every command and flag
 
-The first npx run builds it (about 20 seconds); later runs take a few seconds. Wherever this skill
-or a result says \`done-done\`, use the same form.
+You do not need done-done installed - invoke it as \`${NPX} <args>\` (the first run builds it, about
+20 seconds). If \`done-done\` is already on PATH, use it directly. If done-done output shows a follow-up
+command starting with \`done-done\`, run it the same way.
 
-For current commands, flags and config, run the CLI rather than relying on memory:
+Results are TOON (\`init\` prints plain text): read \`result\` and follow the \`help\` lines through
+\`init\`, \`run\`, \`check\` and \`receipt\`. Proof comes from driving the real product, not from a unit test run. \`fail\` or
+\`inconclusive\` is not done: fix the cause and re-run, or tell the user exactly what is still unproven.
 
-- \`done-done\` (bare, inside the repo): this repo's proof setup and the next step
-- \`done-done --help\`: every command and flag
+## Request
 
-## The flow
+$ARGUMENTS
 
-1. Run bare \`done-done\` in the repo and follow its \`help\` line.
-2. \`init\` once, then give \`.done-done.yaml\` a journey whose command drives the real product and
-   writes screenshots, recordings or logs into the evidence root. A unit test run is not the app.
-3. \`run\` the journey, then \`check\` the files it recorded against the outcome the user asked for.
-   Proof counts only from a clean, committed tree. \`receipt\` records a passing check for HEAD.
-4. \`run\`, \`check\`, \`receipt\` and bare \`done-done\` print one TOON result: read \`result\` and do
-   what its \`help\` lines say. \`init\` prints its next step as plain text.
-5. Report only what the result says. \`fail\` or \`inconclusive\` is not done: fix the cause and
-   re-run, or tell the user exactly what is still unproven.
+If the request above is non-empty, the user invoked \`/done-done\` explicitly - fetch the current CLI
+guidance, then prove that. If it is empty, infer what to prove from the conversation.
 `;
 
 const target = fileURLToPath(new URL('../skills/done-done/SKILL.md', import.meta.url));

@@ -43,27 +43,49 @@ Four moments from a demo notes app. Every picture is real output from the curren
 <picture><source media="(prefers-color-scheme: dark)" srcset="docs/media/reasons-dark.svg"><img src="docs/media/reasons-light.svg" alt="done-done check fails: one screenshot is from an older commit, one file is empty, one is a blank frame." width="400" align="top"></picture>
 <picture><source media="(prefers-color-scheme: dark)" srcset="docs/media/config-dark.svg"><img src="docs/media/config-light.svg" alt="done-done run stops with exit 2 because the config has an unknown key." width="400" align="top"></picture>
 
-## Quick start
+done-done is an [AXI](https://axi.md), which means -
 
-You need Node 22.5 or later and git.
+- It's just a CLI any capable agent can run without setup.
+- It's built for agents: [TOON](https://github.com/toon-format/spec) output by default (`--json` and `--full` when needed), and every result names the next command in its `help` lines.
+- The skill below only handles discovery; agents learn done-done by using it.
 
-### Agent skill (recommended)
+## Quick Start
 
-Let your coding agent drive done-done. Install the skill in the [Agent Skills](https://agentskills.io) format with [`npx skills`](https://github.com/vercel-labs/skills); it works in Claude Code, Codex, opencode and pi:
+You need Node 22.5 or later and git. Install the done-done skill in the [Agent Skills](https://agentskills.io) format with [`npx skills`](https://github.com/vercel-labs/skills):
 
 ```sh
-npx skills add umeranjum17/done-done --skill done-done -g
+npx skills add umeranjum17/done-done --skill done-done
 ```
 
-Then, in your app's repo, ask in plain words:
+That is the entire setup - no npm install needed.
+The skill teaches your agent to run done-done through `npx`, so the CLI comes along on demand.
+It stays a short stub and sends the agent to `--help` and the bare command for current instructions, so an installed copy cannot go stale against a newer CLI.
 
-> prove the app in this repo works
+done-done is not on npm yet, so today the skill runs it straight from GitHub. This is the command that works now:
 
-The agent sets done-done up, captures proof from your real app, checks it and tells you the result. The skill is minimal: it points the agent to the live CLI guidance (`done-done --help` and the bare `done-done`) through `npx`, so nothing needs installing first and the installed skill never goes stale. Drop `-g` to install it for one project only.
+```sh
+npx -y --allow-git=all github:umeranjum17/done-done --help
+```
+
+The first run builds it: 15 to 18 seconds cold (measured with npm 10, 11 and 12); later runs take about 2 seconds. npm 12 refuses GitHub packages without `--allow-git=all`. Once done-done is on npm, the switch is one line in `src/skill.ts`: `const NPX = 'npx -y done-done';`.
+
+Then, in agents that expose skills as slash commands (Claude Code, for example), invoke it directly:
+
+```
+/done-done prove the app in this repo works
+```
+
+Or just ask in plain words - "prove the app in this repo works", "is this really done?", "gate this PR on proof" - and the agent loads the skill on its own.
+
+By default the skill lands in the current project's skills directory (`.claude/skills/`, for example); add `-g` to install it for all projects (`~/.claude/skills/`).
+
+## Other Ways to Use done-done
+
+The skill is the recommended path, but it is not the only one.
 
 ### Manual CLI
 
-done-done is not on npm yet, so install it from source.
+Install it from source:
 
 **1. Install**
 

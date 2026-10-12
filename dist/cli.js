@@ -1800,7 +1800,7 @@ async function cmdDoctor(argv) {
         const judge = cfg.judge;
         const route = judge.route ? `; judge.route ${judge.route} is recorded, not used yet` : '';
         const judgeChoice = (detail, ok, fix = '') => ({ check: 'judge_choice', status: ok ? 'ok' : 'missing', detail: `claude judge (model ${judge.model || 'none'})${detail}${route}`, fix });
-        const apart = agent.agent !== 'claude';
+        const apart = agent.agent.replace(/^acp:/, '') !== 'claude'; // acp:claude is claude through acpx
         checks.push(!agent.path || !supported(agent.agent) ? judgeChoice(`, and no ${agent.path ? 'startable ' : ''}author agent is installed, so there is no independence to check`, false, 'Install an agent (see the agent check) so the judge can be checked against it')
             : apart ? judgeChoice(`, a different agent from the author (${agent.agent})`, true)
                 : judge.allow_same ? judgeChoice(' in a fresh session, the same agent as the author; judge.allow_same accepts it (session-only independence)', true)

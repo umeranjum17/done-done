@@ -4,6 +4,19 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { AGENTS, CHEAP_MODELS } from './config.js';
 import { onPath } from './judge.js';
+// The JSON object in an agent's free text: the longest '{'..'}' span that parses, so braces in narration around it are skipped.
+// ponytail: tries every brace pair (quadratic in the braces), fine for one answer's text.
+function jsonIn(text) {
+    const at = (ch) => [...text].flatMap((c, i) => (c === ch ? [i] : []));
+    const spans = at('{').flatMap((o) => at('}').filter((c) => c > o).map((c) => [o, c + 1])).sort((a, b) => b[1] - b[0] - (a[1] - a[0]));
+    for (const [o, c] of spans) {
+        try {
+            return JSON.parse(text.slice(o, c));
+        }
+        catch { /* not this span */ }
+    }
+    throw new Error(`no JSON object in the answer: ${text.slice(0, 200)}`);
+}
 // acp:<target> runs any Agent Client Protocol agent through the user's acpx bridge (acpx's own registry names
 // the targets): the prompt and the schema on stdin (exec --file -), and the answer is the JSON object in the agent's
 // message chunks of acpx's JSON-RPC event stream. The tool policy maps to acpx's permission mode; a prompt that
@@ -19,7 +32,7 @@ const ACP = {
         const error = events.find((e) => e.error)?.error;
         if (!text && error)
             throw new Error(String(error.message ?? JSON.stringify(error)).slice(0, 500));
-        return JSON.parse(text.slice(text.indexOf('{'), text.lastIndexOf('}') + 1));
+        return jsonIn(text);
     },
 };
 export const ACPX_INSTALL = 'Install the acpx ACP bridge (npm install -g acpx, https://github.com/openclaw/acpx), then re-run: done-done doctor';
@@ -47,7 +60,7 @@ const ADAPTERS = {
             if (error)
                 throw new Error(JSON.stringify(error.error ?? error).slice(0, 500));
             const text = events.filter((e) => e.type === 'text').map((e) => e.part.text).join('');
-            return JSON.parse(text.slice(text.indexOf('{'), text.lastIndexOf('}') + 1));
+            return jsonIn(text);
         },
         env: (c) => (c.tools === 'edit' ? {} : { OPENCODE_PERMISSION: JSON.stringify(c.tools === 'read' ? { '*': 'deny', read: 'allow', grep: 'allow', glob: 'allow', list: 'allow' } : { '*': 'deny' }) }),
     },

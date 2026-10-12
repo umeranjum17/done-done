@@ -36,7 +36,7 @@ const DOCTOR_TEXT = `doctor changes nothing except the --probe call record (the 
   optional: verify_skill (.agents/skills/verify-<app>/), agent (the configured agent, or with agent: auto the first
   of claude, codex, opencode, pi, gemini on PATH that done-done can start, and its model), judge_choice (the claude judge, and whether it is
   apart from the author), judge (an executable claude binary, a sign-in folder and the judge kit; the model is never called), ffprobe (video evidence only).
-  --probe also asks the agent one JSON-schema question (one call at the agent's model, its cheap default unless you set agent_config.<agent>.model; its record goes to
+  --probe also asks the agent one JSON-schema question (one call at the agent's model: its cheap default where it has one, else its own; set agent_config.<agent>.model to choose; its record goes to
   $DONE_DONE_HOME/agents/) and then requires a valid answer.
   doctor lists every check; --full changes nothing. Missing optionals never fail the run.`;
 
@@ -57,7 +57,7 @@ const FLAGS: Record<string, string> = {
   '--no-wait': 'start the run and return at once (exit 4); read it later with done-done status',
   '--foreground': 'run every step in this process instead of a detached runner (use in CI)',
   '--run <run-id>': 'the run to show (default: the newest run of this checkout)',
-  '--probe': 'ask the configured agent one JSON-schema question and require a valid answer (one call at the agent\'s model, its cheap default unless you set agent_config.<agent>.model)',
+  '--probe': 'ask the configured agent one JSON-schema question and require a valid answer (one call at the agent\'s model: its cheap default where it has one, else its own; set agent_config.<agent>.model to choose)',
   '--step <name>': 'the step log to show (resolve, drive, check, receipt, report)',
   '--limit <n>': 'how many past runs to list (default all)',
   '--agent <agent>': 'also add a SessionStart hook to .claude/settings.json (claude) or .codex/hooks.json (codex) that shows `done-done` to each session, or a plugin to .opencode/plugins that adds it to the first message of each opencode session (opt-in)',
@@ -1615,8 +1615,9 @@ function writableDir(p: string): boolean {
 }
 
 const PROBE_SCHEMA = { type: 'object', properties: { ok: { type: 'boolean' } }, required: ['ok'], additionalProperties: false };
-type DoctorCheck = { check: string; status: 'ok' | 'missing'; detail: string; fix: string };
+type DoctorCheck = { check: string; status: 'ok' | 'missing' | 'warning'; detail: string; fix: string };
 const unknownRow = (check: string): DoctorCheck => ({ check, status: 'missing', detail: 'unknown without a valid config', fix: '' });
+const modelPhrase = (agent: string, model: string) => (model ? `model ${model}` : `its own default model; set agent_config.${agent}.model to choose one`);
 
 // Is this repo worth driving: git, a valid config and a writable evidence root are
 // required; the verify skill, an agent CLI, the judge binary and ffprobe are optional.
@@ -1688,7 +1689,8 @@ async function cmdDoctor(argv: string[]): Promise<number> {
     }
   }
   const agent = agentCfg && selectAgent(agentCfg);
-  const startable = AGENTS.filter(supported).join(' and ');
+  const startableList = AGENTS.filter(supported);
+  const startable = startableList.length > 1 ? `${startableList.slice(0, -1).join(', ')} and ${startableList.at(-1)}` : (startableList[0] ?? 'no agent');
   const installFix = `Install ${startable}, or set agent: to an installed one of ${AGENTS.join(', ')}`;
   const switchFix = `Set agent: to ${startable}`;
   if (repoFileInvalid) {
@@ -1697,7 +1699,7 @@ async function cmdDoctor(argv: string[]): Promise<number> {
     checks.push({ check: 'agent', status: 'missing', detail: agentError, fix: 'Fix the config file named above, then re-run: done-done doctor' });
   } else {
     const skipping = agent.skipped.map((a) => `; skipped ${a}: done-done cannot start it yet`).join('');
-    const what = `${agent.agent} (model ${agent.model || 'none'}; ${agent.from === 'auto' ? 'agent: auto' : 'from config'}${skipping})`;
+    const what = `${agent.agent} (${modelPhrase(agent.agent, agent.model)}; ${agent.from === 'auto' ? 'agent: auto' : 'from config'}${skipping})`;
     checks.push(
       !agent.path
         ? { check: 'agent', status: 'missing', detail: `${what} is not on PATH`, fix: installFix }
@@ -1705,6 +1707,7 @@ async function cmdDoctor(argv: string[]): Promise<number> {
           ? { check: 'agent', status: 'missing', detail: `${what} at ${agent.path}, but done-done cannot start ${agent.agent} yet (${startable} for now)`, fix: switchFix }
           : { check: 'agent', status: 'ok', detail: `${what} at ${agent.path}`, fix: '' },
     );
+    if (agent.agent === 'pi') checks.push({ check: 'tool_gate', status: 'warning', detail: 'pi has no permission gate: every pi tool runs without approval', fix: '' });
   }
   if (!cfg) {
     checks.push(unknownRow('judge'));
@@ -1745,7 +1748,7 @@ async function cmdDoctor(argv: string[]): Promise<number> {
       : askAgent({ agent: agent.agent, model: agent.model, prompt: 'This is a connectivity probe from done-done doctor. Use no tools. Answer with ok set to true.', schema: PROBE_SCHEMA, cwd: repo ?? process.cwd(), timeoutMs: 180_000, tools: 'none', record });
     checks.push(
       probe.ok && probe.answer?.ok === true
-        ? { check: 'probe', status: 'ok', detail: `${agent.agent} (model ${agent.model}) answered the schema question; ${probe.recordError ? `the call record could not be written: ${probe.recordError}` : `record ${record}`}`, fix: '' }
+        ? { check: 'probe', status: 'ok', detail: `${agent.agent} (${modelPhrase(agent.agent, agent.model)}) answered the schema question; ${probe.recordError ? `the call record could not be written: ${probe.recordError}` : `record ${record}`}`, fix: '' }
         : { check: 'probe', status: 'missing', detail: `${agent.agent} did not answer: ${probe.error ?? `answer ${JSON.stringify(probe.answer)}`}${probe.record ? `; record ${record}` : ''}${probe.recordError ? `; the call record could not be written: ${probe.recordError}` : ''}`, fix: probe.fix ?? `Check that ${agent.agent} is signed in${agent.model ? ` and can use model ${agent.model}` : ''}, or set agent_config.${agent.agent}.model` },
     );
   }

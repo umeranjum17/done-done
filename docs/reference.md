@@ -56,13 +56,13 @@ done-done doctor
 done-done doctor --probe
 ```
 
-`--probe` also asks the agent one JSON-schema question (one call at its model) and adds a `probe` item that is then required: `ok` only when the agent answers with a valid object. The call record goes to `$DONE_DONE_HOME/agents/` (mode 0600); it keeps the argv, model, timing, exit code and answer, never the prompt text.
+`--probe` also asks the agent one JSON-schema question (one call at its model) and adds a `probe` item that is then required: `ok` only when the agent answers with a valid object. The call record goes to `$DONE_DONE_HOME/agents/` (mode 0600); it keeps the agent, model, schema, tools, cwd, timeout, argv, prompt size in bytes, timing, exit code, answer or error, and the last 2000 characters of stderr, never the prompt text.
 
 #### Agents
 
 done-done works with the coding agent you have. `agent:` names it (`claude`, `codex`, `opencode`, `pi` or `gemini`), or a fallback list such as `[opencode, claude]`, which moves on when an agent is not installed or done-done cannot start it yet; doctor names each installed agent it skipped. `agent: auto` (the default) takes the first of claude, codex, opencode, pi, gemini on PATH that done-done can start (claude and opencode today). The model is `agent_config.<agent>.model` (global config only), else the agent's cheap default (`claude-haiku-5-5` for claude, `opencode-go/muse-spark-1.3-contributor` for opencode); codex, pi and gemini cannot be started yet; each gets its adapter and cheap default in a later release. These defaults are the cost guard: done-done never defaults to a flagship model, whatever the vendor.
 
-Each call is a fresh, single-shot session that must answer one JSON object matching a schema. The prompt goes on stdin (claude) or into a 0600 prompt file (opencode), never in argv. done-done can start claude (`claude -p --output-format json --json-schema <schema> --model <model> --no-session-persistence`, all tools off with `--tools ''`) and opencode (`opencode run "Follow the attached instructions." --format json -m <provider/model> -f <prompt file>`, with the schema in the 0600 prompt file and every tool denied through `OPENCODE_PERMISSION`) today; codex, pi and gemini come next.
+Each call is a fresh, single-shot session that must answer one JSON object matching a schema. The prompt goes on stdin (claude) or into a 0600 prompt file (opencode), never in argv. done-done can start claude (`claude -p --output-format json --json-schema <schema> --model <model> --no-session-persistence`, all tools off with `--tools ''`; tool-less calls also pass `--setting-sources ''` and run from a scratch folder, so no project settings or hooks load) and opencode (`opencode run "Follow the attached instructions." --format json -m <provider/model> -f <prompt file>`, with the schema in the 0600 prompt file and every tool denied through `OPENCODE_PERMISSION`) today; codex, pi and gemini come next.
 
 ### Run a journey
 

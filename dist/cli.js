@@ -8,7 +8,7 @@ import { parseArgs } from 'node:util';
 import { encode } from '@toon-format/toon';
 import { Document, parseDocument } from 'yaml';
 import { askAgent, selectAgent, supported } from './agents.js';
-import { AGENTS as ALL_AGENTS, defaultConfig, home, loadConfig, UsageError } from './config.js';
+import { AGENTS, defaultConfig, home, loadConfig, UsageError } from './config.js';
 import { backend, judge, onPath } from './judge.js';
 import { checkMedia } from './media.js';
 const PASS = 0, FAIL = 1, USAGE = 2, INCONCLUSIVE = 3;
@@ -23,7 +23,7 @@ const CHECKS_TEXT = `Checks block (--from): the newest "## Checks" heading, then
   repro: <command that failed before and passes now, or n/a; a fix PR needs one>
   proof: <the command or path that drove the real product; name the repo's verify-<app> skill, or say "no verify skill">
   evidence: <the evidence file paths, or "not proven: <cause>">`;
-const AGENTS = ['claude', 'codex', 'opencode'];
+const HOOK_AGENTS = ['claude', 'codex', 'opencode'];
 const DOCTOR_TEXT = `doctor is read-only (--probe writes only its call record) and exits 0 when every required item is ok, 2 otherwise.
   required: git (inside a repository), config (a valid .done-done.yaml), evidence_root (writable).
   optional: verify_skill (.agents/skills/verify-<app>/), agent (the configured agent, or with agent: auto the first
@@ -1041,7 +1041,7 @@ function cmdInit(argv) {
     });
     const parts = dash < 0 ? [] : argv.slice(dash + 1);
     const journey = values.journey ?? null;
-    if (values.agent !== undefined && !AGENTS.includes(values.agent))
+    if (values.agent !== undefined && !HOOK_AGENTS.includes(values.agent))
         throw new UsageError(`--agent ${values.agent} is not supported; the supported values are claude, codex, opencode`, 'Run: done-done init --agent <claude|codex|opencode>');
     if (journey === null && parts.length)
         throw new UsageError('init needs --journey <name> to record a command after --');
@@ -1243,9 +1243,9 @@ async function cmdDoctor(argv) {
     const agent = selectAgent(agentCfg);
     const skipping = agent.skipped.map((a) => `; skipped ${a}: done-done cannot start it yet`).join('');
     const what = `${agent.agent} (model ${agent.model || 'none'}; ${agent.from === 'auto' ? 'agent: auto' : 'from config'}${skipping})`;
-    const startable = ALL_AGENTS.filter(supported).join(' and ');
+    const startable = AGENTS.filter(supported).join(' and ');
     checks.push(!agent.path
-        ? { check: 'agent', status: 'missing', detail: `${what} is not on PATH`, fix: `Install ${startable}, or set agent: to an installed one of ${ALL_AGENTS.join(', ')}` }
+        ? { check: 'agent', status: 'missing', detail: `${what} is not on PATH`, fix: `Install ${startable}, or set agent: to an installed one of ${AGENTS.join(', ')}` }
         : !supported(agent.agent)
             ? { check: 'agent', status: 'missing', detail: `${what} at ${agent.path}, but done-done cannot start ${agent.agent} yet (${startable} for now)`, fix: `Set agent: to ${startable}` }
             : { check: 'agent', status: 'ok', detail: `${what} at ${agent.path}`, fix: '' });

@@ -758,7 +758,9 @@ async function main(argv: string[]): Promise<number> {
       return PASS;
     }
     if (cmd === '--version') {
-      console.log(JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version);
+      const version: string = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version;
+      if (OUT === 'json') emit({ command: 'done-done', version });
+      else console.log(version);
       return PASS;
     }
     if (cmd === undefined) return cmdBare();

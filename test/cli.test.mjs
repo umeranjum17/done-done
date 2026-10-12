@@ -1854,6 +1854,16 @@ test('auto judge with claude as the only agent and no sign-in folder has no judg
   assert.match(run.reason, /no installed agent can judge/);
 });
 
+test('auto judge skips a claude route with a relative bin, since the claude-code route needs absolute paths', () => {
+  const t = setup();
+  mkdirSync(join(t.env.DONE_DONE_HOME, 'claude'), { recursive: true });
+  writeFileSync(join(t.env.DONE_DONE_HOME, 'config.yaml'), `agent: opencode\njudge:\n  claude_code: { bin: claude, config_dir: ${JSON.stringify(join(t.env.DONE_DONE_HOME, 'claude'))} }\n`);
+  const env = pathEnv(t.env, ['claude', 'opencode']);
+  const choice = toon(doctorIn(t.repo, env, 'doctor')).checks.find((c) => c.check === 'judge_choice');
+  assert.match(choice.detail, /^answerer:opencode /, choice.detail);
+  assert.doesNotMatch(choice.detail, /claude-code/);
+});
+
 // doctor: read-only health check. Required items (git, config, evidence root) gate
 // exit 0/2; the skill, agent, judge and ffprobe items are optional and never fail it.
 // An isolated PATH holding only git plus the named stub binaries, so agent/judge/ffprobe

@@ -1,7 +1,7 @@
 import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { dirname, isAbsolute, join } from 'node:path';
 import { stripVTControlCharacters } from 'node:util';
 import { AGENTS, ANSWERER_JUDGES, CHEAP_MODELS, type Config, UsageError } from './config.js';
 import { isExecutable, onPath } from './judge.js';
@@ -158,7 +158,8 @@ export type JudgeChoice = { route: string; agent: string; model: string; indepen
 export const claudeBin = (cfg: Config) => cfg.judge.claude_code.bin || onPath('claude');
 const claudeReady = (cfg: Config) => {
   const bin = claudeBin(cfg);
-  return !!bin && isExecutable(bin) && existsSync(cfg.judge.claude_code.config_dir);
+  const dir = cfg.judge.claude_code.config_dir;
+  return !!bin && isAbsolute(bin) && isExecutable(bin) && isAbsolute(dir) && existsSync(dir);
 };
 const routeOf = (agent: string) => (agent === 'claude' ? 'claude-code' : `answerer:${agent}`);
 const canJudge = (agent: string) => agent === 'claude' || ANSWERER_JUDGES.includes(agent);

@@ -2091,6 +2091,31 @@ test('a run that fails before any step begins is reported as failing at setup', 
   assert.match(run.reason, /^setup: /);
 });
 
+test('abort does not signal a pid that is not this run\'s runner', async () => {
+  const t = setup();
+  const unrelated = spawn('sleep', ['30'], { stdio: 'ignore' });
+  after(() => unrelated.kill('SIGKILL'));
+  const { id, dir } = pendingRun(t, (run) => {
+    run.status = 'running';
+    run.runner = { pid: unrelated.pid, started: new Date().toISOString(), heartbeat: new Date().toISOString() };
+  });
+  const a = toon(t.dd('abort', '--run', id));
+  assert.equal(a.status, 'cancelled');
+  assert.match(a.reason, /nothing was killed/);
+  assert.equal(JSON.parse(readFileSync(join(dir, 'run.json'), 'utf8')).status, 'cancelled');
+  await new Promise((r) => setTimeout(r, 300));
+  assert.equal(unrelated.signalCode, null, 'the unrelated process was not signalled');
+  assert.equal(unrelated.exitCode, null, 'the unrelated process is still running');
+});
+
+test('rerun refuses a run whose runner is still open', () => {
+  const t = setup();
+  const { id } = pendingRun(t);
+  const r = t.dd('rerun', '--run', id);
+  assert.equal(r.code, 2, r.out);
+  assert.match(toon(r).help[0], /abort --run/);
+});
+
 test('attach streams a running run to its end', async () => {
   const { repo, env, release, dd } = slowRepo();
   assert.equal(dd('verify', 'slow', '--outcome', 'home renders', '--no-wait').code, 4);

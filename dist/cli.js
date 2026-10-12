@@ -798,7 +798,7 @@ function skillHash(repo, cfg) {
 function inputsOf(repo, cfg, journey) {
     const h = head(repo);
     const j = cfg.journeys[journey];
-    return { head: h.commit, tree: h.tree, journey: sha256(Buffer.from(`${j?.command ?? ''}\n${j?.timeout ?? '30m'}`)), skill: skillHash(repo, cfg) };
+    return { head: h.commit, journey: sha256(Buffer.from(`${j?.command ?? ''}\n${j?.timeout ?? '30m'}`)), skill: skillHash(repo, cfg) };
 }
 function saveRun(dir, run) {
     run.updated = now();
@@ -930,6 +930,10 @@ const alive = (pid) => {
     }
 };
 const runnerGone = (run) => (run.runner ? !alive(run.runner.pid) : Date.now() - Date.parse(run.created) > STALE_MS);
+const isOurRunner = (pid, dir) => {
+    const r = spawnSync('ps', ['-p', String(pid), '-o', 'args='], { encoding: 'utf8' });
+    return r.status === 0 && r.stdout.includes(`__runner ${dir}`);
+};
 const shownStatus = (run) => ((run.status === 'pending' || run.status === 'running') && runnerGone(run) ? 'failed' : run.status);
 // One run as status shows it. A run still marked running whose runner is gone is shown as failed at its step.
 // `gone`: the caller saw its runner child exit, which also covers a runner that died before it wrote its pid.
@@ -1077,11 +1081,14 @@ async function cmdRerun(argv) {
     const root = runsRoot(cfg.app);
     const srcId = pickId(root, repo, 'rerun', cfg, values.run);
     const src = loadRun(join(root, srcId));
+    const open = shownStatus(src);
+    if (open === 'pending' || open === 'running')
+        throw new UsageError(`run ${srcId} is still ${open}, so it cannot be rerun while its runner lives`, `Read it: done-done status --run ${srcId}; stop it first: done-done abort --run ${srcId}`);
     const id = newRunId(git(repo, 'rev-parse', 'HEAD'));
     const dir = join(root, id);
     mkdirSync(join(dir, 'logs'), { recursive: true });
-    const inputs = inputsOf(repo, cfg, src.journey);
-    const reuse = !!src.inputs && ['head', 'tree', 'journey', 'skill'].every((k) => src.inputs[k] === inputs[k]);
+    const inputs = inputsOf(src.repo, loadConfig(src.repo), src.journey);
+    const reuse = !!src.inputs && ['head', 'journey', 'skill'].every((k) => src.inputs[k] === inputs[k]);
     const steps = src.steps.map((s) => (reuse && ['resolve', 'drive'].includes(s.name) && s.status === 'completed' ? { ...s } : { name: s.name, status: 'pending' }));
     const created = now();
     const run = { schema: 2, run_id: id, kind: src.kind, app: cfg.app, repo: src.repo, journey: src.journey, claim: src.claim, claim_id: src.claim_id, status: 'pending', inputs, steps, created, updated: created, ...(reuse && src.record && { record: src.record }) };
@@ -1113,18 +1120,20 @@ function cmdAbort(argv) {
         emit({ command: 'abort', run_id: id, status, reason: `run ${id} is already ${status}`, help: [`List past runs: done-done history`, `Start again: done-done rerun --run ${id}`] });
         return FAIL;
     }
-    if (run.runner?.pid)
+    const ours = !!run.runner && isOurRunner(run.runner.pid, dir);
+    if (ours) {
         try {
             process.kill(run.runner.pid, 'SIGKILL');
         }
-        catch { /* already gone */ }
-    if (run.runner?.journey_pgid)
-        killGroup(run.runner.journey_pgid);
+        catch { /* exited since the check */ }
+        if (run.runner.journey_pgid)
+            killGroup(run.runner.journey_pgid);
+    }
     run.status = 'cancelled';
-    run.reason = 'aborted';
+    run.reason = run.runner && !ours ? `aborted; pid ${run.runner.pid} is not this run's runner, so nothing was killed` : 'aborted';
     logEvent(dir, { status: 'cancelled' });
     saveRun(dir, run);
-    emit({ command: 'abort', run_id: id, status: 'cancelled', help: [`Read the run: done-done status --run ${id}`, `Start again: done-done rerun --run ${id}`] });
+    emit({ command: 'abort', run_id: id, status: 'cancelled', reason: run.reason, help: [`Read the run: done-done status --run ${id}`, `Start again: done-done rerun --run ${id}`] });
     return PASS;
 }
 function cmdHistory(argv) {

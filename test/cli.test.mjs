@@ -213,8 +213,13 @@ test('the same evidence cannot prove a second, different claim', () => {
   sh('checkout', '-qb', 'checkout-flow');
   const r = dd('check', '--outcome', 'checkout works', ...files);
   assert.equal(r.code, 1, r.out);
-  assert.match(toon(r).findings[0].why, /already used as proof of a different claim \(claim id main\), not this one \(claim id checkout-flow\)/);
+  assert.match(toon(r).findings[0].why, /already used as proof of a different claim \(claim id main\), not this one \(claim id checkout-flow, from the current branch\)/);
   assert.equal(dd('check', '--claim-id', 'main', '--outcome', 'home renders', ...files).code, 0, '--claim-id names the claim');
+  sh('checkout', '-q', '--detach');
+  const detached = dd('check', '--outcome', 'home renders', ...files);
+  assert.equal(detached.code, 2, detached.out);
+  assert.match(toon(detached).error, /HEAD is detached.*pass --claim-id/);
+  assert.equal(dd('check', '--claim-id', 'main', '--outcome', 'home and settings render', ...files).code, 0, 'a detached HEAD names its claim with --claim-id');
   assert.equal(dd('check', '--claim-id', ' ', '--outcome', 'x', ...files).code, 2, 'an empty claim id is a usage error');
 });
 

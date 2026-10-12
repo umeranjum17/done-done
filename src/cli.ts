@@ -33,7 +33,7 @@ const FLAGS: Record<string, string> = {
   '--outcome "<claim>"': 'the outcome the evidence files prove; the files follow as arguments',
   '--from <file | - | PR URL>': 'read the claim from the newest "## Checks" block of a file, stdin or a PR body',
   '--trusted-ref <ref>': 'read .done-done.yaml from this git ref instead of the working tree (use in CI)',
-  '--claim-id <id>': 'the claim the evidence proves; evidence already used for another claim id is reuse (default: the current branch, or the outcome on a detached HEAD)',
+  '--claim-id <id>': 'the claim the evidence proves; evidence already used for another claim id is reuse (default: the current branch, or the PR branch with --from <PR URL>; required on a detached HEAD)',
   '--judge': 'a model says whether each PNG/JPEG capture shows the outcome (off by default; or judge.enabled: true)',
   '--verify <head>': 'read-only: verify the receipt recorded for <head>',
 };
@@ -316,12 +316,14 @@ function claimFromChecks(body: string, title: string, repo: string, cfg: Config,
   return { outcome: f.outcome, files, title };
 }
 
-function readSource(from: string): { body: string; title: string } {
+// A PR body also names its head branch, which is the claim a CI checkout (a detached HEAD) is checking.
+function readSource(from: string): { body: string; title: string; branch?: string } {
   if (from === '-') return { body: readFileSync(0, 'utf8'), title: '' };
   if (/^https?:\/\//.test(from)) {
-    const r = spawnSync('gh', ['pr', 'view', from, '--json', 'body,title'], { encoding: 'utf8' });
+    const r = spawnSync('gh', ['pr', 'view', from, '--json', 'body,title,headRefName'], { encoding: 'utf8' });
     if (r.error || r.status !== 0) throw new UsageError(`gh pr view ${from} failed: ${(r.error?.message || r.stderr).trim()}`);
-    return JSON.parse(r.stdout);
+    const pr = JSON.parse(r.stdout);
+    return { body: pr.body, title: pr.title, branch: pr.headRefName };
   }
   try {
     return { body: readFileSync(from, 'utf8'), title: '' };
@@ -355,7 +357,7 @@ async function runCheck(argv: string[]): Promise<CheckOutcome> {
   });
   if (!!values.outcome === !!values.from) throw new UsageError('check needs exactly one of --outcome or --from');
   if (values.from && positionals.length) throw new UsageError('--from takes no file arguments; the Checks block names them');
-  if (values['claim-id'] !== undefined && !values['claim-id'].trim()) throw new UsageError('--claim-id needs a non-empty id');
+  if (values['claim-id']?.trim() === '') throw new UsageError('--claim-id needs a non-empty id');
   const repo = repoRoot();
   let projectText: string | null = null;
   if (values['trusted-ref']) {
@@ -371,11 +373,13 @@ async function runCheck(argv: string[]): Promise<CheckOutcome> {
   const now = head(repo);
   const findings: Finding[] = [];
   let claim: Claim | undefined;
+  let prBranch: string | undefined;
   if (values.outcome) {
     if (!positionals.length) throw new UsageError('--outcome needs at least one evidence file');
     claim = { outcome: values.outcome, files: positionals, title: '' };
   } else {
     const src = readSource(values.from!);
+    prBranch = src.branch;
     claim = claimFromChecks(src.body, src.title, repo, cfg, findings);
   }
   if (claim?.notProven) {
@@ -440,9 +444,12 @@ async function runCheck(argv: string[]): Promise<CheckOutcome> {
     if (rec.exit !== null && rec.exit !== 0) findings.push({ level: 'fail', why: `${name}: its run command exited ${rec.exit} (run ${rec.run_id})` });
   }
   // Reuse: fail only when every cited file was already used for a different claim id. The ledger lives in the
-  // evidence root next to the run records it guards: one per repo, shared by every checkout of it, never in git.
+  // evidence root next to the run records it guards: one per app (repo), shared by every checkout of it, never in git.
   const ledger = join(cfg.evidence.root, '.done-done', 'ledger');
-  const claimId = (values['claim-id'] ?? (git(repo, 'branch', '--show-current') || claim?.outcome) ?? '').replace(/\s+/g, ' ').trim();
+  const given = values['claim-id']?.replace(/\s+/g, ' ').trim();
+  const claimId = given || prBranch || git(repo, 'branch', '--show-current');
+  const idFrom = given ? '--claim-id' : prBranch ? 'the PR branch' : 'the current branch';
+  if (!claimId && claim) throw new UsageError('HEAD is detached, so no branch names this claim; pass --claim-id <id>', 'Re-run with --claim-id <the branch or task this claim is for>');
   const used = new Map<string, Set<string>>();
   if (existsSync(ledger))
     for (const line of readFileSync(ledger, 'utf8').split('\n')) {
@@ -451,7 +458,7 @@ async function runCheck(argv: string[]): Promise<CheckOutcome> {
     }
   const others = (h: string) => [...(used.get(h) ?? [])].filter((k) => k !== claimId);
   if (hashes.length && hashes.every((h) => others(h).length))
-    findings.push({ level: 'fail', why: `every evidence file was already used as proof of a different claim (claim id ${[...new Set(hashes.flatMap(others))].join(', ')}), not this one (claim id ${claimId})` });
+    findings.push({ level: 'fail', why: `every evidence file was already used as proof of a different claim (claim id ${[...new Set(hashes.flatMap(others))].join(', ')}), not this one (claim id ${claimId}, from ${idFrom}); if it is the same claim, pass --claim-id with its id` });
   let judged: Record<string, unknown> | undefined;
   let judgeLevel: Finding['level'] | undefined;
   if ((values.judge || cfg.judge.enabled) && claim) {

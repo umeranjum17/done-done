@@ -88,7 +88,7 @@ evidence: <paths of the evidence files, or "not proven: <cause>">
 | Valid media | The magic bytes match the extension. PNG and JPEG are complete (end markers present) and at least 64×64. PNG is not a blank frame. WebP and GIF are not truncated. MP4/MOV and WebM/MKV decode at least two video packets (`ffprobe`). Text and log files hold text; JSON parses. |
 | Fresh | The file is in a run record whose commit is HEAD. The one exception: if the only commits since the run touch `ignore_paths`, the evidence still counts. An empty commit does not count as touching only `ignore_paths`. |
 | Clean | The run was not dirty, unless `evidence.allow_dirty: true`. The run command also exited 0. |
-| Not reused | Fails when the files are byte-identical within one claim. Also fails when every file was already used to prove a different claim in this repo. A claim is named by `--claim-id <id>`, by default the current branch (the outcome text on a detached HEAD), so rewording the outcome is not reuse. The ledger is `<root>/.done-done/ledger` in the evidence root, so each repo keeps its own; `DONE_DONE_HOME` moves it only with the default evidence root. |
+| Not reused | Fails when the files are byte-identical within one claim. Also fails when every file was already used to prove a different claim in this repo. A claim is named by `--claim-id <id>`, by default the current branch (with `--from <PR URL>`, the PR's branch; on a detached HEAD, pass `--claim-id`), so rewording the outcome is not reuse. The ledger is `<root>/.done-done/ledger` in the evidence root, so each repo keeps its own (pin `app`, as `init` does, so two repos with the same directory name do not share one); `DONE_DONE_HOME` moves it only with the default evidence root. |
 
 Files that are in no run record give an inconclusive result: nothing ties them to a commit. So does a file that more than one run record claims (possible only with records from before each run had its own folder). A file whose path is named in a run record but whose bytes no longer match fails as `changed after run <run-id>` (exit 1), not inconclusive: the path ties it to that run, so editing it after the run is tampering, not untied evidence.
 
@@ -163,7 +163,7 @@ Running `done-done` with no subcommand prints the repo's config state (`config: 
 
 ```sh
 done-done check --from "$PR_URL" --trusted-ref origin/main
-done-done receipt --from - --trusted-ref origin/main < pr-body.md   # record the pass
+done-done receipt --from - --trusted-ref origin/main --claim-id "$PR_BRANCH" < pr-body.md   # record the pass
 done-done receipt --verify "$HEAD"                                   # re-verify later
 ```
 

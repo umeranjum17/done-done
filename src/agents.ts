@@ -30,7 +30,7 @@ const ADAPTERS: Record<string, Adapter> = {
   claude: {
     argv: (c) => ['-p', '--output-format', 'json', '--json-schema', JSON.stringify(c.schema), '--model', c.model, '--no-session-persistence',
       ...(c.tools === 'edit' ? ['--permission-mode', 'acceptEdits'] : ['--tools', c.tools === 'read' ? 'Read,Grep,Glob' : '']),
-      ...(c.tools === 'none' ? ['--setting-sources', ''] : [])],
+      ...(c.tools === 'edit' ? [] : ['--setting-sources', '', '--strict-mcp-config'])],
     answer: (out) => {
       const r = JSON.parse(out);
       if (r.is_error) throw new Error(String(r.result || r.subtype));

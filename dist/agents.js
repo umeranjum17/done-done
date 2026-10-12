@@ -32,23 +32,27 @@ const ADAPTERS = {
         env: (c) => (c.tools === 'edit' ? {} : { OPENCODE_PERMISSION: JSON.stringify(c.tools === 'read' ? { '*': 'deny', read: 'allow', grep: 'allow', glob: 'allow', list: 'allow' } : { '*': 'deny' }) }),
     },
 };
-// The author agent: the first of the configured list (or of AGENTS for auto) found on PATH;
-// the list moves on only when an agent is not installed. Its model is agent_config.<agent>.model, else the cheap default.
+// The author agent: the first of the configured list (or of AGENTS for auto) that is on PATH and that
+// done-done can start; the list moves on only when an agent is unavailable. Its model is
+// agent_config.<agent>.model, else the cheap default.
 export function selectAgent(cfg) {
     const list = cfg.agent === 'auto' ? AGENTS : cfg.agent;
-    const pick = list.map((agent) => ({ agent, path: onPath(agent) })).find((a) => a.path) ?? { agent: list[0], path: '' };
+    const found = list.map((agent) => ({ agent, path: onPath(agent) })).filter((a) => a.path);
+    const pick = found.find((a) => supported(a.agent)) ?? found[0] ?? { agent: list[0], path: '' };
     return { ...pick, model: modelFor(cfg, pick.agent), from: cfg.agent === 'auto' ? 'auto' : 'config' };
 }
 export const modelFor = (cfg, agent) => cfg.agent_config[agent]?.model || CHEAP_MODELS[agent] || '';
-// The judge kept apart from the author: an explicit route, else (`judge: auto`) the first other
-// agent on PATH at its own model, else the author's agent in a fresh session (session-only independence).
+// The judge kept apart from the author: an explicit route, else (`judge: auto`) the first other agent
+// done-done can start, at its own model, else the author's agent in a fresh session (session-only independence).
 export function selectJudge(cfg, author) {
     if (cfg.judge.route)
         return { judge: cfg.judge.route, model: cfg.judge.model, independence: 'route' };
-    const other = AGENTS.find((a) => a !== author && onPath(a) && modelFor(cfg, a));
+    const other = AGENTS.find((a) => a !== author && supported(a) && onPath(a));
     return other ? { judge: other, model: modelFor(cfg, other), independence: 'other-agent' } : { judge: author, model: modelFor(cfg, author), independence: 'session-only' };
 }
-export const supported = (agent) => Object.hasOwn(ADAPTERS, agent);
+export function supported(agent) {
+    return Object.hasOwn(ADAPTERS, agent);
+}
 export function askAgent(c) {
     const adapter = ADAPTERS[c.agent];
     const dir = mkdtempSync(join(tmpdir(), 'done-done-agent-'));
@@ -78,7 +82,9 @@ export function askAgent(c) {
             throw new Error(`${c.agent} exited ${res.status}: ${why}`);
         }
         const answer = adapter.answer(String(res.stdout));
-        const missing = (c.schema.required ?? []).filter((k) => !(answer && typeof answer === 'object' && k in answer));
+        if (!answer || typeof answer !== 'object' || Array.isArray(answer))
+            throw new Error(`the answer is not a JSON object: ${JSON.stringify(answer)}`);
+        const missing = (c.schema.required ?? []).filter((k) => !(k in answer));
         if (missing.length)
             throw new Error(`the answer does not match the schema (missing ${missing.join(', ')})`);
         out = { ok: true, answer: answer, record: c.record };

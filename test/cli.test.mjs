@@ -1494,7 +1494,7 @@ test('without the optional kit, --judge is a config error naming the npx command
   assert.equal(j.calls()[0].model, 'claude-haiku-5-5');
 });
 
-test('every default model is the agent\'s cheap one from the table, and no other model id is in the code', () => {
+test('default models come only from the cheap-model table: no model id is written anywhere else in the code', () => {
   const dir = mkdtempSync(join(tmpdir(), 'done-done-cheap-default-'));
   after(() => rmSync(dir, { recursive: true, force: true }));
   const repo = join(dir, 'repo');
@@ -1615,13 +1615,16 @@ test('doctor finds agent, judge and ffprobe binaries from PATH; missing optional
   assert.equal(full.code, 0, full.out);
   const f = toon(full);
   assert.match(f.checks[4].detail, /^claude \(model claude-haiku-5-5; agent: auto\) at .*claude/, 'claude wins over codex and opencode');
-  assert.match(f.checks[7].detail, /^codex \(model gpt-6-luna\), an agent other than the author/, 'the judge is the next installed agent');
+  assert.match(f.checks[7].detail, /^opencode \(model opencode-go\/muse-spark-1.3-contributor\), an agent other than the author; --judge still runs the claude judge/, 'the judge is the next agent done-done can start');
   assert.match(f.checks[5].detail, /never called/, 'the judge binary is never run');
   assert.match(f.checks[6].detail, /found at .*ffprobe/);
   const codexOnly = toon(doctorIn(repo, pathEnv(env, ['codex']), 'doctor'));
-  assert.match(codexOnly.checks[4].detail, /^codex \(model gpt-6-luna; agent: auto\)/);
-  assert.equal(codexOnly.checks[7].status, 'missing', 'with one agent the author also judges');
-  assert.match(codexOnly.checks[7].detail, /session-only/);
+  assert.equal(codexOnly.checks[4].status, 'missing');
+  assert.match(codexOnly.checks[4].detail, /^codex \(model gpt-6-luna; agent: auto\) at .*, but done-done cannot start codex yet \(claude and opencode for now\)/);
+  const two = toon(doctorIn(repo, pathEnv(env, ['codex', 'opencode']), 'doctor'));
+  assert.match(two.checks[4].detail, /^opencode .* at /, 'auto skips an installed agent done-done cannot start');
+  assert.equal(two.checks[7].status, 'missing', 'with one startable agent the author also judges');
+  assert.match(two.checks[7].detail, /session-only/);
   const none = doctorIn(repo, pathEnv(env, []), 'doctor');
   assert.equal(none.code, 0, 'missing optionals still exit 0 when every required item is ok');
   const n = toon(none);
@@ -1629,6 +1632,9 @@ test('doctor finds agent, judge and ffprobe binaries from PATH; missing optional
   assert.match(n.checks[4].fix, /Install claude, or set agent: to an installed one of claude, codex, opencode, pi, gemini/);
   assert.match(n.checks[5].fix, /judge\.bin/);
   assert.match(n.checks[6].fix, /ffprobe/);
+  writeFileSync(join(repo, '.done-done.yaml'), `${readFileSync(join(repo, '.done-done.yaml'), 'utf8')}judge:\n  allow_same: true\n`);
+  const same = toon(doctorIn(repo, pathEnv(env, ['opencode']), 'doctor'));
+  assert.deepEqual([same.checks[7].status, /judge.allow_same lets the author judge/.test(same.checks[7].detail)], ['ok', true]);
 });
 
 // Stub agent CLIs that log how they were started (argv, stdin, cwd) and answer like the real ones:
@@ -1706,4 +1712,10 @@ test('the agent comes from config (a fallback list moves past missing agents), a
   assert.match(doctor('agent: cursor\n').out, /agent must be auto, or one or a list of claude, codex, opencode, pi, gemini/);
   assert.match(doctor('agent_config:\n  cursor: { model: x }\n').out, /agent_config must be a map of <agent>: \{model: <string>\}/);
   assert.equal(s.calls().length, 2, 'only --probe asks the agent');
+  // Without a repo config, the agent keys still come from the global config.
+  writeFileSync(join(env.DONE_DONE_HOME, 'config.yaml'), 'agent: opencode\n');
+  rmSync(join(repo, '.done-done.yaml'));
+  const global = doctorIn(repo, s.env, 'doctor');
+  assert.equal(global.code, 2, global.out);
+  assert.match(toon(global).checks.find((x) => x.check === 'agent').detail, /^opencode \(model opencode-go\/muse-spark-1.3-contributor; from config\)/);
 });

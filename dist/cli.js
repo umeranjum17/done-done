@@ -1176,7 +1176,7 @@ function writableDir(p) {
 }
 const PROBE_SCHEMA = { type: 'object', properties: { ok: { type: 'boolean' } }, required: ['ok'], additionalProperties: false };
 // The agent keys' defaults, for naming the agent when the repo config is missing or broken.
-const loadConfigDefaults = () => ({ agent: 'auto', agent_config: {}, judge: { route: '', model: '' } });
+const loadConfigDefaults = () => ({ agent: 'auto', agent_config: {}, judge: { route: '', model: '', allow_same: false } });
 // Is this repo worth driving: git, a valid config and a writable evidence root are
 // required; the verify skill, an agent CLI, the judge binary and ffprobe are optional.
 // Read-only: a missing repo or config is a finding, never a crash, and nothing is created.
@@ -1234,11 +1234,22 @@ async function cmdDoctor(argv) {
                 fix: `Write ${shown(repo, skillFile)} describing how to drive this app (a later done-done init will scaffold it)`,
             });
     }
-    const agent = selectAgent(cfg ?? loadConfigDefaults());
+    // Without a usable repo config, the agent keys still come from the global config.
+    let agentCfg = cfg;
+    try {
+        agentCfg ??= loadConfig(repo ?? process.cwd(), '');
+    }
+    catch {
+        agentCfg = loadConfigDefaults();
+    }
+    const agent = selectAgent(agentCfg);
     const what = `${agent.agent} (model ${agent.model || 'none'}; ${agent.from === 'auto' ? 'agent: auto' : 'from config'})`;
-    checks.push(agent.path
-        ? { check: 'agent', status: 'ok', detail: `${what} at ${agent.path}`, fix: '' }
-        : { check: 'agent', status: 'missing', detail: `${what} is not on PATH`, fix: `Install ${agent.agent}, or set agent: to an installed one of ${ALL_AGENTS.join(', ')}` });
+    const startable = ALL_AGENTS.filter(supported).join(' and ');
+    checks.push(!agent.path
+        ? { check: 'agent', status: 'missing', detail: `${what} is not on PATH`, fix: `Install ${agent.agent}, or set agent: to an installed one of ${ALL_AGENTS.join(', ')}` }
+        : !supported(agent.agent)
+            ? { check: 'agent', status: 'missing', detail: `${what} at ${agent.path}, but done-done cannot start ${agent.agent} yet (${startable} for now)`, fix: `Set agent: to ${startable}` }
+            : { check: 'agent', status: 'ok', detail: `${what} at ${agent.path}`, fix: '' });
     if (!cfg) {
         checks.push({ check: 'judge', status: 'missing', detail: 'unknown without a valid config', fix: '' });
     }
@@ -1255,14 +1266,18 @@ async function cmdDoctor(argv) {
     checks.push(ffprobe
         ? { check: 'ffprobe', status: 'ok', detail: `found at ${ffprobe}`, fix: '' }
         : { check: 'ffprobe', status: 'missing', detail: 'no ffprobe on PATH; video evidence is unverified, never a pass', fix: 'Install ffprobe (ffmpeg) to verify video evidence' });
-    const judging = selectJudge(cfg ?? loadConfigDefaults(), agent.agent);
-    checks.push(judging.independence === 'session-only'
-        ? { check: 'judge_choice', status: 'missing', detail: `${judging.judge} (model ${judging.model || 'none'}) in a fresh session: no other agent is installed, so the author also judges (session-only independence)`, fix: 'Install a second agent or set judge.route, so the judge is not the author' }
-        : { check: 'judge_choice', status: 'ok', detail: `${judging.judge} (model ${judging.model || 'none'}), ${judging.independence === 'route' ? 'from judge.route' : 'an agent other than the author'}`, fix: '' });
+    // The judge the adapters will use; until judge routes land, --judge itself still runs the claude judge above.
+    const judging = selectJudge(agentCfg, agent.agent);
+    const planned = `${judging.judge} (model ${judging.model || 'none'})`;
+    checks.push(judging.independence !== 'session-only'
+        ? { check: 'judge_choice', status: 'ok', detail: `${planned}, ${judging.independence === 'route' ? 'from judge.route' : 'an agent other than the author'}; --judge still runs the claude judge for now`, fix: '' }
+        : agentCfg.judge.allow_same
+            ? { check: 'judge_choice', status: 'ok', detail: `${planned} in a fresh session; judge.allow_same lets the author judge (session-only independence)`, fix: '' }
+            : { check: 'judge_choice', status: 'missing', detail: `${planned} in a fresh session: no other agent done-done can start is installed, so the author also judges (session-only independence)`, fix: 'Install a second agent or set judge.route, so the judge is not the author; or set judge.allow_same: true to accept it' });
     if (values.probe) {
         const record = join(home(), 'agents', `probe-${new Date().toISOString().replace(/[:.]/g, '-')}-${agent.agent}.json`);
         const probe = !agent.path ? { ok: false, error: `${agent.agent} is not on PATH` }
-            : !supported(agent.agent) ? { ok: false, error: `done-done cannot start ${agent.agent} yet (claude and opencode for now)` }
+            : !supported(agent.agent) ? { ok: false, error: `done-done cannot start ${agent.agent} yet (${startable} for now)` }
                 : askAgent({ agent: agent.agent, model: agent.model, prompt: 'This is a connectivity probe from done-done doctor. Use no tools. Answer with ok set to true.', schema: PROBE_SCHEMA, cwd: repo ?? process.cwd(), timeoutMs: 180_000, tools: 'none', record });
         checks.push(probe.ok && probe.answer?.ok === true
             ? { check: 'probe', status: 'ok', detail: `${agent.agent} (model ${agent.model}) answered the schema question; record ${record}`, fix: '' }

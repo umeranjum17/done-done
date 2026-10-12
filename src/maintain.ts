@@ -1,5 +1,6 @@
 import { execFileSync } from 'node:child_process';
-import { accessSync, constants, existsSync, lstatSync, readdirSync, readFileSync, readlinkSync, statSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { accessSync, closeSync, constants, existsSync, lstatSync, openSync, readdirSync, readFileSync, readlinkSync, readSync, realpathSync, statSync } from 'node:fs';
 import { dirname, extname, isAbsolute, join, relative, resolve } from 'node:path';
 import { askAgent, selectAgent, supported } from './agents.js';
 import type { Config } from './config.js';
@@ -29,8 +30,8 @@ const BLOCKING = new Set(['coverage', 'repo-changed']);
 const NOTICE = new Set(['truncated']);
 
 const git = (cwd: string, ...args: string[]) => execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: 64 << 20 });
-// The read-only proof: HEAD, the status, and the content of every changed or untracked path. git hashes regular files
-// in a stream (no --no-filters blob is written), and symlinks are fingerprinted by their target text, never read through.
+// The read-only proof: HEAD, the status, and the content of every changed or untracked path. Regular files are hashed
+// with sha256 as they are read, and symlinks are fingerprinted by their target text, never read through.
 const readable = (p: string) => {
   try {
     accessSync(p, constants.R_OK);
@@ -38,6 +39,18 @@ const readable = (p: string) => {
   } catch {
     return false;
   }
+};
+const digest = (abs: string) => {
+  const hash = createHash('sha256');
+  const fd = openSync(abs, 'r');
+  try {
+    const buf = Buffer.alloc(1 << 20);
+    let n: number;
+    while ((n = readSync(fd, buf, 0, buf.length, null)) > 0) hash.update(buf.subarray(0, n));
+  } finally {
+    closeSync(fd);
+  }
+  return hash.digest('hex');
 };
 const repoState = (repo: string) => {
   const paths = [...new Set([...git(repo, 'diff', '--name-only', '-z', 'HEAD').split('\0'), ...git(repo, 'ls-files', '-z', '--others', '--exclude-standard').split('\0')])].filter(Boolean);
@@ -50,8 +63,7 @@ const repoState = (repo: string) => {
     else if (st?.isFile() && readable(abs)) files.push(p);
     else if (st?.isFile()) extra.push(`${p} unreadable ${st.mode}`);
   }
-  const hashes = files.length ? execFileSync('git', ['hash-object', '--no-filters', '--stdin-paths'], { cwd: repo, encoding: 'utf8', input: files.join('\n'), maxBuffer: 64 << 20 }).split('\n') : [];
-  return [git(repo, 'rev-parse', 'HEAD'), git(repo, 'status', '--porcelain', '--untracked-files=all'), ...extra, ...files.map((p, i) => `${p} ${hashes[i]}`)].join('\n');
+  return [git(repo, 'rev-parse', 'HEAD'), git(repo, 'status', '--porcelain', '--untracked-files=all'), ...extra, ...files.map((p) => `${p} ${digest(join(repo, p))}`)].join('\n');
 };
 const lines = (p: string) => readFileSync(p, 'utf8').split('\n');
 const mdFiles = (dir: string) => readdirSync(dir, { recursive: true, withFileTypes: true }).filter((e) => e.isFile() && e.name.endsWith('.md')).map((e) => join(e.parentPath, e.name)).sort();
@@ -136,13 +148,13 @@ export async function maintainSteps<S>(run: { repo: string; findings?: Finding[]
   // 1 locate
   let step = h.begin('locate');
   const skill = join(repo, cfg.skill);
-  if (lstatSync(skill, { throwIfNoEntry: false })?.isSymbolicLink()) {
-    h.set(step, 'failed');
-    return h.finish('blocked', `locate: ${cfg.skill} is a symlink; maintain does not read through it`);
-  }
   if (!existsSync(join(skill, 'SKILL.md'))) {
     h.set(step, 'failed');
     return h.finish('blocked', `locate: no verify skill at ${cfg.skill}/SKILL.md`);
+  }
+  if (realpathSync(skill) !== resolve(realpathSync(repo), cfg.skill)) {
+    h.set(step, 'failed');
+    return h.finish('blocked', `locate: ${cfg.skill} is reached through a symlink; maintain does not read through it`);
   }
   h.set(step, 'completed', { outputs: [cfg.skill] });
 

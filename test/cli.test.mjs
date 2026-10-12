@@ -2567,6 +2567,65 @@ test('maintain does not send a symlinked feature file to the agent', () => {
   }
 });
 
+test('maintain pins the read-only reader to read tools with no user settings, MCP servers or extra directories', () => {
+  const { repo, env, sh } = setup();
+  const s = stubAgents(env, JSON.stringify({ drift: [], recipe: 'open it', recipes: [], missing: [] }));
+  const skill = join(repo, '.agents', 'skills', 'verify-notes');
+  mkdirSync(join(skill, 'features'), { recursive: true });
+  writeFileSync(join(skill, 'SKILL.md'), '# verify-notes\n');
+  writeFileSync(join(skill, 'features', 'README.md'), '# features\n\n- [Home](home.md)\n');
+  writeFileSync(join(skill, 'features', 'home.md'), '# Home\n');
+  sh('add', '-A');
+  sh('commit', '-qm', 'skill');
+  assert.equal(doctorIn(repo, s.env, 'maintain', '--foreground').code, 0);
+  const reader = s.calls()[0].argv;
+  assert.deepEqual([reader[reader.indexOf('--tools') + 1], reader[reader.indexOf('--setting-sources') + 1], reader.includes('--strict-mcp-config')], ['Read,Grep,Glob', '', true]);
+  assert.deepEqual(['--add-dir', '--permission-mode', '--dangerously-skip-permissions', '--allowedTools'].filter((f) => reader.includes(f)), []);
+  writeFileSync(join(env.DONE_DONE_HOME, 'config.yaml'), 'agent: opencode\n');
+  assert.equal(doctorIn(repo, s.env, 'maintain', '--foreground').code, 0);
+  const permission = JSON.parse(s.calls().find((c) => c.agent === 'opencode').permission);
+  assert.deepEqual([permission['*'], 'external_directory' in permission], ['deny', false]);
+});
+
+test('maintain refuses a skill reached through a symlinked ancestor', () => {
+  const { repo, env, sh } = setup();
+  const s = stubAgents(env, JSON.stringify({ drift: [], recipe: 'open it', recipes: [], missing: [] }));
+  const outside = mkdtempSync(join(tmpdir(), 'dd-ancestor-'));
+  try {
+    const skill = join(outside, 'skills', 'verify-notes');
+    mkdirSync(join(skill, 'features'), { recursive: true });
+    writeFileSync(join(skill, 'SKILL.md'), '# verify-notes\n');
+    writeFileSync(join(skill, 'features', 'README.md'), '# features\n\n- [Home](home.md)\n');
+    writeFileSync(join(skill, 'features', 'home.md'), 'SECRET-NOTE\n');
+    symlinkSync(outside, join(repo, '.agents'));
+    sh('add', '-A');
+    sh('commit', '-qm', 'skill');
+    const r = doctorIn(repo, s.env, 'maintain', '--foreground');
+    const m = toon(r);
+    assert.deepEqual([r.code, m.result], [3, 'blocked'], r.out);
+    assert.match(m.reason, /^locate: .*is reached through a symlink/);
+    assert.deepEqual(s.calls(), []);
+  } finally {
+    rmSync(outside, { recursive: true, force: true });
+  }
+});
+
+test('maintain fingerprints an untracked file whose name has a newline', () => {
+  const { repo, env, sh } = setup();
+  const s = stubAgents(env, JSON.stringify({ drift: [], recipe: 'open it', recipes: [], missing: [] }));
+  const skill = join(repo, '.agents', 'skills', 'verify-notes');
+  mkdirSync(join(skill, 'features'), { recursive: true });
+  writeFileSync(join(skill, 'SKILL.md'), '# verify-notes\n');
+  writeFileSync(join(skill, 'features', 'README.md'), '# features\n\n- [Home](home.md)\n');
+  writeFileSync(join(skill, 'features', 'home.md'), '# Home\n');
+  sh('add', '-A');
+  sh('commit', '-qm', 'skill');
+  writeFileSync(join(repo, 'notes\nv2.txt'), 'untracked\n');
+  const r = doctorIn(repo, s.env, 'maintain', '--foreground');
+  const m = toon(r);
+  assert.deepEqual([r.code, m.result, m.git_status], [0, 'clean', 'same'], r.out);
+});
+
 test('maintain reports a dead link, a wrong file:line and drift from read-only readers, and changes nothing', () => {
   const { repo, env, sh } = setup();
   const answer = JSON.stringify({

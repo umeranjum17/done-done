@@ -147,7 +147,7 @@ const COMMANDS = {
 };
 const rows = (pairs, width = Math.max(...pairs.map(([a]) => a.length)) + 3) => pairs.map(([a, b]) => `  ${a}${' '.repeat(Math.max(3, width - a.length))}${b}`).join('\n');
 const GLOBAL_TEXT = `global flags: --json (JSON instead of TOON), --full (do not truncate lists), --help (this command's usage)
-exit codes: 0 pass, 1 fail, 2 usage or config error, 3 inconclusive, 4 the run is still running (verify, status)`;
+exit codes: 0 pass, 1 fail, 2 usage or config error, 3 inconclusive, 4 the run is still running (verify, rerun, status)`;
 const USAGE_TEXT = `install: npm install -g --prefix ~/.local --allow-git=all github:umeranjum17/done-done-axi (installs done-done-axi and done-done), or run npx -y --allow-git=all github:umeranjum17/done-done-axi <command>
 usage:
 ${rows([['done-done', "show this repo's config state and the next step"], ...Object.values(COMMANDS).flatMap((c) => c.usage)], 46)}

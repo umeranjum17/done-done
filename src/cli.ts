@@ -772,7 +772,7 @@ function cmdInit(argv: string[]): number {
   if (values.agent !== undefined && values.agent !== 'claude' && values.agent !== 'codex')
     throw new UsageError(`--agent ${values.agent} is not supported; the supported values are claude, codex`, 'Run: done-done init --agent <claude|codex>');
   if (journey === null && parts.length) throw new UsageError('init needs --journey <name> to record a command after --');
-  if (journey !== null && !parts.length) throw new UsageError(`init --journey ${journey} needs a command after --`);
+  if (journey !== null && !parts.some((p) => p.trim())) throw new UsageError(`init --journey ${journey} needs a command after --`);
   if (journey !== null && !/^[A-Za-z0-9][A-Za-z0-9_-]*$/.test(journey)) throw new UsageError(`invalid journey name ${journey}; use letters, digits, - or _`);
   const repo = repoRoot();
   const file = join(repo, '.done-done.yaml');
@@ -782,7 +782,7 @@ function cmdInit(argv: string[]): number {
   if (journey !== null) {
     // Record the capture recipe in the repo so any checkout can re-run the proof.
     // The command is stored verbatim; ${RUN_ID} in it becomes the run id, like a run -- command.
-    const command = parts.join(' ');
+    const command = parts.length === 1 ? parts[0] : parts.map(quote).join(' ');
     const doc = existed ? parseDocument(readFileSync(file, 'utf8')) : new Document({ app: cfg.app });
     const top = (doc.toJS() ?? {}) as Record<string, any>;
     if (typeof top !== 'object' || Array.isArray(top)) throw new UsageError(`${file}: top level must be a mapping`);
@@ -790,7 +790,7 @@ function cmdInit(argv: string[]): number {
     if (typeof journeys !== 'object' || Array.isArray(journeys)) throw new UsageError(`${file}: journeys must be a mapping`);
     if (top.journeys == null) doc.set('journeys', doc.createNode({}));
     doc.setIn(['journeys', journey], { command });
-    writeFileSync(`${file}.tmp`, doc.toString());
+    writeFileSync(`${file}.tmp`, doc.toString({ lineWidth: 0 }));
     renameSync(`${file}.tmp`, file);
     const fresh = loadConfig(repo);
     const rel = under(repo, fresh.evidence.root);

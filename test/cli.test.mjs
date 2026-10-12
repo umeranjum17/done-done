@@ -760,11 +760,25 @@ test('init --journey records the capture recipe and the journey re-runs from any
 
 test('init --journey keeps the comments and formatting of an existing config', () => {
   const { repo, dd } = bareRepo();
-  const original = '# team proof config\napp: notes\n\njourneys:\n  shots:\n    command: node make-shots.mjs ${RUN_ID}\n';
+  const long = 'node make-shots.mjs ${RUN_ID} --viewport 1280x800 --theme dark --out-dir .proof/${RUN_ID} --wait-for-network-idle';
+  const original = `# team proof config\napp: notes\n\njourneys:\n  shots:\n    command: ${long}\n`;
   writeFileSync(join(repo, '.done-done.yaml'), original);
   const r = dd('init', '--journey', 'smoke', '--', 'echo hi');
   assert.equal(r.code, 0, r.out);
   assert.equal(readFileSync(join(repo, '.done-done.yaml'), 'utf8'), `${original}  smoke:\n    command: echo hi\n`);
+});
+
+test('init --journey stores an argv with spaces so the run gets the same arguments', () => {
+  const { repo, sh, dd } = bareRepo();
+  writeFileSync(join(repo, 'argv.mjs'), "import { mkdirSync, writeFileSync } from 'node:fs';\nconst root = process.env.DONE_DONE_EVIDENCE_ROOT;\nmkdirSync(root, { recursive: true });\nwriteFileSync(`${root}/${process.env.DONE_DONE_RUN_ID}.json`, JSON.stringify(process.argv.slice(2)));\n");
+  assert.equal(dd('init', '--journey', 'unit', '--', 'node', 'argv.mjs', '--grep', 'login flow').code, 0);
+  assert.equal(parse(readFileSync(join(repo, '.done-done.yaml'), 'utf8')).journeys.unit.command, "node argv.mjs --grep 'login flow'");
+  sh('add', '-A');
+  sh('commit', '-qm', 'recipe');
+  const run = dd('run', 'unit');
+  assert.equal(run.code, 0, run.out);
+  const [file] = toon(run).evidence;
+  assert.deepEqual(JSON.parse(readFileSync(file, 'utf8')), ['--grep', 'login flow']);
 });
 
 test('init with an empty --journey name is a usage error, not a plain init', () => {
@@ -773,6 +787,13 @@ test('init with an empty --journey name is a usage error, not a plain init', () 
   assert.equal(r.code, 2, r.out);
   assert.equal(existsSync(join(repo, '.done-done.yaml')), false, 'no config is written');
   assert.equal(dd('init', '--journey', '').code, 2, 'an empty name with no command is a usage error too');
+});
+
+test('init --journey rejects a blank command instead of recording an empty recipe', () => {
+  const { repo, dd } = bareRepo();
+  const r = dd('init', '--journey', 'smoke', '--', '');
+  assert.equal(r.code, 2, r.out);
+  assert.equal(existsSync(join(repo, '.done-done.yaml')), false, 'no config is written');
 });
 
 test('a run command outside the repo hints that its recipe is not recorded', () => {

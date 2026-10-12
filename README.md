@@ -121,7 +121,7 @@ The command runs from the repo root with `DONE_DONE_EVIDENCE_ROOT` (a new folder
 
 Optional: `done-done init --agent claude` adds a Claude Code SessionStart hook to the repo's `.claude/settings.json` that shows each session the bare `done-done` state, and `done-done init --agent codex` adds the same SessionStart hook to the repo's `.codex/hooks.json` for Codex. See the [reference](docs/reference.md#set-up-a-repo). Opencode is not supported yet.
 
-Commit the config (and `.claude/settings.json` if you added the hook), because proof only counts from a clean tree:
+Commit the config (and `.claude/settings.json` or `.codex/hooks.json` if you added a hook), because proof only counts from a clean tree:
 
 ```sh
 git add .done-done.yaml

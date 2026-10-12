@@ -77,6 +77,7 @@ export async function backend(cfg, choice, record = () => '') {
             leaves: true,
             supportsImages: true,
             ask: async (prompt, _signal, images) => {
+                lastError = '';
                 const dir = mkdtempSync(join(tmpdir(), 'done-done-judge-'));
                 try {
                     const files = images.map((img) => {

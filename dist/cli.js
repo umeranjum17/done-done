@@ -826,8 +826,8 @@ async function runVerify(dir) {
     let step;
     const set = (s, status, extra = {}) => {
         Object.assign(s, { status, [status === 'running' ? 'started' : 'ended']: now() }, extra);
-        saveRun(dir, run);
         logEvent(dir, { step: s.name, status });
+        saveRun(dir, run);
     };
     const begin = (name) => set((step = run.steps.find((s) => s.name === name)), 'running');
     const log = (name, result) => writeFileSync(join(dir, 'logs', `${name}.log`), `${encode(result)}\n`);
@@ -908,11 +908,13 @@ async function runVerify(dir) {
         for (const s of run.steps)
             if (s.status === 'pending')
                 s.status = 'skipped';
-        Object.assign(run, { status: 'failed', reason: `${step?.name}: ${errorText(e)}` });
+        Object.assign(run, { status: 'failed', reason: `${step?.name ?? 'setup'}: ${errorText(e)}` });
         if (step)
             set(step, 'failed');
-        else
+        else {
+            logEvent(dir, { status: 'failed' });
             saveRun(dir, run);
+        }
     }
     finally {
         clearInterval(beat);
@@ -927,6 +929,7 @@ const alive = (pid) => {
         return e.code === 'EPERM';
     }
 };
+const runnerGone = (run) => (run.runner ? !alive(run.runner.pid) : Date.now() - Date.parse(run.created) > STALE_MS);
 // One run as status shows it. A run still marked running whose runner is gone is shown as failed at its step.
 // `gone`: the caller saw its runner child exit, which also covers a runner that died before it wrote its pid.
 function showRun(dir, cfg, command, gone = false) {
@@ -935,7 +938,7 @@ function showRun(dir, cfg, command, gone = false) {
     const at = run.steps.find((s) => s.status === 'running') ?? run.steps.find((s) => s.status === 'pending');
     let { status, reason } = run;
     const open = status === 'pending' || status === 'running';
-    if (open && (gone || (run.runner ? !alive(run.runner.pid) : Date.now() - Date.parse(run.created) > STALE_MS))) {
+    if (open && (gone || runnerGone(run))) {
         status = 'failed';
         const beat = run.runner && Math.round((Date.now() - Date.parse(run.runner.heartbeat)) / 1000);
         reason = `the runner died at step ${at?.name}${run.runner ? ` (pid ${run.runner.pid}, last heartbeat ${beat}s ago)` : ' before it started'}`;
@@ -1035,13 +1038,13 @@ async function cmdAttach(argv) {
     const dir = join(runsRoot(cfg.app), pickId(runsRoot(cfg.app), repo, 'attach', cfg, values.run));
     let shown = 0;
     for (;;) {
+        const run = loadRun(dir);
         const lines = existsSync(join(dir, 'events.jsonl')) ? readFileSync(join(dir, 'events.jsonl'), 'utf8').split('\n').filter(Boolean) : [];
         for (; shown < lines.length; shown++)
             process.stderr.write(`${lines[shown]}\n`);
-        const run = loadRun(dir);
         if (run.status === 'completed' || run.status === 'failed' || run.status === 'cancelled')
             break;
-        if (run.runner ? !alive(run.runner.pid) : Date.now() - Date.parse(run.created) > STALE_MS)
+        if (runnerGone(run))
             break;
         await new Promise((r) => setTimeout(r, 200));
     }
@@ -1116,8 +1119,8 @@ function cmdAbort(argv) {
         killGroup(run.runner.journey_pgid);
     run.status = 'cancelled';
     run.reason = 'aborted';
-    saveRun(dir, run);
     logEvent(dir, { status: 'cancelled' });
+    saveRun(dir, run);
     emit({ command: 'abort', run_id: id, status: 'cancelled', help: [`Read the run: done-done status --run ${id}`, `Start again: done-done rerun --run ${id}`] });
     return PASS;
 }
@@ -1130,7 +1133,7 @@ function cmdHistory(argv) {
     const cfg = loadConfig(repo);
     const root = runsRoot(cfg.app);
     const mine = existsSync(root) ? readdirSync(root).filter((x) => existsSync(join(root, x, 'run.json'))).map((x) => loadRun(join(root, x))).filter((r) => r.repo === repo).sort((a, b) => b.created.localeCompare(a.created)) : [];
-    const rows = cap(mine.slice(0, n).map((r) => ({ run_id: r.run_id, kind: r.kind, status: r.status, ...(r.result && { result: r.result }), claim: r.claim, journey: r.journey, created: r.created })));
+    const rows = cap(mine.slice(0, n).map((r) => ({ run_id: r.run_id, kind: r.kind, status: (r.status === 'pending' || r.status === 'running') && runnerGone(r) ? 'failed' : r.status, ...(r.result && { result: r.result }), claim: r.claim, journey: r.journey, created: r.created })));
     emit({ command: 'history', runs: rows.items.length, history: rows.items, ...(rows.omitted && { history_omitted: rows.omitted }), help: rows.items.length ? [`Read the newest run: done-done status --run ${rows.items[0].run_id}`] : ['Start one: done-done verify --outcome "<what a user can now do>"'] });
     return PASS;
 }

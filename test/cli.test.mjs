@@ -1384,6 +1384,7 @@ test('a runner killed mid-step shows as failed at that step, and status stops th
   assert.ok(existsSync(join(runs, run.run_id, 'journey.killed')), 'the kill is recorded once');
   const s = toon(r);
   assert.equal(s.status, 'failed');
+  assert.equal(toon(dd('history')).history.find((x) => x.run_id === run.run_id).status, 'failed', 'history agrees with status');
   assert.equal(s.steps[1].status, 'failed');
   assert.match(s.reason, new RegExp(`^the runner died at step drive \\(pid ${run.runner.pid},`));
   assert.equal(JSON.parse(readFileSync(join(runs, run.run_id, 'run.json'), 'utf8')).status, 'running', 'status only reads the store');
@@ -2033,6 +2034,58 @@ test('rerun after a killed runner reuses resolve and passes', async () => {
   const s = toon(r);
   assert.equal(s.result, 'pass');
   assert.match(readFileSync(join(runs, s.run_id, 'events.jsonl'), 'utf8'), /reused/);
+});
+
+test('a rerun whose check fails does not carry the earlier receipt', () => {
+  const { dd, repo } = setup();
+  const a = toon(dd('verify', 'shots', '--outcome', 'home renders', '--foreground'));
+  assert.equal(a.result, 'pass');
+  assert.ok(a.receipt);
+  rmSync(join(repo, '.proof', a.run_id, 'home.png'));
+  const r = dd('rerun', '--run', a.run_id);
+  const s = toon(r);
+  assert.notEqual(s.result, 'pass', r.out);
+  assert.equal(s.receipt, undefined);
+  assert.notEqual(s.steps.find((x) => x.name === 'receipt').status, 'completed');
+});
+
+// A run as `verify` left it, rewritten to pending with no runner: the state a run is in before its runner boots.
+function pendingRun(t, edit = () => {}) {
+  const src = toon(t.dd('verify', 'shots', '--outcome', 'home renders', '--foreground'));
+  const id = `pending-${randomUUID()}`;
+  const dir = join(t.env.DONE_DONE_HOME, 'runs', 'notes', id);
+  mkdirSync(join(dir, 'logs'), { recursive: true });
+  const run = JSON.parse(readFileSync(join(t.env.DONE_DONE_HOME, 'runs', 'notes', src.run_id, 'run.json'), 'utf8'));
+  Object.assign(run, { run_id: id, status: 'pending', steps: run.steps.map((s) => ({ name: s.name, status: 'pending' })), created: new Date().toISOString() });
+  for (const k of ['runner', 'result', 'reason', 'record', 'receipt']) delete run[k];
+  edit(run);
+  writeFileSync(join(dir, 'run.json'), JSON.stringify(run, null, 2));
+  return { id, dir };
+}
+
+test('a runner started for an aborted run exits without running the journey', () => {
+  const t = setup();
+  const { id, dir } = pendingRun(t);
+  assert.equal(t.dd('abort', '--run', id).code, 0);
+  const r = spawnSync(process.execPath, [CLI, '__runner', dir], { cwd: t.repo, env: t.env, encoding: 'utf8' });
+  assert.equal(r.status, 0, r.stderr);
+  assert.equal(JSON.parse(readFileSync(join(dir, 'run.json'), 'utf8')).status, 'cancelled');
+  assert.equal(existsSync(join(dir, 'runner.lock')), false, 'no runner took the run');
+  assert.equal(existsSync(join(t.repo, '.proof', id)), false, 'the journey never ran');
+});
+
+test('a run that fails before any step begins is reported as failing at setup', () => {
+  const t = setup();
+  const { dir } = pendingRun(t, (run) => {
+    run.steps[0].status = 'completed';
+    run.steps[1].status = 'completed';
+    run.record = join(t.dir, 'missing-record.json');
+  });
+  const r = spawnSync(process.execPath, [CLI, '__runner', dir], { cwd: t.repo, env: t.env, encoding: 'utf8' });
+  assert.equal(r.status, 0, r.stderr);
+  const run = JSON.parse(readFileSync(join(dir, 'run.json'), 'utf8'));
+  assert.equal(run.status, 'failed');
+  assert.match(run.reason, /^setup: /);
 });
 
 test('attach streams a running run to its end', async () => {

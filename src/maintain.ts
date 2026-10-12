@@ -1,7 +1,7 @@
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { accessSync, closeSync, constants, existsSync, lstatSync, openSync, readdirSync, readFileSync, readlinkSync, readSync, realpathSync, statSync } from 'node:fs';
-import { dirname, extname, isAbsolute, join, relative, resolve } from 'node:path';
+import { dirname, extname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { askAgent, selectAgent, supported } from './agents.js';
 import type { Config } from './config.js';
 
@@ -24,10 +24,15 @@ const MAX_CALLS = 30;
 const CALL_MS = 20 * 60_000;
 const CHURN_SINCE = '30.days.ago';
 const FEATURE_CHARS = 20_000;
+// ponytail: a bare name can match many tracked files, so one feature's cited source is capped at 60,000 characters; upgrade to ranking files by citation count when a repo needs more.
+const CITED_CHARS = 60_000;
 // Findings that mean the pass could not finish, so the result is blocked, not drift.
 const BLOCKING = new Set(['coverage', 'repo-changed']);
 // Notices are listed in the run but do not make the result drift.
 const NOTICE = new Set(['truncated']);
+// Pi and gemini readers get no tools, so plain code puts each feature's cited source in the prompt. claude and
+// opencode readers read the repo themselves, with read tools only.
+const TOOLLESS_READERS = new Set(['pi', 'gemini']);
 
 const git = (cwd: string, ...args: string[]) => execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: 64 << 20 });
 // The read-only proof: HEAD, the status, and the content of every changed or untracked path. Regular files are hashed
@@ -58,7 +63,13 @@ const repoState = (repo: string) => {
   const extra: string[] = [];
   for (const p of paths) {
     const abs = join(repo, p);
-    const st = lstatSync(abs, { throwIfNoEntry: false });
+    let st: ReturnType<typeof lstatSync>;
+    try {
+      st = lstatSync(abs, { throwIfNoEntry: false });
+    } catch {
+      extra.push(`${p} unreadable`);
+      continue;
+    }
     if (st?.isSymbolicLink()) extra.push(`${p} -> ${readlinkSync(abs)}`);
     else if (st?.isFile() && readable(abs)) files.push(p);
     else if (st?.isFile()) extra.push(`${p} unreadable ${st.mode}`);
@@ -66,7 +77,6 @@ const repoState = (repo: string) => {
   return [git(repo, 'rev-parse', 'HEAD'), git(repo, 'status', '--porcelain', '--untracked-files=all'), ...extra, ...files.map((p) => `${p} ${digest(join(repo, p))}`)].join('\n');
 };
 const lines = (p: string) => readFileSync(p, 'utf8').split('\n');
-const mdFiles = (dir: string) => readdirSync(dir, { recursive: true, withFileTypes: true }).filter((e) => e.isFile() && e.name.endsWith('.md')).map((e) => join(e.parentPath, e.name)).sort();
 
 // A markdown link's local target without its #anchor, or '' for a URL, mail link or bare anchor.
 const LINK = /\[[^\]]*\]\(([^)\s]+)[^)]*\)/g;
@@ -76,6 +86,9 @@ const localTarget = (t: string) => (/^[a-z][\w+.-]*:/i.test(t) ? '' : t.split('#
 // of the tracked files', so host:port text is never read as a citation.
 const CITE = /(?<![\w/.-])((?:[\w.-]+\/)*[\w-][\w.-]*\.[A-Za-z]\w*):(\d+)(?:-(\d+))?\b/g;
 
+// Whether the file at `p` really lies under the repo: a symlinked folder on the way to it is followed, so it counts by where it points.
+const realInside = (repo: string, p: string) => realpathSync(p).startsWith(`${realpathSync(repo)}${sep}`);
+
 // Why repo-relative `file` has no line `line` (through `end`), or '' when it has.
 function citeProblem(repo: string, file: string, line: number, end = line): string {
   const p = resolve(repo, file);
@@ -83,6 +96,8 @@ function citeProblem(repo: string, file: string, line: number, end = line): stri
   if (!r || r.startsWith('..') || isAbsolute(r)) return `${file} is outside the repository`;
   let n: number;
   try {
+    if (!lstatSync(p, { throwIfNoEntry: false })?.isFile()) return `${file} is not a file in the repository`;
+    if (!realInside(repo, p)) return `${file} is outside the repository`;
     const text = readFileSync(p, 'utf8');
     n = text.split('\n').length - (text.endsWith('\n') ? 1 : 0);
   } catch {
@@ -91,10 +106,13 @@ function citeProblem(repo: string, file: string, line: number, end = line): stri
   return line < 1 || end < line || end > n ? `${file} has ${n} lines` : '';
 }
 
+// The tracked files a bare file name matches: each whose path ends with it.
+const trackedNamed = (tracked: string[], name: string) => tracked.filter((p) => p === name || p.endsWith(`/${name}`));
+
 // Why the cited `name` (a repo-relative path or a bare file name) has no line `line` through `end`, or '' when a tracked
 // match has them. A bare name matches the tracked files whose path ends with it.
 function citeWhy(repo: string, tracked: string[], name: string, line: number, end = line): string {
-  const cited = name.includes('/') ? [name] : tracked.filter((p) => p === name || p.endsWith(`/${name}`));
+  const cited = name.includes('/') ? [name] : trackedNamed(tracked, name);
   if (!cited.length) return `no tracked file is named ${name}`;
   const whys = cited.map((p) => citeProblem(repo, p, line, end));
   return whys.includes('') ? '' : whys[0];
@@ -120,14 +138,16 @@ const RECONCILE_SCHEMA = {
 };
 
 // Model answers are input from outside: keep only the items with the shape the schema asked for.
-const items = <T>(v: unknown, ok: (x: any) => boolean): T[] => (Array.isArray(v) ? v.filter((x) => x && typeof x === 'object' && ok(x)) : []);
 const isCite = (x: any) => typeof x.file === 'string' && Number.isInteger(x.line);
 
 export async function maintainSteps<S>(run: { repo: string; findings?: Finding[]; git_status?: string }, dir: string, cfg: Config, h: Harness<S>): Promise<void> {
   const repo = run.repo;
   const before = repoState(repo);
   const findings: Finding[] = (run.findings = []);
-  const add = (f: Omit<Finding, 'id'>) => findings.push({ id: `F${findings.length + 1}`, ...f });
+  // One finding per kind, file, line and text: a symlink found by two checks is reported once.
+  const add = (f: Omit<Finding, 'id'>) => {
+    if (!findings.some((x) => x.kind === f.kind && x.file === f.file && x.line === f.line && x.what === f.what)) findings.push({ id: `F${findings.length + 1}`, ...f });
+  };
   const rel = (p: string) => relative(repo, p);
   // A skill path that cannot be read is blocking coverage, not a crash.
   const tryRead = <T>(p: string, fallback: T, read: () => T): T => {
@@ -140,7 +160,7 @@ export async function maintainSteps<S>(run: { repo: string; findings?: Finding[]
   };
 
   const linked = (p: string) => {
-    if (!lstatSync(p, { throwIfNoEntry: false })?.isSymbolicLink()) return false;
+    if (!tryRead(p, false, () => lstatSync(p, { throwIfNoEntry: false })?.isSymbolicLink())) return false;
     add({ kind: 'coverage', file: rel(p), what: 'a symlink on the skill path, so maintain does not read through it' });
     return true;
   };
@@ -159,7 +179,18 @@ export async function maintainSteps<S>(run: { repo: string; findings?: Finding[]
   h.set(step, 'completed', { outputs: [cfg.skill] });
 
   // 2 hygiene: every local link in the skill resolves; the index lists each feature file once.
-  const docs = tryRead<string[]>(skill, [], () => mdFiles(skill)).map((f) => ({ f, ls: tryRead<string[]>(f, [], () => lines(f)) }));
+  // A symlinked .md file or directory anywhere in the skill is blocking coverage, and nothing is read through it.
+  const docFiles = (dir: string): string[] =>
+    readdirSync(dir, { withFileTypes: true }).flatMap((e) => {
+      const p = join(dir, e.name);
+      if (e.isSymbolicLink()) {
+        if (e.name.endsWith('.md') || statSync(p, { throwIfNoEntry: false })?.isDirectory()) linked(p);
+        return [];
+      }
+      if (e.isDirectory()) return docFiles(p);
+      return e.isFile() && e.name.endsWith('.md') ? [p] : [];
+    });
+  const docs = tryRead<string[]>(skill, [], () => docFiles(skill).sort()).map((f) => ({ f, ls: tryRead<string[]>(f, [], () => lines(f)) }));
   step = h.begin('hygiene');
   for (const { f, ls } of docs)
     ls.forEach((text, i) => {
@@ -170,20 +201,24 @@ export async function maintainSteps<S>(run: { repo: string; findings?: Finding[]
     });
   const featDir = join(skill, 'features');
   const index = join(featDir, 'README.md');
-  const features = existsSync(featDir) && !linked(featDir) ? tryRead<string[]>(featDir, [], () => readdirSync(featDir)).filter((n) => n.endsWith('.md') && n !== 'README.md').sort() : [];
-  if (!statSync(index, { throwIfNoEntry: false })?.isFile()) add({ kind: 'index', file: rel(index), what: 'the feature map has no index' });
-  else if (!linked(index)) {
-    const listed = new Map<string, number>();
-    tryRead<string[]>(index, [], () => lines(index)).forEach((text, i) => {
-      for (const m of text.matchAll(LINK)) {
-        const t = localTarget(m[1]);
-        if (!t) continue;
-        const p = resolve(featDir, t);
-        if (listed.has(p)) add({ kind: 'duplicate', file: rel(index), line: i + 1, what: `lists ${t} again (first on line ${listed.get(p)})` });
-        else listed.set(p, i + 1);
-      }
-    });
-    for (const n of features) if (!listed.has(join(featDir, n))) add({ kind: 'unlisted', file: rel(index), what: `does not list features/${n}` });
+  // A features folder that is a symlink is never read through, so its index is not checked either.
+  const featLinked = linked(featDir);
+  const features = existsSync(featDir) && !featLinked ? tryRead<string[]>(featDir, [], () => readdirSync(featDir)).filter((n) => n.endsWith('.md') && n !== 'README.md').sort() : [];
+  if (!featLinked) {
+    if (!tryRead(index, true, () => !!statSync(index, { throwIfNoEntry: false })?.isFile())) add({ kind: 'index', file: rel(index), what: 'the feature map has no index' });
+    else if (!linked(index)) {
+      const listed = new Map<string, number>();
+      tryRead<string[]>(index, [], () => lines(index)).forEach((text, i) => {
+        for (const m of text.matchAll(LINK)) {
+          const t = localTarget(m[1]);
+          if (!t) continue;
+          const p = resolve(featDir, t);
+          if (listed.has(p)) add({ kind: 'duplicate', file: rel(index), line: i + 1, what: `lists ${t} again (first on line ${listed.get(p)})` });
+          else listed.set(p, i + 1);
+        }
+      });
+      for (const n of features) if (!listed.has(join(featDir, n))) add({ kind: 'unlisted', file: rel(index), what: `does not list features/${n}` });
+    }
   }
   if (!features.length) add({ kind: 'index', file: rel(featDir), what: 'the feature map has no feature files' });
   h.log('hygiene', { features, findings: [...findings] });
@@ -192,7 +227,39 @@ export async function maintainSteps<S>(run: { repo: string; findings?: Finding[]
   // 3 source wave: one fresh, read-only reader per feature file, at the configured agent.
   // ponytail: readers run one after another (askAgent is synchronous); run them in parallel when it is not.
   step = h.begin('source-wave');
+  const tracked = git(repo, 'ls-files', '-z').split('\0').filter(Boolean);
+  const exts = new Set(tracked.map((p) => extname(p)));
+  // The text of each tracked file the feature file cites, for a reader with no tools. Only regular files are read, each capped.
+  const citedSource = (feature: string, text: string) => {
+    const seen = new Map<string, string>();
+    const left = new Set<string>();
+    let total = 0;
+    for (const m of text.matchAll(CITE)) {
+      if (!m[1].includes('/') && !exts.has(extname(m[1]))) continue;
+      for (const p of m[1].includes('/') ? tracked.filter((t) => t === m[1]) : trackedNamed(tracked, m[1])) {
+        if (seen.has(p) || left.has(p)) continue;
+        const abs = join(repo, p);
+        const body = tryRead<string | undefined>(abs, undefined, () => (lstatSync(abs, { throwIfNoEntry: false })?.isFile() && realInside(repo, abs) ? readFileSync(abs, 'utf8') : undefined));
+        if (body === undefined) continue;
+        const kept = body.length > FEATURE_CHARS ? `${body.slice(0, FEATURE_CHARS)}\n[truncated after ${FEATURE_CHARS} characters]` : body;
+        if (left.size || total + kept.length > CITED_CHARS) {
+          left.add(p);
+          continue;
+        }
+        if (body.length > FEATURE_CHARS) add({ kind: 'truncated', file: p, what: `the reader saw only the first ${FEATURE_CHARS} characters of this cited file` });
+        total += kept.length;
+        seen.set(p, kept);
+      }
+    }
+    const parts = [...seen].map(([p, body]) => `\n\nCited source ${p}:\n${body}`);
+    if (left.size) {
+      add({ kind: 'truncated', file: feature, what: `the reader saw only ${CITED_CHARS} characters of the source it cites; ${left.size} cited files were left out` });
+      parts.push(`\n\n[truncated: the cited source for ${feature} is capped at ${CITED_CHARS} characters, so ${left.size} cited files are left out]`);
+    }
+    return parts.join('');
+  };
   const agent = selectAgent(cfg);
+  const toolless = TOOLLESS_READERS.has(agent.agent);
   const agentBlock = !agent.path || !supported(agent.agent) ? `source-wave: no agent done-done can start (${agent.agent}${agent.path ? ' is not supported yet' : ' is not on PATH'}); run done-done doctor` : '';
   let calls = 0;
   const record = (name: string) => join(dir, 'agents', `${++calls}-${name}.json`);
@@ -211,14 +278,14 @@ export async function maintainSteps<S>(run: { repo: string; findings?: Finding[]
     const file = join(featDir, name);
     if (text.length > FEATURE_CHARS) add({ kind: 'truncated', file: rel(file), what: `the reader saw only the first ${FEATURE_CHARS} characters of this feature file` });
     const prompt = `You are a read-only source reader for done-done maintain. Do not edit, create or delete any file, and do not run the app or any command.
-The repository is your working directory. Below is one feature file from the verification skill at ${cfg.skill} (app ${cfg.app}).
-Read the product's source code, not the skill, and explain how this user-facing feature works today.
+${toolless ? 'You have no tools: the source that the feature file cites is below, and it is all you can read.' : 'The repository is your working directory.'} Below is one feature file from the verification skill at ${cfg.skill} (app ${cfg.app}).
+${toolless ? 'Use the cited source, not the skill, and explain' : "Read the product's source code, not the skill, and explain"} how this user-facing feature works today.
 - drift: each statement in the feature file that the source contradicts or no longer supports, each {claim: the feature file's words, why: what the source does instead, file, line: the source location that shows it}. Empty when the file is right.
 - recipe: one short recipe to verify the feature live, the way a user reaches it.
 
 Feature file ${rel(file)}:
-${text.slice(0, FEATURE_CHARS)}`;
-    const a = askAgent({ agent: agent.agent, model: agent.model, prompt, schema: READER_SCHEMA, cwd: repo, timeoutMs: CALL_MS, tools: 'read', record: record(`reader-${name.replace(/\.md$/, '')}`) });
+${text.slice(0, FEATURE_CHARS)}${toolless ? citedSource(rel(file), text) : ''}`;
+    const a = askAgent({ agent: agent.agent, model: agent.model, prompt, schema: READER_SCHEMA, cwd: repo, timeoutMs: CALL_MS, tools: toolless ? 'none' : 'read', record: record(`reader-${name.replace(/\.md$/, '')}`) });
     if (!a.ok) add({ kind: 'coverage', file: rel(file), what: `the reader did not answer: ${a.error}` });
     return { feature: rel(file), ok: a.ok, drift: a.answer?.drift, recipe: a.answer?.recipe, ...(a.error && { error: a.error }), record: a.record, ...(a.recordError && { record_error: a.recordError }) };
   });
@@ -227,8 +294,6 @@ ${text.slice(0, FEATURE_CHARS)}`;
 
   // 4 reconcile: plain code checks each file:line the skill and the readers cite; churn comes from git log.
   step = h.begin('reconcile');
-  const tracked = git(repo, 'ls-files', '-z').split('\0').filter(Boolean);
-  const exts = new Set(tracked.map((p) => extname(p)));
   for (const { f, ls } of docs)
     ls.forEach((text, i) => {
       for (const m of text.matchAll(CITE)) {
@@ -238,8 +303,19 @@ ${text.slice(0, FEATURE_CHARS)}`;
       }
     });
   const unverified: string[] = [];
+  const shaped = <T>(v: unknown, ok: (x: any) => boolean, where: string): T[] => {
+    if (!Array.isArray(v)) {
+      unverified.push(`${where} is not a list, so none of it is checked`);
+      return [];
+    }
+    return v.flatMap((x) => {
+      if (x && typeof x === 'object' && ok(x)) return [x as T];
+      unverified.push(`${where} has an item in an unexpected shape, so it is not checked`);
+      return [];
+    });
+  };
   for (const r of readers.filter((r) => r.ok)) {
-    for (const d of items<{ claim: string; why: string; file: string; line: number }>(r.drift, (x) => isCite(x) && typeof x.claim === 'string' && typeof x.why === 'string')) {
+    for (const d of shaped<{ claim: string; why: string; file: string; line: number }>(r.drift, (x) => isCite(x) && typeof x.claim === 'string' && typeof x.why === 'string', `${r.feature} drift`)) {
       const why = citeWhy(repo, tracked, d.file, d.line);
       if (why) unverified.push(`${r.feature}: drift "${d.claim}" cites ${d.file}:${d.line}: ${why}`);
       else add({ kind: 'drift', file: r.feature, what: `"${d.claim}": ${d.why} (source ${d.file}:${d.line})` });
@@ -251,7 +327,7 @@ ${text.slice(0, FEATURE_CHARS)}`;
     .sort();
   let recipes: unknown[] = [];
   const answered = readers.filter((r) => r.ok);
-  if (answered.length && calls < MAX_CALLS) {
+  if (answered.length) {
     const prompt = `You reconcile the source readers of done-done maintain for the verification skill of ${cfg.app}. Use no tools.
 - recipes: merge the readers' recipes below into as few app states as practical, each {state: what to set up once, features: the feature files it covers, steps: the drive steps in order}.
 - missing: from the recently changed files listed below, each one that is a user-facing surface no feature covers, as {file: the path exactly as listed, why}. Empty when none.
@@ -261,10 +337,12 @@ Features (JSON): ${JSON.stringify(answered.map((r) => ({ feature: r.feature, rec
 Recently changed files (git log since ${CHURN_SINCE}): ${churn.length ? churn.join(', ') : 'none'}`;
     const a = askAgent({ agent: agent.agent, model: agent.model, prompt, schema: RECONCILE_SCHEMA, cwd: repo, timeoutMs: CALL_MS, tools: 'none', record: record('reconcile') });
     if (!a.ok) add({ kind: 'coverage', file: skillDir, what: `the reconcile call did not answer: ${a.error}` });
-    recipes = items(a.answer?.recipes, (x) => typeof x.state === 'string');
-    for (const m of items<{ file: string; why: string }>(a.answer?.missing, (x) => typeof x.file === 'string' && typeof x.why === 'string')) {
-      if (churn.includes(m.file)) add({ kind: 'unmapped', file: m.file, what: `changed recently and no feature covers it: ${m.why}` });
-      else unverified.push(`missing ${m.file}: not in the churn list`);
+    if (a.answer) {
+      recipes = shaped<unknown>(a.answer.recipes, (x) => typeof x.state === 'string' && Array.isArray(x.features) && Array.isArray(x.steps), 'reconcile recipes');
+      for (const m of shaped<{ file: string; why: string }>(a.answer.missing, (x) => typeof x.file === 'string' && typeof x.why === 'string', 'reconcile missing')) {
+        if (churn.includes(m.file)) add({ kind: 'unmapped', file: m.file, what: `changed recently and no feature covers it: ${m.why}` });
+        else unverified.push(`missing ${m.file}: not in the churn list`);
+      }
     }
   }
   run.git_status = repoState(repo) === before ? 'same' : 'changed';

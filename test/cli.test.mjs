@@ -1391,7 +1391,8 @@ test('a runner killed mid-step shows as failed at that step, and status stops th
   assert.equal(s.steps[1].status, 'failed');
   assert.match(s.reason, new RegExp(`^the runner died at step drive \\(pid ${run.runner.pid},`));
   assert.equal(JSON.parse(readFileSync(join(runs, run.run_id, 'run.json'), 'utf8')).status, 'running', 'status only reads the store');
-  assert.match(s.help[1], /^Fix the cause, commit, then start a new run: done-done verify slow --outcome 'home and settings render'$/);
+  assert.equal(s.help[1], `Fix the cause, commit, then run again from the failed step: done-done rerun --run ${run.run_id}`);
+  assert.equal(s.help[2], "Or start a new run: done-done verify slow --outcome 'home and settings render'");
 });
 
 test('a live runner with an old heartbeat is not failed, and its journey is not killed', async () => {
@@ -1863,7 +1864,7 @@ test('doctor finds agent, judge and ffprobe binaries from PATH; missing optional
   assert.match(f.checks[6].detail, /found at .*ffprobe/);
   const codexOnly = toon(doctorIn(repo, pathEnv(env, ['codex']), 'doctor'));
   assert.equal(codexOnly.checks[4].status, 'missing');
-  assert.match(codexOnly.checks[4].detail, /^codex \(model none; agent: auto\) at .*, but done-done cannot start codex yet \(claude and opencode for now\)/);
+  assert.match(codexOnly.checks[4].detail, /^codex \(its own default model; set agent_config\.codex\.model to choose one; agent: auto\) at .*, but done-done cannot start codex yet \(claude, opencode, pi and gemini for now\)/);
   assert.equal(codexOnly.checks[7].status, 'missing', 'an author done-done cannot start is no author');
   assert.match(codexOnly.checks[7].detail, /^claude judge \(model claude-haiku-5-5\), and no startable author agent is installed/);
   const two = toon(doctorIn(repo, pathEnv(env, ['codex', 'opencode']), 'doctor'));
@@ -1874,7 +1875,7 @@ test('doctor finds agent, judge and ffprobe binaries from PATH; missing optional
   assert.equal(none.code, 0, 'missing optionals still exit 0 when every required item is ok');
   const n = toon(none);
   assert.deepEqual(n.checks.slice(4).map((c) => c.status), ['missing', 'missing', 'missing', 'missing']);
-  assert.match(n.checks[4].fix, /Install claude and opencode, or set agent: to an installed one of claude, codex, opencode, pi, gemini/);
+  assert.match(n.checks[4].fix, /Install claude, opencode, pi and gemini, or set agent: to an installed one of claude, codex, opencode, pi, gemini/);
   assert.match(n.checks[5].fix, /judge\.bin/);
   assert.match(n.checks[6].fix, /ffprobe/);
   assert.match(n.checks[7].detail, /^claude judge \(model claude-haiku-5-5\), and no author agent is installed/, 'with no author there is no same-agent claim');
@@ -1925,11 +1926,11 @@ test('the agent comes from config (a fallback list moves past missing agents), a
     const r = doctorIn(repo, s.env, 'doctor', ...args);
     return { ...r, d: r.out.startsWith('command') ? toon(r) : undefined, by: (n) => toon(r).checks.find((c) => c.check === n) };
   };
-  // pi is listed first and installed, but done-done cannot start it yet, so the list moves on to opencode at its configured model and doctor names pi.
-  writeFileSync(join(s.bin, 'pi'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
-  const oc = doctor('agent: [pi, opencode]\n', '--probe');
+  // codex is listed first and installed, but done-done cannot start it yet, so the list moves on to opencode at its configured model and doctor names codex.
+  writeFileSync(join(s.bin, 'codex'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+  const oc = doctor('agent: [codex, opencode]\n', '--probe');
   assert.equal(oc.code, 0, oc.out);
-  assert.match(oc.by('agent').detail, /^opencode \(model opencode-go\/test-model; from config; skipped pi: done-done cannot start it yet\)/);
+  assert.match(oc.by('agent').detail, /^opencode \(model opencode-go\/test-model; from config; skipped codex: done-done cannot start it yet\)/);
   assert.match(oc.by('judge_choice').detail, /^claude judge \(model claude-haiku-5-5\), a different agent from the author \(opencode\)/);
   assert.equal(oc.by('probe').status, 'ok');
   const [call] = s.calls();
@@ -1969,14 +1970,13 @@ test('the agent comes from config (a fallback list moves past missing agents), a
   assert.equal(doctorIn(repo, bad.env, 'doctor').code, 0);
   assert.equal(bad.calls().length, 1);
   // An agent without an adapter yet, an explicit judge route, and bad values.
-  const pi = doctor('agent: pi\n', '--probe');
-  assert.equal(pi.code, 2, pi.out);
-  assert.match(pi.by('probe').detail, /cannot start pi yet/);
-  assert.equal(pi.by('probe').fix, 'Set agent: to claude and opencode', 'a probe that never ran points at the agent fix, not a sign-in');
+  const cx = doctor('agent: codex\n', '--probe');
+  assert.equal(cx.code, 2, cx.out);
+  assert.match(cx.by('probe').detail, /cannot start codex yet/);
+  assert.equal(cx.by('probe').fix, 'Set agent: to claude, opencode, pi and gemini', 'a probe that never ran points at the agent fix, not a sign-in');
   writeFileSync(join(s.bin, 'gemini'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
-  const pg = doctor('agent: [pi, gemini]\n');
-  assert.equal(pg.by('agent').status, 'missing');
-  assert.match(pg.by('agent').detail, /^pi \(model none; from config; skipped gemini: done-done cannot start it yet\) at .*, but done-done cannot start pi yet/, 'gemini is installed too, so it is named');
+  const pg = doctor('agent: [codex, gemini]\n');
+  assert.match(pg.by('agent').detail, /^gemini \(model flash-lite; from config; skipped codex: done-done cannot start it yet\)/, 'the list moves past codex to the startable gemini at its cheap default');
   writeFileSync(join(env.DONE_DONE_HOME, 'config.yaml'), 'judge:\n  route: opencode:plan_key:opencode-go\n  model: muse-spark-1.3-contributor\n');
   assert.match(doctor('').by('judge_choice').detail, /^claude judge \(model muse-spark-1.3-contributor\) in a fresh session.*judge\.route opencode:plan_key:opencode-go is recorded, not used yet/);
   assert.match(doctor('agent: cursor\n').out, /agent must be auto, or one or a list of claude, codex, opencode, pi, gemini/);
@@ -2219,6 +2219,218 @@ test('attach streams a running run to its end', async () => {
   assert.equal(toon({ out }).result, 'pass');
 });
 
+// Stub pi and gemini CLIs that log how they were started (argv, stdin, cwd) and answer like the real ones:
+// pi -p --mode json streams JSONL with the answer in the assistant message_end text parts (fenced, as models
+// often do); gemini -p -o json prints one object with the answer in `response` (its headless.md).
+// Mode 'retry' answers garbage on the first call (counted from the log) so ask-again is exercised, 'bad'
+// always does, and 'auth' fails like a signed-out CLI.
+function stubPiGemini(env, answer = '{"ok":true}', mode = 'ok') {
+  const e = pathEnv(env, ['ffprobe']);
+  const log = join(e.PATH, 'calls.jsonl');
+  const fenced = '```json\n' + answer + '\n```';
+  writeFileSync(join(e.PATH, 'pi'), `#!${process.execPath}
+const { appendFileSync, readFileSync } = require('node:fs');
+const argv = process.argv.slice(2);
+const stdin = readFileSync(0, 'utf8');
+appendFileSync(${JSON.stringify(log)}, JSON.stringify({ agent: 'pi', argv, stdin, cwd: process.cwd() }) + '\\n');
+const n = readFileSync(${JSON.stringify(log)}, 'utf8').trim().split('\\n').length;
+const text = ${JSON.stringify(mode)} === 'bad' || (${JSON.stringify(mode)} === 'retry' && n === 1) ? 'not json at all' : ${JSON.stringify(fenced)};
+for (const t of ['session', 'agent_start', 'turn_start']) console.log(JSON.stringify({ type: t }));
+console.log(JSON.stringify({ type: 'message_end', message: { role: 'assistant', content: [{ type: 'text', text }] } }));
+console.log(JSON.stringify({ type: 'agent_end' }));
+`, { mode: 0o755 });
+  writeFileSync(join(e.PATH, 'gemini'), `#!${process.execPath}
+const { appendFileSync, readFileSync } = require('node:fs');
+const argv = process.argv.slice(2);
+const stdin = readFileSync(0, 'utf8');
+appendFileSync(${JSON.stringify(log)}, JSON.stringify({ agent: 'gemini', argv, stdin, cwd: process.cwd() }) + '\\n');
+// A signed-out gemini (seen 13 Oct): the stack of its auth error, a warning, then the one useful line in red.
+if (${JSON.stringify(mode)} === 'auth') {
+  process.stderr.write('Error authenticating: FatalCancellationError: Authentication cancelled by user.\\n    at initOauthClient (file:///gemini/bundle/chunk.js:1:1)\\n  exitCode: 130\\n}\\nSkill conflict detected: a skill overrides another\\n\\u001b[31mAuthentication cancelled by user.\\u001b[0m\\nUpdate available: 0.57.0\\n');
+  process.exit(130);
+}
+process.stdout.write(JSON.stringify({ response: ${JSON.stringify(fenced)}, stats: {} }));
+`, { mode: 0o755 });
+  const calls = () => (existsSync(log) ? readFileSync(log, 'utf8').trim().split('\n').map((l) => JSON.parse(l)) : []);
+  return { env: e, calls };
+}
+
+test('doctor --probe asks pi on stdin (never in argv) with tools off and a scratch cwd', () => {
+  const { repo, env } = setup();
+  const s = stubPiGemini(env);
+  mkdirSync(env.DONE_DONE_HOME, { recursive: true });
+  writeFileSync(join(env.DONE_DONE_HOME, 'config.yaml'), 'agent: pi\n');
+  const r = doctorIn(repo, s.env, 'doctor', '--probe');
+  assert.equal(r.code, 0, r.out);
+  const d = toon(r);
+  assert.match(d.checks.find((x) => x.check === 'agent').detail, /^pi \(its own default model; set agent_config\.pi\.model to choose one; from config\)/);
+  assert.equal(d.checks.find((x) => x.check === 'probe').status, 'ok');
+  const [call] = s.calls();
+  assert.equal(call.agent, 'pi');
+  assert.match(call.stdin, /connectivity probe/, 'the prompt goes on stdin (the schema is enforced by done-done, then asked again)');
+  assert.match(call.stdin, /"required":\["ok"\]/, 'the first try already states the schema');
+  assert.ok(!call.argv.some((a) => a.includes('connectivity probe')), 'never in argv');
+  assert.deepEqual(call.argv, ['-p', '--mode', 'json', '--no-session', '--no-tools'], 'no model is passed, so pi runs its own default');
+  assert.notEqual(call.cwd, repo, 'a tool-less probe runs in a scratch dir, never the repo');
+  const record = d.checks.find((x) => x.check === 'probe').detail.match(/record (\S+)$/)[1];
+  assert.equal(statSync(record).mode & 0o777, 0o600);
+  const rec = JSON.parse(readFileSync(record, 'utf8'));
+  assert.deepEqual([rec.agent, rec.model, rec.tools, rec.attempts, rec.ok, rec.answer], ['pi', '', 'none', 1, true, { ok: true }]);
+  assert.ok(rec.prompt_bytes > 0 && !JSON.stringify(rec).includes('connectivity probe'), 'the record keeps no prompt text');
+});
+
+test('pi is asked again when its answer is not valid JSON, then fails after three tries', () => {
+  const { repo, env } = setup();
+  mkdirSync(env.DONE_DONE_HOME, { recursive: true });
+  writeFileSync(join(env.DONE_DONE_HOME, 'config.yaml'), 'agent: pi\n');
+  const once = stubPiGemini(env, '{"ok":true}', 'retry');
+  const r = doctorIn(repo, once.env, 'doctor', '--probe');
+  assert.equal(r.code, 0, r.out);
+  assert.equal(toon(r).checks.find((x) => x.check === 'probe').status, 'ok');
+  assert.equal(once.calls().length, 2, 'the bad first answer is asked again once');
+  assert.match(once.calls()[1].stdin, /not valid[\s\S]*Answer with only one JSON object[\s\S]*"required":\["ok"\]/, 'the retry names what was wrong and repeats the schema');
+  const record = toon(r).checks.find((x) => x.check === 'probe').detail.match(/record (\S+)$/)[1];
+  assert.equal(JSON.parse(readFileSync(record, 'utf8')).attempts, 2);
+  const bad = stubPiGemini(env, '{"ok":true}', 'bad');
+  const failed = doctorIn(repo, bad.env, 'doctor', '--probe');
+  assert.equal(failed.code, 2, failed.out);
+  assert.match(toon(failed).checks.find((x) => x.check === 'probe').detail, /did not answer with valid JSON after 3 tries/);
+  assert.equal(bad.calls().length, 3, 'at most three tries');
+});
+
+test('doctor --probe asks gemini with the prompt on stdin, and reports a signed-out gemini with a sign-in fix', () => {
+  const { repo, env } = setup();
+  mkdirSync(env.DONE_DONE_HOME, { recursive: true });
+  writeFileSync(join(env.DONE_DONE_HOME, 'config.yaml'), 'agent: gemini\n');
+  const s = stubPiGemini(env);
+  const r = doctorIn(repo, s.env, 'doctor', '--probe');
+  assert.equal(r.code, 0, r.out);
+  const d = toon(r);
+  assert.match(d.checks.find((x) => x.check === 'agent').detail, /^gemini \(model flash-lite; from config\)/);
+  assert.equal(d.checks.find((x) => x.check === 'probe').status, 'ok');
+  const [call] = s.calls();
+  assert.equal(call.agent, 'gemini');
+  assert.match(call.stdin, /connectivity probe/);
+  assert.deepEqual(call.argv, ['-p', 'Follow the instructions on stdin.', '-o', 'json', '-m', 'flash-lite', '--approval-mode', 'plan', '--skip-trust']);
+  assert.ok(!call.argv.some((a) => a.includes('connectivity probe')), 'never in argv');
+  assert.notEqual(call.cwd, repo, 'a tool-less probe runs in a scratch dir, never the repo');
+  const out = stubPiGemini(env, '{"ok":true}', 'auth');
+  const failed = doctorIn(repo, out.env, 'doctor', '--probe');
+  assert.equal(failed.code, 2, failed.out);
+  const probe = toon(failed).checks.find((x) => x.check === 'probe');
+  assert.equal(probe.status, 'missing');
+  const record = probe.detail.match(/; record (\S+)$/)[1];
+  assert.equal(probe.detail, `gemini did not answer: gemini exited 130: Authentication cancelled by user.; record ${record}`, 'one clean line: no stack, no colour codes');
+  assert.match(JSON.parse(readFileSync(record, 'utf8')).stderr, /at initOauthClient[\s\S]*\u001b\[31mAuthentication cancelled/, 'the call record keeps the raw stderr');
+  assert.match(JSON.parse(readFileSync(record, 'utf8')).error, /at initOauthClient[\s\S]*\u001b\[31mAuthentication cancelled/, 'the call record keeps the raw error text');
+  assert.match(probe.fix, /Check that gemini is signed in and can use model flash-lite/);
+});
+
+test('agent auto picks pi over gemini, and doctor warns that pi has no permission gate', () => {
+  const { repo, env } = setup();
+  const s = stubPiGemini(env);
+  const d = toon(doctorIn(repo, s.env, 'doctor'));
+  assert.match(d.checks.find((x) => x.check === 'agent').detail, /^pi \(its own default model; set agent_config\.pi\.model to choose one; agent: auto\) at /);
+  const gate = d.checks.find((x) => x.check === 'tool_gate');
+  assert.equal(gate.status, 'warning');
+  assert.equal(gate.detail, 'pi has no permission gate: every pi tool runs without approval');
+});
+
+test('agent_config.pi.model is passed to pi as --model', () => {
+  const { repo, env } = setup();
+  const s = stubPiGemini(env);
+  mkdirSync(env.DONE_DONE_HOME, { recursive: true });
+  writeFileSync(join(env.DONE_DONE_HOME, 'config.yaml'), 'agent: pi\nagent_config:\n  pi: { model: vendor/some-model }\n');
+  const d = toon(doctorIn(repo, s.env, 'doctor', '--probe'));
+  assert.match(d.checks.find((x) => x.check === 'agent').detail, /^pi \(model vendor\/some-model; from config\)/);
+  assert.deepEqual(s.calls()[0].argv, ['-p', '--mode', 'json', '--no-session', '--no-tools', '--model', 'vendor/some-model']);
+});
+
+test('gemini edit steps run with auto_edit, never yolo, and read steps stay in plan mode', async () => {
+  const { repo, env } = setup();
+  const s = stubPiGemini(env);
+  const { askAgent } = await import(pathToFileURL(join(dirname(fileURLToPath(import.meta.url)), '..', 'dist', 'agents.js')).href);
+  const call = { agent: 'gemini', model: 'flash-lite', prompt: 'p', schema: { type: 'object', properties: { ok: { type: 'boolean' } }, required: ['ok'] }, cwd: repo, timeoutMs: 60_000, record: join(s.env.PATH, 'rec.json') };
+  const old = process.env.PATH;
+  process.env.PATH = s.env.PATH;
+  try {
+    askAgent({ ...call, tools: 'edit' });
+    askAgent({ ...call, tools: 'read' });
+  } finally {
+    process.env.PATH = old;
+  }
+  const [edit, read] = s.calls();
+  assert.equal(edit.argv[edit.argv.indexOf('--approval-mode') + 1], 'auto_edit');
+  assert.equal(read.argv[read.argv.indexOf('--approval-mode') + 1], 'plan');
+  assert.ok(!edit.argv.includes('--skip-trust') && !read.argv.includes('--skip-trust'), 'a repo step keeps Gemini trust gate');
+});
+
+test('braces in the prose before the JSON in the final answer do not break it', () => {
+  const { repo, env } = setup();
+  const s = stubPiGemini(env);
+  writeFileSync(join(s.env.PATH, 'pi'), `#!${process.execPath}
+const { appendFileSync } = require('node:fs');
+appendFileSync(${JSON.stringify(join(s.env.PATH, 'calls.jsonl'))}, JSON.stringify({ agent: 'pi', argv: process.argv.slice(2) }) + '\\n');
+console.log(JSON.stringify({ type: 'message_end', message: { role: 'assistant', content: [{ type: 'text', text: 'Added the helper f() { return 1 }. Answer: {"ok":true}' }] } }));
+`, { mode: 0o755 });
+  mkdirSync(env.DONE_DONE_HOME, { recursive: true });
+  writeFileSync(join(env.DONE_DONE_HOME, 'config.yaml'), 'agent: pi\n');
+  const r = doctorIn(repo, s.env, 'doctor', '--probe');
+  assert.equal(r.code, 0, r.out);
+  assert.equal(toon(r).checks.find((x) => x.check === 'probe').status, 'ok');
+  assert.equal(s.calls().length, 1, 'the final answer is read past the prose braces on the first try');
+});
+
+test('pi answers with its last message only, so braces in earlier narration do not break the answer', () => {
+  const { repo, env } = setup();
+  const s = stubPiGemini(env);
+  writeFileSync(join(s.env.PATH, 'pi'), `#!${process.execPath}
+const { appendFileSync } = require('node:fs');
+appendFileSync(${JSON.stringify(join(s.env.PATH, 'calls.jsonl'))}, JSON.stringify({ agent: 'pi', argv: process.argv.slice(2) }) + '\\n');
+for (const text of ['Here is the code: function foo() { return 1; }', '{"ok":true}']) console.log(JSON.stringify({ type: 'message_end', message: { role: 'assistant', content: [{ type: 'text', text }] } }));
+`, { mode: 0o755 });
+  mkdirSync(env.DONE_DONE_HOME, { recursive: true });
+  writeFileSync(join(env.DONE_DONE_HOME, 'config.yaml'), 'agent: pi\n');
+  const r = doctorIn(repo, s.env, 'doctor', '--probe');
+  assert.equal(r.code, 0, r.out);
+  assert.equal(toon(r).checks.find((x) => x.check === 'probe').status, 'ok');
+  assert.equal(s.calls().length, 1, 'the final answer is accepted on the first try');
+});
+
+test('a repo step that gemini refuses as untrusted fails with the trust fix line', async () => {
+  const { repo, env } = setup();
+  const s = stubPiGemini(env, '{"ok":true}', 'auth');
+  const { askAgent } = await import(pathToFileURL(join(dirname(fileURLToPath(import.meta.url)), '..', 'dist', 'agents.js')).href);
+  const old = process.env.PATH;
+  process.env.PATH = s.env.PATH;
+  try {
+    const out = askAgent({ agent: 'gemini', model: 'flash-lite', prompt: 'p', schema: { type: 'object', properties: { ok: { type: 'boolean' } }, required: ['ok'] }, cwd: repo, timeoutMs: 60_000, record: join(s.env.PATH, 'rec.json'), tools: 'edit' });
+    assert.equal(out.ok, false);
+    assert.match(out.error, /trust it in Gemini CLI first, then retry/);
+  } finally {
+    process.env.PATH = old;
+  }
+});
+
+test('an edit step whose answer is not JSON is never asked again, while a tool-less probe is', async () => {
+  const { repo, env } = setup();
+  const s = stubPiGemini(env, '{"ok":true}', 'bad');
+  const { askAgent } = await import(pathToFileURL(join(dirname(fileURLToPath(import.meta.url)), '..', 'dist', 'agents.js')).href);
+  const call = { agent: 'pi', model: '', prompt: 'p', schema: { type: 'object', properties: { ok: { type: 'boolean' } }, required: ['ok'] }, cwd: repo, timeoutMs: 60_000, record: join(s.env.PATH, 'rec.json') };
+  const old = process.env.PATH;
+  process.env.PATH = s.env.PATH;
+  try {
+    const edit = askAgent({ ...call, tools: 'edit' });
+    assert.equal(edit.ok, false);
+    assert.equal(s.calls().length, 1, 'the edit step ran once');
+    const probe = askAgent({ ...call, tools: 'none' });
+    assert.equal(probe.ok, false);
+    assert.equal(s.calls().length, 4, 'the tool-less probe is asked again up to three tries');
+  } finally {
+    process.env.PATH = old;
+  }
+});
+
 test('maintain counts a truncated feature file as a notice, not drift', () => {
   const { repo, env, sh } = setup();
   const s = stubAgents(env, JSON.stringify({ drift: [], recipe: 'open it', recipes: [], missing: [] }));
@@ -2393,6 +2605,208 @@ test('maintain refuses a skill reached through a symlinked ancestor', () => {
     assert.deepEqual([r.code, m.result], [3, 'blocked'], r.out);
     assert.match(m.reason, /^locate: .*is reached through a symlink/);
     assert.deepEqual(s.calls(), []);
+  } finally {
+    rmSync(outside, { recursive: true, force: true });
+  }
+});
+
+test('maintain blocks a symlinked features folder and never checks the index behind it', () => {
+  const { repo, env, sh } = setup();
+  const s = stubAgents(env, JSON.stringify({ drift: [], recipe: 'open it', recipes: [], missing: [] }));
+  const outside = mkdtempSync(join(tmpdir(), 'dd-features-'));
+  try {
+    writeFileSync(join(outside, 'README.md'), '# features\n\n- [Home](home.md)\n- [Home](home.md)\n');
+    writeFileSync(join(outside, 'home.md'), '# Home\n');
+    const skill = join(repo, '.agents', 'skills', 'verify-notes');
+    mkdirSync(skill, { recursive: true });
+    writeFileSync(join(skill, 'SKILL.md'), '# verify-notes\n');
+    symlinkSync(outside, join(skill, 'features'));
+    sh('add', '-A');
+    sh('commit', '-qm', 'skill');
+    const r = doctorIn(repo, s.env, 'maintain', '--foreground');
+    const m = toon(r);
+    assert.deepEqual([r.code, m.result], [3, 'blocked'], r.out);
+    assert.match(m.reason, /^coverage: .*features/);
+    assert.equal(m.findings.some((f) => f.kind === 'duplicate'), false, 'the index behind the link is not read');
+    assert.deepEqual(s.calls(), []);
+  } finally {
+    rmSync(outside, { recursive: true, force: true });
+  }
+});
+
+test('maintain blocks a symlinked CHECKLIST.md with a dead link and reads nothing through it', () => {
+  const { repo, env, sh } = setup();
+  const s = stubAgents(env, JSON.stringify({ drift: [], recipe: 'open it', recipes: [], missing: [] }));
+  const outside = mkdtempSync(join(tmpdir(), 'dd-checklist-'));
+  try {
+    writeFileSync(join(outside, 'CHECKLIST.md'), '# Checklist\n\n- [Gone](gone.md)\n');
+    const skill = join(repo, '.agents', 'skills', 'verify-notes');
+    mkdirSync(join(skill, 'features'), { recursive: true });
+    writeFileSync(join(skill, 'SKILL.md'), '# verify-notes\n');
+    writeFileSync(join(skill, 'features', 'README.md'), '# features\n\n- [Home](home.md)\n');
+    writeFileSync(join(skill, 'features', 'home.md'), '# Home\n');
+    symlinkSync(join(outside, 'CHECKLIST.md'), join(skill, 'CHECKLIST.md'));
+    sh('add', '-A');
+    sh('commit', '-qm', 'skill');
+    const r = doctorIn(repo, s.env, 'maintain', '--foreground');
+    const m = toon(r);
+    assert.deepEqual([r.code, m.result], [3, 'blocked'], r.out);
+    assert.match(m.reason, /^coverage: .*CHECKLIST\.md/);
+    assert.equal(m.findings.some((f) => f.kind === 'dead-link'), false, 'nothing is read through the link');
+  } finally {
+    rmSync(outside, { recursive: true, force: true });
+  }
+});
+
+test('maintain gives a pi reader no tools and puts the cited source in its prompt', () => {
+  const { repo, env, sh } = setup();
+  const s = stubPiGemini(env, JSON.stringify({ drift: [], recipe: 'open it', recipes: [], missing: [] }));
+  mkdirSync(env.DONE_DONE_HOME, { recursive: true });
+  writeFileSync(join(env.DONE_DONE_HOME, 'config.yaml'), 'agent: pi\n');
+  const skill = join(repo, '.agents', 'skills', 'verify-notes');
+  mkdirSync(join(skill, 'features'), { recursive: true });
+  mkdirSync(join(repo, 'src'), { recursive: true });
+  writeFileSync(join(repo, 'src', 'app.js'), 'export const app = 1; // CITED-SOURCE-LINE\n');
+  writeFileSync(join(skill, 'SKILL.md'), '# verify-notes\n');
+  writeFileSync(join(skill, 'features', 'README.md'), '# features\n\n- [Home](home.md)\n');
+  writeFileSync(join(skill, 'features', 'home.md'), '# Home\n\nThe app starts at src/app.js:1.\n');
+  sh('add', '-A');
+  sh('commit', '-qm', 'skill');
+  const r = doctorIn(repo, s.env, 'maintain', '--foreground');
+  assert.equal(r.code, 0, r.out);
+  const reader = s.calls().find((c) => c.stdin.includes('Feature file'));
+  assert.ok(reader.argv.includes('--no-tools'), reader.argv.join(' '));
+  assert.ok(!reader.argv.includes('-t'), 'no read tools for pi');
+  assert.match(reader.stdin, /Cited source src\/app\.js:\nexport const app = 1; \/\/ CITED-SOURCE-LINE/);
+});
+
+test('maintain lists a reader drift item with a string line as unverified, not as a finding', () => {
+  const { repo, env, sh } = setup();
+  const s = stubAgents(env, JSON.stringify({ recipe: 'open it', drift: [{ claim: 'app is 2', why: 'it is 1', file: 'src/app.js', line: '1' }], recipes: [], missing: [] }));
+  const skill = join(repo, '.agents', 'skills', 'verify-notes');
+  mkdirSync(join(skill, 'features'), { recursive: true });
+  mkdirSync(join(repo, 'src'), { recursive: true });
+  writeFileSync(join(repo, 'src', 'app.js'), 'export const app = 1;\n');
+  writeFileSync(join(skill, 'SKILL.md'), '# verify-notes\n');
+  writeFileSync(join(skill, 'features', 'README.md'), '# features\n\n- [Home](home.md)\n');
+  writeFileSync(join(skill, 'features', 'home.md'), '# Home\n');
+  sh('add', '-A');
+  sh('commit', '-qm', 'skill');
+  const r = doctorIn(repo, s.env, 'maintain', '--foreground');
+  const m = toon(r);
+  assert.deepEqual([r.code, m.result], [0, 'clean'], r.out);
+  assert.match(toon(doctorIn(repo, s.env, 'logs', '--step', 'reconcile')).log.join('\n'), /drift has an item in an unexpected shape/);
+});
+
+test('maintain does not wait on a cited path that is a named pipe; it is a citation finding', () => {
+  const { repo, env, sh } = setup();
+  const s = stubAgents(env, JSON.stringify({ drift: [], recipe: 'open it', recipes: [], missing: [] }));
+  const skill = join(repo, '.agents', 'skills', 'verify-notes');
+  mkdirSync(join(skill, 'features'), { recursive: true });
+  mkdirSync(join(repo, 'pipes'));
+  writeFileSync(join(skill, 'SKILL.md'), '# verify-notes\n\nSee pipes/x.sh:3.\n');
+  writeFileSync(join(skill, 'features', 'README.md'), '# features\n\n- [Home](home.md)\n');
+  writeFileSync(join(skill, 'features', 'home.md'), '# Home\n');
+  sh('add', '-A');
+  sh('commit', '-qm', 'skill');
+  assert.equal(spawnSync('mkfifo', [join(repo, 'pipes', 'x.sh')]).status, 0);
+  const r = spawnSync(process.execPath, [CLI, 'maintain', '--foreground'], { cwd: repo, env: s.env, encoding: 'utf8', timeout: 30_000 });
+  assert.equal(r.signal, null, 'the run never opened the pipe');
+  const m = toon({ code: r.status, out: r.stdout + r.stderr });
+  assert.deepEqual([r.status, m.result], [1, 'drift'], r.stdout + r.stderr);
+  assert.ok(m.findings.some((f) => f.kind === 'citation' && /pipes\/x\.sh is not a file/.test(f.what)));
+});
+
+test('maintain caps the source a tool-less reader gets at 60,000 characters and says what it left out', () => {
+  const { repo, env, sh } = setup();
+  const s = stubPiGemini(env, JSON.stringify({ drift: [], recipe: 'open it', recipes: [], missing: [] }));
+  mkdirSync(env.DONE_DONE_HOME, { recursive: true });
+  writeFileSync(join(env.DONE_DONE_HOME, 'config.yaml'), 'agent: pi\n');
+  const skill = join(repo, '.agents', 'skills', 'verify-notes');
+  mkdirSync(join(skill, 'features'), { recursive: true });
+  for (const d of ['a', 'b', 'c', 'd']) {
+    mkdirSync(join(repo, d), { recursive: true });
+    writeFileSync(join(repo, d, 'index.ts'), `export const ${d} = 1;\n${'x'.repeat(19_000)}\n`);
+  }
+  writeFileSync(join(skill, 'SKILL.md'), '# verify-notes\n');
+  writeFileSync(join(skill, 'features', 'README.md'), '# features\n\n- [Home](home.md)\n');
+  writeFileSync(join(skill, 'features', 'home.md'), '# Home\n\nSee index.ts:1.\n');
+  sh('add', '-A');
+  sh('commit', '-qm', 'skill');
+  const r = doctorIn(repo, s.env, 'maintain', '--foreground');
+  const m = toon(r);
+  assert.deepEqual([r.code, m.result], [0, 'clean'], r.out);
+  assert.ok(m.findings.some((f) => f.kind === 'truncated' && /1 cited files were left out/.test(f.what)), r.out);
+  const reader = s.calls().find((c) => c.stdin.includes('Feature file'));
+  assert.equal(reader.stdin.split('Cited source ').length - 1, 3, 'three of the four cited files fit under the cap');
+  assert.ok(reader.stdin.length < 70_000);
+  assert.match(reader.stdin, /so 1 cited files are left out/);
+});
+
+test('maintain blocks an unreadable features folder instead of failing the run', { skip: process.getuid?.() === 0 && 'root reads files whatever their mode' }, () => {
+  const { repo, env, sh } = setup();
+  const s = stubAgents(env, JSON.stringify({ drift: [], recipe: 'open it', recipes: [], missing: [] }));
+  const skill = join(repo, '.agents', 'skills', 'verify-notes');
+  mkdirSync(join(skill, 'features'), { recursive: true });
+  writeFileSync(join(skill, 'SKILL.md'), '# verify-notes\n');
+  writeFileSync(join(skill, 'features', 'README.md'), '# features\n\n- [Home](home.md)\n');
+  writeFileSync(join(skill, 'features', 'home.md'), '# Home\n');
+  sh('add', '-A');
+  sh('commit', '-qm', 'skill');
+  chmodSync(join(skill, 'features'), 0o000);
+  try {
+    const r = doctorIn(repo, s.env, 'maintain', '--foreground');
+    const m = toon(r);
+    assert.deepEqual([r.code, m.result], [3, 'blocked'], r.out);
+    assert.match(m.reason, /^coverage: /);
+  } finally {
+    chmodSync(join(skill, 'features'), 0o755);
+  }
+});
+
+test('maintain reports a citation under an unreadable folder as a citation finding, not a failed run', { skip: process.getuid?.() === 0 && 'root reads files whatever their mode' }, () => {
+  const { repo, env, sh } = setup();
+  const s = stubAgents(env, JSON.stringify({ drift: [], recipe: 'open it', recipes: [], missing: [] }));
+  mkdirSync(join(repo, 'locked'));
+  writeFileSync(join(repo, 'locked', 'x.js'), 'export const x = 1;\n');
+  const skill = join(repo, '.agents', 'skills', 'verify-notes');
+  mkdirSync(join(skill, 'features'), { recursive: true });
+  writeFileSync(join(skill, 'SKILL.md'), '# verify-notes\n\nSee locked/x.js:1.\n');
+  writeFileSync(join(skill, 'features', 'README.md'), '# features\n\n- [Home](home.md)\n');
+  writeFileSync(join(skill, 'features', 'home.md'), '# Home\n');
+  sh('add', '-A');
+  sh('commit', '-qm', 'skill');
+  chmodSync(join(repo, 'locked'), 0o000);
+  try {
+    const r = doctorIn(repo, s.env, 'maintain', '--foreground');
+    const m = toon(r);
+    assert.deepEqual([r.code, m.result], [1, 'drift'], r.out);
+    assert.ok(m.findings.some((f) => f.kind === 'citation' && /locked\/x\.js is not a file/.test(f.what)), r.out);
+  } finally {
+    chmodSync(join(repo, 'locked'), 0o755);
+  }
+});
+
+test('maintain does not follow a committed symlink folder out of the repo to count a cited file', () => {
+  const { repo, env, sh } = setup();
+  const s = stubAgents(env, JSON.stringify({ drift: [], recipe: 'open it', recipes: [], missing: [] }));
+  const outside = mkdtempSync(join(tmpdir(), 'dd-notes-'));
+  try {
+    writeFileSync(join(outside, 'secrets.txt'), 'token\n');
+    symlinkSync(outside, join(repo, 'notes'));
+    const skill = join(repo, '.agents', 'skills', 'verify-notes');
+    mkdirSync(join(skill, 'features'), { recursive: true });
+    writeFileSync(join(skill, 'SKILL.md'), '# verify-notes\n\nSee notes/secrets.txt:99.\n');
+    writeFileSync(join(skill, 'features', 'README.md'), '# features\n\n- [Home](home.md)\n');
+    writeFileSync(join(skill, 'features', 'home.md'), '# Home\n');
+    sh('add', '-A');
+    sh('commit', '-qm', 'skill');
+    const r = doctorIn(repo, s.env, 'maintain', '--foreground');
+    const m = toon(r);
+    assert.deepEqual([r.code, m.result], [1, 'drift'], r.out);
+    const cite = m.findings.find((f) => f.kind === 'citation');
+    assert.match(cite.what, /notes\/secrets\.txt is outside the repository/, r.out);
+    assert.doesNotMatch(cite.what, /has \d+ lines/);
   } finally {
     rmSync(outside, { recursive: true, force: true });
   }

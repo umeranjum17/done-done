@@ -131,7 +131,7 @@ git commit -m "Add done-done"
 
 A `run -- <command>` whose command matches no recorded journey still runs, but its result hints that the recipe is not in the repo.
 
-At any point, `done-done doctor` checks the setup and changes nothing except the `--probe` call record: git, a valid `.done-done.yaml`, a writable evidence root (all required), plus the verify skill, your coding agent and its model (`agent:` in config, or the first agent on PATH that done-done can start: claude or opencode today), the judge setup and `ffprobe` (all optional). Each item reports `ok` or `missing` with the exact fix command. `done-done doctor --probe` also asks the agent one question to prove it answers (the agent itself may keep its own session files).
+At any point, `done-done doctor` checks the setup and changes nothing except the `--probe` call record: git, a valid `.done-done.yaml`, a writable evidence root (all required), plus the verify skill, your coding agent and its model (`agent:` in config, or the first agent on PATH that done-done can start; see [Agents](docs/reference.md#agents)), the judge setup and `ffprobe` (all optional). Each item reports `ok` or `missing` with the exact fix command (pi adds a `warning` row, see [Agents](docs/reference.md#agents)). `done-done doctor --probe` also asks the agent one question to prove it answers (the agent itself may keep its own session files).
 
 `done-done maintain` keeps the verify skill true and edits nothing: it checks the skill's links and feature index, checks that every `file:line` it cites exists, and has your coding agent read the source for each feature, read-only, to report drift. It ends `clean`, or `drift` with the findings to fix ([reference](docs/reference.md#keep-the-verify-skill-true)).
 

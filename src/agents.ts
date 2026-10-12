@@ -64,12 +64,10 @@ export function selectAgent(cfg: Config): { agent: string; model: string; path: 
 
 export const modelFor = (cfg: Config, agent: string) => cfg.agent_config[agent]?.model || CHEAP_MODELS[agent] || '';
 
-// The judge kept apart from the author: an explicit route, else (`judge: auto`) the first other agent
-// done-done can start, at its own model, else the author's agent in a fresh session (session-only independence).
-export function selectJudge(cfg: Config, author: string): { judge: string; model: string; independence: 'route' | 'other-agent' | 'session-only' } {
-  if (cfg.judge.route) return { judge: cfg.judge.route, model: cfg.judge.model, independence: 'route' };
-  const other = AGENTS.find((a) => a !== author && supported(a) && onPath(a));
-  return other ? { judge: other, model: modelFor(cfg, other), independence: 'other-agent' } : { judge: author, model: modelFor(cfg, author), independence: 'session-only' };
+// The judge --judge runs until judge routes land: the claude judge in judge.ts at judge.model. It is apart
+// from the author unless the author is claude too, which is session-only independence.
+export function selectJudge(cfg: Config, author: string): { model: string; independence: 'other-agent' | 'session-only' } {
+  return { model: cfg.judge.model, independence: author === 'claude' ? 'session-only' : 'other-agent' };
 }
 
 export function supported(agent: string) {

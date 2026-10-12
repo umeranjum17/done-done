@@ -8,7 +8,7 @@ import { parseArgs } from 'node:util';
 import { encode } from '@toon-format/toon';
 import { Document, parseDocument } from 'yaml';
 import { askAgent, selectAgent, selectJudge, supported } from './agents.js';
-import { AGENTS as ALL_AGENTS, type Config, home, loadConfig, UsageError } from './config.js';
+import { AGENTS as ALL_AGENTS, type Config, defaultConfig, home, loadConfig, UsageError } from './config.js';
 import { backend, type Capture, judge, type Judged, onPath } from './judge.js';
 import { checkMedia } from './media.js';
 
@@ -30,8 +30,8 @@ const AGENTS = ['claude', 'codex', 'opencode'];
 const DOCTOR_TEXT = `doctor is read-only (--probe writes only its call record) and exits 0 when every required item is ok, 2 otherwise.
   required: git (inside a repository), config (a valid .done-done.yaml), evidence_root (writable).
   optional: verify_skill (.agents/skills/verify-<app>/), agent (the configured agent, or with agent: auto the first
-  of claude, codex, opencode, pi, gemini on PATH, and its model), judge_choice (who judges: judge.route, else another
-  installed agent, else the author agent in a fresh session), judge (a claude binary, a Claude sign-in and the judge
+  of claude, codex, opencode, pi, gemini on PATH, and its model), judge_choice (the claude judge, and whether it is
+  apart from the author), judge (a claude binary, a Claude sign-in and the judge
   kit; the model is never called), ffprobe (video evidence only).
   --probe also asks the agent one JSON-schema question (one cheap model call; its record goes to
   $DONE_DONE_HOME/agents/) and then requires a valid answer.
@@ -1167,9 +1167,6 @@ function writableDir(p: string): boolean {
 }
 
 const PROBE_SCHEMA = { type: 'object', properties: { ok: { type: 'boolean' } }, required: ['ok'], additionalProperties: false };
-// The agent keys' defaults, for naming the agent when the repo config is missing or broken.
-const loadConfigDefaults = () => ({ agent: 'auto', agent_config: {}, judge: { route: '', model: '', allow_same: false } }) as unknown as Config;
-
 type DoctorCheck = { check: string; status: 'ok' | 'missing'; detail: string; fix: string };
 
 // Is this repo worth driving: git, a valid config and a writable evidence root are
@@ -1228,7 +1225,7 @@ async function cmdDoctor(argv: string[]): Promise<number> {
   try {
     agentCfg ??= loadConfig(repo ?? process.cwd(), '');
   } catch {
-    agentCfg = loadConfigDefaults();
+    agentCfg = defaultConfig(repo ?? process.cwd());
   }
   const agent = selectAgent(agentCfg);
   const what = `${agent.agent} (model ${agent.model || 'none'}; ${agent.from === 'auto' ? 'agent: auto' : 'from config'})`;
@@ -1256,15 +1253,16 @@ async function cmdDoctor(argv: string[]): Promise<number> {
       ? { check: 'ffprobe', status: 'ok', detail: `found at ${ffprobe}`, fix: '' }
       : { check: 'ffprobe', status: 'missing', detail: 'no ffprobe on PATH; video evidence is unverified, never a pass', fix: 'Install ffprobe (ffmpeg) to verify video evidence' },
   );
-  // The judge the adapters will use; until judge routes land, --judge itself still runs the claude judge above.
+  // The judge --judge runs today is the claude judge; judge.route is recorded but not used until judge routes land.
   const judging = selectJudge(agentCfg, agent.agent);
-  const planned = `${judging.judge} (model ${judging.model || 'none'})`;
+  const planned = `claude judge (model ${judging.model || 'none'})`;
+  const route = agentCfg.judge.route ? `; judge.route ${agentCfg.judge.route} is recorded, not used yet` : '';
   checks.push(
-    judging.independence !== 'session-only'
-      ? { check: 'judge_choice', status: 'ok', detail: `${planned}, ${judging.independence === 'route' ? 'from judge.route' : 'an agent other than the author'}; --judge still runs the claude judge for now`, fix: '' }
+    judging.independence === 'other-agent'
+      ? { check: 'judge_choice', status: 'ok', detail: `${planned}, a different agent from the author (${agent.agent})${route}`, fix: '' }
       : agentCfg.judge.allow_same
-        ? { check: 'judge_choice', status: 'ok', detail: `${planned} in a fresh session; judge.allow_same lets the author judge (session-only independence)`, fix: '' }
-        : { check: 'judge_choice', status: 'missing', detail: `${planned} in a fresh session: no other agent done-done can start is installed, so the author also judges (session-only independence)`, fix: 'Install a second agent or set judge.route, so the judge is not the author; or set judge.allow_same: true to accept it' },
+        ? { check: 'judge_choice', status: 'ok', detail: `${planned} in a fresh session, the same agent as the author; judge.allow_same accepts it (session-only independence)${route}`, fix: '' }
+        : { check: 'judge_choice', status: 'missing', detail: `${planned} in a fresh session, the same agent as the author (session-only independence)${route}`, fix: 'Set agent: to an agent other than claude, or set judge.allow_same: true in the global config to accept it' },
   );
   if (values.probe) {
     const record = join(home(), 'agents', `probe-${new Date().toISOString().replace(/[:.]/g, '-')}-${agent.agent}.json`);

@@ -50,7 +50,7 @@ done-done init --agent opencode
 done-done doctor
 ```
 
-`doctor` answers "is this repo worth driving" and changes nothing. It checks eight items, each reported `ok` or `missing` with the exact fix command: `git` (inside a repository), `config` (a valid `.done-done.yaml`), `evidence_root` (writable), `verify_skill` (`.agents/skills/verify-<app>/SKILL.md`), `agent` (the coding agent done-done starts, its model and where it came from; `missing` when it is not installed or done-done cannot start it yet; see [Agents](#agents)), `judge` (a `claude` binary, a Claude sign-in and the judge kit are ready; the model is never called), `ffprobe` (video evidence only) and `judge_choice` (who will judge once judge routes land: `judge.route`, else another agent done-done can start, else the author agent in a fresh session, which is `missing` unless `judge.allow_same: true`; `--judge` itself still runs the claude judge). Only the first three are required: `doctor` exits 0 when they are all ok and 2 otherwise, so missing optionals never fail the run. In a fresh repo with nothing set up, `doctor` names each missing piece, starting with `done-done init`.
+`doctor` answers "is this repo worth driving" and changes nothing. It checks eight items, each reported `ok` or `missing` with the exact fix command: `git` (inside a repository), `config` (a valid `.done-done.yaml`), `evidence_root` (writable), `verify_skill` (`.agents/skills/verify-<app>/SKILL.md`), `agent` (the coding agent done-done starts, its model and where it came from; `missing` when it is not installed or done-done cannot start it yet; see [Agents](#agents)), `judge` (a `claude` binary, a Claude sign-in and the judge kit are ready; the model is never called), `ffprobe` (video evidence only) and `judge_choice` (the claude judge that `--judge` runs, at `judge.model`: `ok` when the author agent is not claude; `missing` when it is, in a fresh session, unless `judge.allow_same: true` in the global config; `judge.route` is recorded and not used yet). Only the first three are required: `doctor` exits 0 when they are all ok and 2 otherwise, so missing optionals never fail the run. In a fresh repo with nothing set up, `doctor` names each missing piece, starting with `done-done init`.
 
 ```sh
 done-done doctor --probe
@@ -60,7 +60,7 @@ done-done doctor --probe
 
 #### Agents
 
-done-done works with the coding agent you have. `agent:` names it (`claude`, `codex`, `opencode`, `pi` or `gemini`), or a fallback list such as `[opencode, claude]`, which moves on only when an agent is not installed. `agent: auto` (the default) takes the first of claude, codex, opencode, pi, gemini on PATH that done-done can start (claude and opencode today). The model is `agent_config.<agent>.model`, else the agent's cheap default (`claude-haiku-5-5` for claude, `gpt-6-luna` for codex, `opencode-go/muse-spark-1.3-contributor` for opencode); pi and gemini have no default yet, so set one. These defaults are the cost guard: done-done never defaults to a flagship model, whatever the vendor.
+done-done works with the coding agent you have. `agent:` names it (`claude`, `codex`, `opencode`, `pi` or `gemini`), or a fallback list such as `[opencode, claude]`, which moves on only when an agent is not installed. `agent: auto` (the default) takes the first of claude, codex, opencode, pi, gemini on PATH that done-done can start (claude and opencode today). The model is `agent_config.<agent>.model` (global config only), else the agent's cheap default (`claude-haiku-5-5` for claude, `opencode-go/muse-spark-1.3-contributor` for opencode); codex, pi and gemini have no default yet, so set one. These defaults are the cost guard: done-done never defaults to a flagship model, whatever the vendor.
 
 Each call is a fresh, single-shot session that must answer one JSON object matching a schema. The prompt goes on stdin (claude) or into a 0600 prompt file (opencode), never in argv. done-done can start claude (`claude -p --output-format json --json-schema <schema> --model <model> --no-session-persistence`, all tools off with `--tools ''`) and opencode (`opencode run "Follow the attached instructions." --format json -m <provider/model> -f <prompt file>`, with the schema in the 0600 prompt file and every tool denied through `OPENCODE_PERMISSION`) today; codex, pi and gemini come next.
 
@@ -237,11 +237,11 @@ There are two files. Unknown keys are an error in both.
 evidence:
   local_root: ~/.done-done/evidence   # evidence root for repos that set none (<local_root>/<app>)
 agent: auto                           # also allowed in .done-done.yaml, which wins; see Agents
-agent_config:
-  codex: { model: gpt-6-luna }        # per-agent model; also allowed in .done-done.yaml
-judge:                                # used only when the judge is on; `judge: auto` is the default choice
-  route: ''                           # a BYOKit route for the judge (judge routes land next); empty: another agent
-  allow_same: false                   # true: accept the author agent as its own judge; also allowed in .done-done.yaml
+agent_config:                         # per-agent model; global only, a project file may not set it
+  opencode: { model: opencode-go/muse-spark-1.3-contributor }
+judge:                                # used only when the judge is on
+  route: ''                           # recorded only; judge routes land next, and --judge runs the claude judge until then
+  allow_same: false                   # true: accept the claude judge as the author's session-only judge; global only
   model: claude-haiku-5-5              # the default: cheap and reads images; set any model you like
   bin: /usr/local/bin/claude          # default: the first `claude` on PATH
   config_dir: ~/.done-done/claude     # the default; a sign-in folder for done-done only
@@ -260,7 +260,7 @@ judge:                                # used only when the judge is on; `judge: 
 | `checks.not_proven` | `inconclusive`; `allow` is honoured only from `--trusted-ref` |
 | `checks.fix_title` | `^(fix\|bugfix\|hotfix)\b`: titles that need a repro |
 | `judge.enabled` | `false`: judge relevance on every `check` and `receipt` |
-| `agent`, `agent_config.<agent>.model`, `judge.allow_same` | as in the global file; set here, they win |
+| `agent` | as in the global file; set here, it wins |
 
 **Precedence:** built-in defaults, then the global file, then the project file.
 

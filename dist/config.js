@@ -14,11 +14,11 @@ export class UsageError extends Error {
 export const AGENTS = ['claude', 'codex', 'opencode', 'pi', 'gemini'];
 // The cost guard is this table: a default model is always the agent's cheap one, never a flagship,
 // whatever the vendor; any other model runs only when the user names it. pi and gemini get theirs with their adapters.
-export const CHEAP_MODELS = { claude: 'claude-haiku-5-5', codex: 'gpt-6-luna', opencode: 'opencode-go/muse-spark-1.3-contributor' };
+export const CHEAP_MODELS = { claude: 'claude-haiku-5-5', opencode: 'opencode-go/muse-spark-1.3-contributor' };
 // Where each key may be set. Global-only keys describe the machine; repo-only keys describe the project; `any` may be in either.
 const KEYS = {
     agent: { scope: 'any', type: 'agent' },
-    agent_config: { scope: 'any', type: 'agent_config' },
+    agent_config: { scope: 'global', type: 'agent_config' },
     'evidence.local_root': { scope: 'global', type: 'string' },
     app: { scope: 'repo', type: 'string' },
     skill: { scope: 'repo', type: 'string' },
@@ -33,7 +33,7 @@ const KEYS = {
     'judge.bin': { scope: 'global', type: 'string' },
     'judge.config_dir': { scope: 'global', type: 'string' },
     'judge.route': { scope: 'global', type: 'string' },
-    'judge.allow_same': { scope: 'any', type: 'boolean' },
+    'judge.allow_same': { scope: 'global', type: 'boolean' },
 };
 const SECTIONS = new Set(['evidence', 'checks', 'judge']);
 // The judge runs through the user's own `claude` binary until judge routes land, so its default is Claude's cheap model.
@@ -46,8 +46,6 @@ function flatten(doc, file) {
     if (typeof doc !== 'object' || Array.isArray(doc))
         throw new UsageError(`${file}: top level must be a mapping`);
     for (const [k, v] of Object.entries(doc)) {
-        if (k === 'judge' && v === 'auto')
-            continue; // the default judge choice, spelled out
         if (SECTIONS.has(k)) {
             if (v == null)
                 continue;
@@ -109,10 +107,9 @@ function readOptional(path) {
         throw new UsageError(`${path}: ${e.message}`);
     }
 }
-// Precedence: built-in defaults, then the global file, then the project file.
-// `projectText` overrides reading <repo>/.done-done.yaml (used for --trusted-ref).
-export function loadConfig(repo, projectText) {
-    const cfg = {
+// The built-in defaults, before any config file is read.
+export function defaultConfig(repo) {
+    return {
         agent: 'auto',
         agent_config: {},
         app: basename(repo),
@@ -121,8 +118,13 @@ export function loadConfig(repo, projectText) {
         evidence: { local_root: join(home(), 'evidence'), root: '', allow_dirty: false, ignore_paths: [] },
         checks: { not_proven: 'inconclusive', fix_title: '^(fix|bugfix|hotfix)\\b' },
         judge: { enabled: false, model: DEFAULT_JUDGE_MODEL, bin: '', config_dir: join(home(), 'claude'), route: '', allow_same: false },
-        trusted: projectText != null,
+        trusted: false,
     };
+}
+// Precedence: built-in defaults, then the global file, then the project file.
+// `projectText` overrides reading <repo>/.done-done.yaml (used for --trusted-ref).
+export function loadConfig(repo, projectText) {
+    const cfg = { ...defaultConfig(repo), trusted: projectText != null };
     const globalFile = join(home(), 'config.yaml');
     apply(cfg, readOptional(globalFile), globalFile, 'global');
     const projectFile = join(repo, '.done-done.yaml');

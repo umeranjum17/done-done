@@ -38,7 +38,7 @@ const FLAGS: Record<string, string> = {
   '--claim-id <id>': 'the claim the evidence proves; evidence already used for another claim id is reuse (default: the current branch, or the PR branch with --from <PR URL>; required on a detached HEAD)',
   '--judge': 'a model says whether each PNG/JPEG capture shows the outcome (off by default; or judge.enabled: true)',
   '--verify <head>': 'read-only: verify the receipt recorded for <head>',
-  '--agent <agent>': 'also add a SessionStart hook to .claude/settings.json (claude) or .codex/hooks.json (codex), or a plugin to .opencode/plugins (opencode), that shows `done-done` to each session (opt-in)',
+  '--agent <agent>': 'also add a SessionStart hook to .claude/settings.json (claude) or .codex/hooks.json (codex) that shows `done-done` to each session, or a plugin to .opencode/plugins that adds it to the first message of each opencode session (opt-in)',
 };
 // `more` is the reference text a command needs beyond its flags, shared with the top-level help.
 const COMMANDS: Record<string, { usage: [string, string][]; flags: string[]; more: string[] }> = {
@@ -773,9 +773,13 @@ function opencodePlugin(repo: string): { file: string; text?: string } {
 // hook runs \`${CLAUDE_HOOK}\` and appends its output to the message parts.
 // Without done-done on PATH it appends nothing and never throws, so it never breaks
 // a session. Other files in .opencode/plugins/ are untouched; delete this file to opt out.
-import { execFileSync } from "node:child_process";
+import { execFile } from "node:child_process";
 
 const COMMAND = "${CLAUDE_HOOK}";
+
+const run = (cwd) => new Promise((resolve) => {
+  execFile("sh", ["-c", COMMAND], { cwd, encoding: "utf8", timeout: 30000 }, (error, stdout) => resolve(error ? "" : stdout.trim()));
+});
 
 export const DoneDonePlugin = async ({ directory }) => {
   const seen = new Set();
@@ -783,12 +787,8 @@ export const DoneDonePlugin = async ({ directory }) => {
     "chat.message": async (input, output) => {
       if (seen.has(input.sessionID)) return;
       seen.add(input.sessionID);
-      try {
-        const state = execFileSync("sh", ["-c", COMMAND], { cwd: directory, encoding: "utf8", timeout: 30000 }).trim();
-        if (state) output.parts.push({ type: "text", text: state });
-      } catch {
-        // Silent: a missing done-done or a slow run must never break the session.
-      }
+      const state = await run(directory);
+      if (state) output.parts.push({ type: "text", text: state });
     },
   };
 };
@@ -863,6 +863,7 @@ function cmdInit(argv: string[]): number {
   }
   const root = shown(repo, cfg.evidence.root);
   const check = 'done-done check --outcome "<what you proved>" <files it recorded>';
+  emit({
   emit({
     command: 'init',
     result: 'pass',

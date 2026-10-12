@@ -1384,6 +1384,10 @@ test('a runner killed mid-step shows as failed at that step, and status stops th
   assert.ok(existsSync(join(runs, run.run_id, 'journey.killed')), 'the kill is recorded once');
   const s = toon(r);
   assert.equal(s.status, 'failed');
+  assert.equal(toon(dd('history')).history.find((x) => x.run_id === run.run_id).status, 'failed', 'history agrees with status');
+  const a = dd('abort', '--run', run.run_id);
+  assert.equal(a.code, 1, a.out);
+  assert.equal(toon(a).status, 'failed', 'abort does not cancel a run whose runner is gone');
   assert.equal(s.steps[1].status, 'failed');
   assert.match(s.reason, new RegExp(`^the runner died at step drive \\(pid ${run.runner.pid},`));
   assert.equal(JSON.parse(readFileSync(join(runs, run.run_id, 'run.json'), 'utf8')).status, 'running', 'status only reads the store');
@@ -1991,4 +1995,226 @@ test('the agent comes from config (a fallback list moves past missing agents), a
   const broken = toon(doctorIn(repo, s.env, 'doctor'));
   assert.equal(broken.checks.find((x) => x.check === 'agent').status, 'missing');
   assert.match(broken.checks.find((x) => x.check === 'agent').detail, /unknown key judge\.modle/, 'a broken global config is named, never replaced by built-in defaults');
+});
+
+test('history lists newest first and logs tails the step log', () => {
+  const { dd } = setup();
+  const a = toon(dd('verify', 'shots', '--outcome', 'home renders', '--foreground')).run_id;
+  const b = toon(dd('verify', 'shots', '--outcome', 'home renders', '--foreground')).run_id;
+  const h = toon(dd('history'));
+  assert.deepEqual(h.history.map((x) => x.run_id), [b, a]);
+  assert.equal(toon(dd('history', '--limit', '1')).history.length, 1);
+  assert.equal(dd('history', '--limit', '0').code, 2);
+  const l = toon(dd('logs', '--step', 'check'));
+  assert.equal(l.step, 'check');
+  assert.ok(l.log.join('\n').includes('pass'));
+  assert.equal(dd('logs', '--step', 'nope').code, 2);
+});
+
+test('abort stops a live run and status says cancelled', async () => {
+  const { dd, runningAt } = slowRepo();
+  assert.equal(dd('verify', 'slow', '--outcome', 'home renders', '--no-wait').code, 4);
+  const run = await runningAt('drive');
+  assert.equal(dd('abort', '--run', run.run_id).code, 0);
+  const s = toon(dd('status', '--run', run.run_id));
+  assert.equal(s.status, 'cancelled');
+  assert.equal(dd('status', '--run', run.run_id).code, 1);
+  assert.ok(await groupGone(run.runner.journey_pgid), 'journey group gone');
+  assert.equal(dd('abort', '--run', run.run_id).code, 1, 'second abort fails');
+});
+
+test('rerun after a killed runner reuses resolve and passes', async () => {
+  const { dd, runningAt, release, runs } = slowRepo();
+  assert.equal(dd('verify', 'slow', '--outcome', 'home renders', '--no-wait').code, 4);
+  const run = await runningAt('drive');
+  process.kill(run.runner.pid, 'SIGKILL');
+  let f;
+  for (let i = 0; i < 100 && (f = dd('status', '--run', run.run_id)).code === 4; i++) await new Promise((r) => setTimeout(r, 50));
+  assert.equal(f.code, 1, f.out);
+  writeFileSync(release, '');
+  const r = dd('rerun', '--run', run.run_id);
+  assert.equal(r.code, 0, r.out);
+  const s = toon(r);
+  assert.equal(s.result, 'pass');
+  const rerunEvent = readFileSync(join(runs, s.run_id, 'events.jsonl'), 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l)).find((e) => e.rerun_of);
+  assert.deepEqual(rerunEvent.reused, ['resolve']);
+});
+
+test('a rerun whose check fails does not carry the earlier receipt', () => {
+  const { dd, repo } = setup();
+  const a = toon(dd('verify', 'shots', '--outcome', 'home renders', '--foreground'));
+  assert.equal(a.result, 'pass');
+  assert.ok(a.receipt);
+  rmSync(join(repo, '.proof', a.run_id, 'home.png'));
+  const r = dd('rerun', '--run', a.run_id);
+  const s = toon(r);
+  assert.notEqual(s.result, 'pass', r.out);
+  assert.equal(s.receipt, undefined);
+  assert.notEqual(s.steps.find((x) => x.name === 'receipt').status, 'completed');
+});
+
+test('a rerun does not reuse a drive recorded from a dirty tree', () => {
+  const t = setup('app: notes\nevidence:\n  root: .proof\n  ignore_paths: ["docs/**"]\n  allow_dirty: true\njourneys:\n  shots:\n    command: node make-shots.mjs ${RUN_ID}\n');
+  writeFileSync(join(t.repo, 'src', 'app.js'), 'export const app = 2;\n');
+  const a = toon(t.dd('verify', 'shots', '--outcome', 'home renders', '--foreground'));
+  execFileSync('git', ['checkout', '--', 'src/app.js'], { cwd: t.repo, env: t.env, stdio: 'pipe' });
+  const r = toon(t.dd('rerun', '--run', a.run_id));
+  const rerunEvent = readFileSync(join(t.env.DONE_DONE_HOME, 'runs', 'notes', r.run_id, 'events.jsonl'), 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l)).find((e) => e.rerun_of);
+  assert.deepEqual(rerunEvent.reused, ['resolve']);
+});
+
+test('a rerun whose source record is gone starts a fresh run', () => {
+  const t = setup();
+  const a = toon(t.dd('verify', 'shots', '--outcome', 'home renders', '--foreground'));
+  rmSync(JSON.parse(readFileSync(join(t.env.DONE_DONE_HOME, 'runs', 'notes', a.run_id, 'run.json'), 'utf8')).record);
+  const r = t.dd('rerun', '--run', a.run_id);
+  assert.equal(r.code, 0, r.out);
+  assert.equal(toon(r).result, 'pass');
+});
+
+test('logs reports zero lines for an empty step log', () => {
+  const t = setup();
+  const a = toon(t.dd('verify', 'shots', '--outcome', 'home renders', '--foreground'));
+  const r = toon(t.dd('logs', '--step', 'drive', '--run', a.run_id));
+  assert.equal(r.lines, 0);
+  assert.deepEqual(r.log, []);
+});
+
+test('abort on a run whose runner died still stops its orphaned journey', async () => {
+  const t = setup();
+  const journey = spawn('sleep', ['30'], { detached: true, stdio: 'ignore' });
+  after(() => { try { process.kill(-journey.pid, 'SIGKILL'); } catch { /* already gone */ } });
+  const dead = spawnSync(process.execPath, ['-e', ''], { encoding: 'utf8' });
+  const { id } = pendingRun(t, (run) => {
+    run.status = 'running';
+    run.runner = { pid: dead.pid, started: new Date().toISOString(), heartbeat: new Date().toISOString(), journey_pgid: journey.pid };
+  });
+  assert.equal(t.dd('abort', '--run', id).code, 1);
+  await new Promise((r) => setTimeout(r, 300));
+  assert.throws(() => process.kill(-journey.pid, 0), 'the orphaned journey group was signalled');
+});
+
+test('a cancelled run shows the step it was in as cancelled', () => {
+  const t = setup();
+  const { id } = pendingRun(t, (run) => {
+    run.steps[0].status = 'running';
+  });
+  assert.equal(t.dd('abort', '--run', id).code, 0);
+  const s = toon(t.dd('status', '--run', id));
+  assert.equal(s.status, 'cancelled');
+  assert.equal(s.steps[0].status, 'cancelled');
+  assert.equal(s.steps[1].status, 'pending');
+});
+
+// A run as `verify` left it, rewritten to pending with no runner: the state a run is in before its runner boots.
+function pendingRun(t, edit = () => {}) {
+  const src = toon(t.dd('verify', 'shots', '--outcome', 'home renders', '--foreground'));
+  const id = `pending-${randomUUID()}`;
+  const dir = join(t.env.DONE_DONE_HOME, 'runs', 'notes', id);
+  mkdirSync(join(dir, 'logs'), { recursive: true });
+  const run = JSON.parse(readFileSync(join(t.env.DONE_DONE_HOME, 'runs', 'notes', src.run_id, 'run.json'), 'utf8'));
+  Object.assign(run, { run_id: id, status: 'pending', steps: run.steps.map((s) => ({ name: s.name, status: 'pending' })), created: new Date().toISOString() });
+  for (const k of ['runner', 'result', 'reason', 'record', 'receipt']) delete run[k];
+  edit(run);
+  writeFileSync(join(dir, 'run.json'), JSON.stringify(run, null, 2));
+  return { id, dir };
+}
+
+test('a runner started for an aborted run exits without running the journey', () => {
+  const t = setup();
+  const { id, dir } = pendingRun(t);
+  assert.equal(t.dd('abort', '--run', id).code, 0);
+  const r = spawnSync(process.execPath, [CLI, '__runner', dir], { cwd: t.repo, env: t.env, encoding: 'utf8' });
+  assert.equal(r.status, 0, r.stderr);
+  assert.equal(JSON.parse(readFileSync(join(dir, 'run.json'), 'utf8')).status, 'cancelled');
+  assert.equal(existsSync(join(dir, 'runner.lock')), false, 'no runner took the run');
+  assert.equal(existsSync(join(t.repo, '.proof', id)), false, 'the journey never ran');
+});
+
+test('a reused drive whose record cannot be read fails the drive step', () => {
+  const t = setup();
+  const { dir } = pendingRun(t, (run) => {
+    run.steps[0].status = 'completed';
+    run.steps[1].status = 'completed';
+    run.record = join(t.dir, 'missing-record.json');
+  });
+  const r = spawnSync(process.execPath, [CLI, '__runner', dir], { cwd: t.repo, env: t.env, encoding: 'utf8' });
+  assert.equal(r.status, 0, r.stderr);
+  const run = JSON.parse(readFileSync(join(dir, 'run.json'), 'utf8'));
+  assert.equal(run.status, 'failed');
+  assert.match(run.reason, /^drive: /);
+  assert.equal(run.steps[0].status, 'completed');
+  assert.equal(run.steps[1].status, 'failed');
+});
+
+test('abort refuses when the runner pid is not confirmed as this run\'s runner', async () => {
+  const t = setup();
+  const unrelated = spawn('sleep', ['30'], { stdio: 'ignore' });
+  after(() => unrelated.kill('SIGKILL'));
+  const { id, dir } = pendingRun(t, (run) => {
+    run.status = 'running';
+    run.runner = { pid: unrelated.pid, started: new Date().toISOString(), heartbeat: new Date().toISOString() };
+  });
+  const r = t.dd('abort', '--run', id);
+  const a = toon(r);
+  assert.equal(r.code, 1);
+  assert.match(a.reason, new RegExp(`could not confirm pid ${unrelated.pid}`));
+  assert.equal(a.status, 'running');
+  assert.equal(JSON.parse(readFileSync(join(dir, 'run.json'), 'utf8')).status, 'running');
+  await new Promise((r) => setTimeout(r, 300));
+  assert.equal(unrelated.signalCode, null, 'the unrelated process was not signalled');
+  assert.equal(unrelated.exitCode, null, 'the unrelated process is still running');
+});
+
+test('rerun refuses a run whose runner is still open', () => {
+  const t = setup();
+  const { id } = pendingRun(t);
+  const r = t.dd('rerun', '--run', id);
+  assert.equal(r.code, 2, r.out);
+  assert.match(toon(r).help[0], /abort --run/);
+});
+
+test('rerun refuses while a dead runner left its journey running, and starts no second run', async () => {
+  const { dd, runs, runningAt, release } = slowRepo();
+  assert.equal(dd('verify', 'slow', '--outcome', 'home and settings render', '--no-wait').code, 4);
+  const run = await runningAt('drive');
+  process.kill(run.runner.pid, 'SIGKILL');
+  for (let i = 0; i < 100; i++) {
+    try {
+      process.kill(run.runner.pid, 0);
+    } catch {
+      break;
+    }
+    await new Promise((r) => setTimeout(r, 50));
+  }
+  try {
+    const before = readdirSync(runs).length;
+    const r = dd('rerun', '--run', run.run_id);
+    assert.equal(r.code, 2, r.out);
+    assert.match(toon(r).help[0], /status --run/);
+    assert.equal(readdirSync(runs).length, before, 'no run was started');
+    assert.doesNotThrow(() => process.kill(-run.runner.journey_pgid, 0), 'the orphan journey is still running');
+  } finally {
+    writeFileSync(release, '');
+    try {
+      process.kill(-run.runner.journey_pgid, 'SIGKILL');
+    } catch {
+      // The journey already exited.
+    }
+  }
+});
+
+test('attach streams a running run to its end', async () => {
+  const { repo, env, release, dd } = slowRepo();
+  assert.equal(dd('verify', 'slow', '--outcome', 'home renders', '--no-wait').code, 4);
+  const child = spawn(process.execPath, [CLI, 'attach'], { cwd: repo, env, encoding: 'utf8' });
+  let out = '', err = '';
+  child.stdout.on('data', (d) => (out += d));
+  child.stderr.on('data', (d) => (err += d));
+  await new Promise((r) => setTimeout(r, 500));
+  writeFileSync(release, '');
+  const code = await new Promise((r) => child.on('close', r));
+  assert.equal(code, 0, out + err);
+  assert.match(err, /running/, 'events streamed to stderr');
+  assert.equal(toon({ out }).result, 'pass');
 });

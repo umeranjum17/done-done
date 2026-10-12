@@ -54,6 +54,8 @@ const FLAGS = {
     '--foreground': 'run every step in this process instead of a detached runner (use in CI)',
     '--run <run-id>': 'the run to show (default: the newest run of this checkout)',
     '--probe': 'ask the configured agent one JSON-schema question and require a valid answer (one call at the agent\'s model, its cheap default unless you set agent_config.<agent>.model)',
+    '--step <name>': 'the step log to show (resolve, drive, check, receipt, report)',
+    '--limit <n>': 'how many past runs to list (default all)',
     '--agent <agent>': 'also add a SessionStart hook to .claude/settings.json (claude) or .codex/hooks.json (codex) that shows `done-done` to each session, or a plugin to .opencode/plugins that adds it to the first message of each opencode session (opt-in)',
 };
 // `more` is the reference text a command needs beyond its flags, shared with the top-level help.
@@ -117,10 +119,35 @@ const COMMANDS = {
         flags: ['--run <run-id>'],
         more: [RUNS_TEXT],
     },
+    attach: {
+        usage: [['done-done attach [--run <run-id>]', "stream a run's events until it ends, then show it"]],
+        flags: ['--run <run-id>'],
+        more: [RUNS_TEXT],
+    },
+    logs: {
+        usage: [['done-done logs --step <name> [--run <run-id>] [--full]', 'show a step log (tail by default)']],
+        flags: ['--step <name>', '--run <run-id>'],
+        more: [RUNS_TEXT],
+    },
+    rerun: {
+        usage: [['done-done rerun [--run <run-id>] [--wait | --no-wait]', 'run again from the failed step, reusing steps whose inputs did not change; wait (default) or return at once (exit 4)']],
+        flags: ['--run <run-id>', '--wait', '--no-wait'],
+        more: [RUNS_TEXT],
+    },
+    abort: {
+        usage: [['done-done abort [--run <run-id>]', 'stop a live run and its journey, and mark it cancelled']],
+        flags: ['--run <run-id>'],
+        more: [RUNS_TEXT],
+    },
+    history: {
+        usage: [['done-done history [--limit <n>]', 'list past runs, newest first']],
+        flags: ['--limit <n>'],
+        more: [RUNS_TEXT],
+    },
 };
 const rows = (pairs, width = Math.max(...pairs.map(([a]) => a.length)) + 3) => pairs.map(([a, b]) => `  ${a}${' '.repeat(Math.max(3, width - a.length))}${b}`).join('\n');
 const GLOBAL_TEXT = `global flags: --json (JSON instead of TOON), --full (do not truncate lists), --help (this command's usage)
-exit codes: 0 pass, 1 fail, 2 usage or config error, 3 inconclusive, 4 the run is still running (verify, status)`;
+exit codes: 0 pass, 1 fail, 2 usage or config error, 3 inconclusive, 4 the run is still running (verify, rerun, status)`;
 const USAGE_TEXT = `install: npm install -g --prefix ~/.local --allow-git=all github:umeranjum17/done-done-axi (installs done-done-axi and done-done), or run npx -y --allow-git=all github:umeranjum17/done-done-axi <command>
 usage:
 ${rows([['done-done', "show this repo's config state and the next step"], ...Object.values(COMMANDS).flatMap((c) => c.usage)], 46)}
@@ -743,16 +770,49 @@ const createOnce = (path) => {
     }
 };
 const evidenceOf = (repo, cfg, rec) => rec.files.map((f) => citable(repo, join(cfg.evidence.root, f.path)));
+// Default run: the newest run of this checkout, as status does.
+function pickId(root, repo, cmd, cfg, id) {
+    const mine = existsSync(root) ? readdirSync(root).filter((n) => existsSync(join(root, n, 'run.json'))).map((n) => loadRun(join(root, n))).filter((r) => r.repo === repo) : [];
+    const found = id ?? mine.sort((a, b) => a.created.localeCompare(b.created)).pop()?.run_id;
+    if (!found)
+        throw new UsageError(`no runs for ${cfg.app} in this checkout yet`, `Start one: done-done verify ${Object.keys(cfg.journeys).length > 1 ? '<journey> ' : ''}--outcome "<what a user can now do>"`);
+    if (!/^[\w-]+$/.test(found) || !existsSync(join(root, found, 'run.json')))
+        throw new UsageError(`no run ${found} in ${root}`, `Show the newest run: done-done ${cmd}`);
+    return found;
+}
+function skillHash(repo, cfg) {
+    const dir = join(repo, cfg.skill);
+    if (!existsSync(dir))
+        return '';
+    try {
+        const files = readdirSync(dir, { recursive: true, withFileTypes: true }).filter((e) => e.isFile()).map((e) => join(e.parentPath, e.name)).sort();
+        const h = createHash('sha256');
+        for (const f of files)
+            h.update(readFileSync(f));
+        return h.digest('hex');
+    }
+    catch {
+        return '';
+    }
+}
+function inputsOf(repo, cfg, journey) {
+    const h = head(repo);
+    const j = cfg.journeys[journey];
+    return { head: h.commit, journey: sha256(Buffer.from(`${j?.command ?? ''}\n${j?.timeout ?? '30m'}`)), skill: skillHash(repo, cfg) };
+}
 function saveRun(dir, run) {
     run.updated = now();
-    writeFileSync(join(dir, 'run.json.tmp'), `${JSON.stringify(run, null, 2)}\n`);
-    renameSync(join(dir, 'run.json.tmp'), join(dir, 'run.json'));
+    const tmp = join(dir, `run.json.${process.pid}.tmp`);
+    writeFileSync(tmp, `${JSON.stringify(run, null, 2)}\n`);
+    renameSync(tmp, join(dir, 'run.json'));
 }
 const loadRun = (dir) => JSON.parse(readFileSync(join(dir, 'run.json'), 'utf8'));
 const logEvent = (dir, e) => appendFileSync(join(dir, 'events.jsonl'), `${JSON.stringify({ at: now(), ...e })}\n`);
 // The verify steps, all plain code: resolve the head, drive the journey, check its evidence, record a receipt, report.
 async function runVerify(dir) {
     const run = loadRun(dir);
+    if (run.status === 'cancelled')
+        return;
     const started = now();
     // The lock refuses a second runner on this run; it stays, so a finished run is never run again.
     writeFileSync(join(dir, 'runner.lock'), `${process.pid} ${started}\n`, { flag: 'wx' });
@@ -767,8 +827,8 @@ async function runVerify(dir) {
     let step;
     const set = (s, status, extra = {}) => {
         Object.assign(s, { status, [status === 'running' ? 'started' : 'ended']: now() }, extra);
-        saveRun(dir, run);
         logEvent(dir, { step: s.name, status });
+        saveRun(dir, run);
     };
     const begin = (name) => set((step = run.steps.find((s) => s.name === name)), 'running');
     const log = (name, result) => writeFileSync(join(dir, 'logs', `${name}.log`), `${encode(result)}\n`);
@@ -781,40 +841,54 @@ async function runVerify(dir) {
         set(step, 'completed');
     };
     try {
-        begin('resolve');
+        const done = (n) => run.steps.find((s) => s.name === n).status === 'completed';
         const cfg = loadConfig(run.repo);
         const journey = cfg.journeys[run.journey];
         const command = journey?.command;
         const timeout = journey?.timeout ?? '30m';
+        const limit = parseDuration(timeout);
+        const reused = done('resolve');
+        if (reused)
+            logEvent(dir, { step: 'resolve', status: 'completed', reused: true });
+        else
+            begin('resolve');
         if (!command)
             throw new Error(`journey ${run.journey} is not in .done-done.yaml`);
-        const limit = parseDuration(timeout);
         if (limit === null)
             throw new Error(`journeys.${run.journey}.timeout must be a duration such as 30m or 90s, not ${timeout}`);
-        set(step, 'completed');
-        begin('drive');
-        const rec = openRun(run.repo, cfg, run.journey, command.replaceAll('${RUN_ID}', run.run_id), run.run_id);
-        const fd = openSync(join(dir, 'logs', 'drive.log'), 'a');
-        // An async child keeps the heartbeat going while the journey runs. The journey gets its own process group, so a
-        // timeout or a dead runner can kill it and everything it started.
-        const child = spawn(rec.command, { cwd: run.repo, shell: true, detached: true, stdio: ['ignore', fd, fd], env: { ...process.env, DONE_DONE_RUN_ID: rec.run_id, DONE_DONE_EVIDENCE_ROOT: runDir(cfg, rec.run_id) } });
-        run.runner.journey_pgid = child.pid;
-        saveRun(dir, run);
-        let timedOut = false;
-        const timer = setTimeout(() => {
-            timedOut = true;
-            killGroup(child.pid);
-        }, limit);
-        rec.exit = await new Promise((done) => child.on('close', (code) => done(code ?? 1)));
-        clearTimeout(timer);
-        closeSync(fd);
-        const sealed = closeRun(run.repo, cfg, rec);
-        run.record = join(recordsDir(cfg), `${rec.run_id}.json`);
-        set(step, sealed.code === PASS ? 'completed' : 'failed', { exit: rec.exit, outputs: evidenceOf(run.repo, cfg, rec) });
-        if (timedOut)
-            return finish('inconclusive', `drive: journey timed out after ${timeout}`);
-        if (sealed.code !== PASS)
-            return finish('fail', `drive: ${sealed.reason}`);
+        if (!reused)
+            set(step, 'completed');
+        let rec;
+        if (done('drive') && run.record) {
+            begin('drive');
+            rec = JSON.parse(readFileSync(run.record, 'utf8'));
+            set(step, 'completed');
+        }
+        else {
+            begin('drive');
+            rec = openRun(run.repo, cfg, run.journey, command.replaceAll('${RUN_ID}', run.run_id), run.run_id);
+            const fd = openSync(join(dir, 'logs', 'drive.log'), 'a');
+            // An async child keeps the heartbeat going while the journey runs. The journey gets its own process group, so a
+            // timeout or a dead runner can kill it and everything it started.
+            const child = spawn(rec.command, { cwd: run.repo, shell: true, detached: true, stdio: ['ignore', fd, fd], env: { ...process.env, DONE_DONE_RUN_ID: rec.run_id, DONE_DONE_EVIDENCE_ROOT: runDir(cfg, rec.run_id) } });
+            run.runner.journey_pgid = child.pid;
+            saveRun(dir, run);
+            let timedOut = false;
+            const timer = setTimeout(() => {
+                timedOut = true;
+                killGroup(child.pid);
+            }, limit);
+            rec.exit = await new Promise((done) => child.on('close', (code) => done(code ?? 1)));
+            clearTimeout(timer);
+            closeSync(fd);
+            const sealed = closeRun(run.repo, cfg, rec);
+            run.record = join(recordsDir(cfg), `${rec.run_id}.json`);
+            set(step, sealed.code === PASS ? 'completed' : 'failed', { exit: rec.exit, outputs: evidenceOf(run.repo, cfg, rec) });
+            if (timedOut)
+                return finish('inconclusive', `drive: journey timed out after ${timeout}`);
+            if (sealed.code !== PASS)
+                return finish('fail', `drive: ${sealed.reason}`);
+        }
         begin('check');
         const files = rec.files.map((f) => join(cfg.evidence.root, f.path));
         const checked = await runCheck(['--outcome', run.claim, ...files, ...(run.claim_id ? ['--claim-id', run.claim_id] : [])]);
@@ -837,11 +911,13 @@ async function runVerify(dir) {
         for (const s of run.steps)
             if (s.status === 'pending')
                 s.status = 'skipped';
-        Object.assign(run, { status: 'failed', reason: `${step?.name}: ${errorText(e)}` });
+        Object.assign(run, { status: 'failed', reason: `${step?.name ?? 'setup'}: ${errorText(e)}` });
         if (step)
             set(step, 'failed');
-        else
+        else {
+            logEvent(dir, { status: 'failed' });
             saveRun(dir, run);
+        }
     }
     finally {
         clearInterval(beat);
@@ -856,6 +932,16 @@ const alive = (pid) => {
         return e.code === 'EPERM';
     }
 };
+const runnerGone = (run) => (run.runner ? !alive(run.runner.pid) : Date.now() - Date.parse(run.created) > STALE_MS);
+const isOurRunner = (pid, dir) => {
+    const r = spawnSync('ps', ['-p', String(pid), '-o', 'args='], { encoding: 'utf8' });
+    return r.status === 0 && r.stdout.includes(`__runner ${dir}`);
+};
+const shownStatus = (run) => ((run.status === 'pending' || run.status === 'running') && runnerGone(run) ? 'failed' : run.status);
+const reapJourney = (dir, run) => {
+    if (run.runner?.journey_pgid && createOnce(join(dir, 'journey.killed')))
+        killGroup(run.runner.journey_pgid);
+};
 // One run as status shows it. A run still marked running whose runner is gone is shown as failed at its step.
 // `gone`: the caller saw its runner child exit, which also covers a runner that died before it wrote its pid.
 function showRun(dir, cfg, command, gone = false) {
@@ -864,14 +950,13 @@ function showRun(dir, cfg, command, gone = false) {
     const at = run.steps.find((s) => s.status === 'running') ?? run.steps.find((s) => s.status === 'pending');
     let { status, reason } = run;
     const open = status === 'pending' || status === 'running';
-    if (open && (gone || (run.runner ? !alive(run.runner.pid) : Date.now() - Date.parse(run.created) > STALE_MS))) {
+    if (open && (gone || runnerGone(run))) {
         status = 'failed';
         const beat = run.runner && Math.round((Date.now() - Date.parse(run.runner.heartbeat)) / 1000);
         reason = `the runner died at step ${at?.name}${run.runner ? ` (pid ${run.runner.pid}, last heartbeat ${beat}s ago)` : ' before it started'}`;
-        if (run.runner?.journey_pgid && createOnce(join(dir, 'journey.killed')))
-            killGroup(run.runner.journey_pgid);
+        reapJourney(dir, run);
     }
-    const code = status === 'pending' || status === 'running' ? WAITING : status === 'failed' || run.result === 'fail' ? FAIL : run.result === 'inconclusive' ? INCONCLUSIVE : PASS;
+    const code = status === 'pending' || status === 'running' ? WAITING : status === 'cancelled' || status === 'failed' || run.result === 'fail' ? FAIL : run.result === 'inconclusive' ? INCONCLUSIVE : PASS;
     const again = `done-done verify ${run.journey} --outcome ${arg(run.claim)}${run.claim_id ? ` --claim-id ${arg(run.claim_id)}` : ''}`;
     const ev = cap(rec ? evidenceOf(run.repo, cfg, rec) : []);
     const result = { command, run_id: run.run_id, kind: run.kind, status };
@@ -881,7 +966,7 @@ function showRun(dir, cfg, command, gone = false) {
         result.result = run.result;
     if (reason)
         result.reason = reason;
-    Object.assign(result, { claim: run.claim, journey: run.journey, repo: run.repo, ...(rec && { head: rec.commit }), steps: run.steps.map((s) => ({ name: s.name, status: status === 'failed' && s === at ? 'failed' : s.status })) });
+    Object.assign(result, { claim: run.claim, journey: run.journey, repo: run.repo, ...(rec && { head: rec.commit }), steps: run.steps.map((s) => ({ name: s.name, status: s === at && (status === 'failed' || (status === 'cancelled' && s.status === 'running')) ? status : s.status })) });
     if (ev.items.length)
         result.evidence = ev.items;
     if (ev.omitted)
@@ -892,9 +977,14 @@ function showRun(dir, cfg, command, gone = false) {
     result.help =
         code === WAITING ? [`The run goes on without this command; read it later: done-done status --run ${run.run_id}`]
             : code === PASS ? [`Verify this receipt (CI or merge): done-done receipt --verify ${rec.commit}`]
-                : [`Read the step logs in ${shown(run.repo, join(dir, 'logs'))}`, `Fix the cause, commit, then start a new run: ${again}`];
+                : status === 'cancelled' ? [`Start again from the failed step: done-done rerun --run ${run.run_id}`, `List past runs: done-done history`]
+                    : [`Read the step logs in ${shown(run.repo, join(dir, 'logs'))}`, `Fix the cause, commit, then start a new run: ${again}`];
     emit(result);
     return code;
+}
+async function waitRun(dir, pid) {
+    while (['pending', 'running'].includes(loadRun(dir).status) && alive(pid))
+        await new Promise((r) => setTimeout(r, 200));
 }
 async function cmdVerify(argv) {
     const { values, positionals } = parseArgs({
@@ -929,6 +1019,7 @@ async function cmdVerify(argv) {
     const run = {
         schema: 2, run_id: id, kind: 'verify', app: cfg.app, repo, journey, claim: values.outcome, claim_id: values['claim-id'] ?? null, status: 'pending',
         steps: ['resolve', 'drive', 'check', 'receipt', 'report'].map((name) => ({ name, status: 'pending' })), created, updated: created,
+        inputs: inputsOf(repo, cfg, journey),
     };
     saveRun(dir, run);
     logEvent(dir, { status: 'pending' });
@@ -942,8 +1033,7 @@ async function cmdVerify(argv) {
         closeSync(fd);
         // --wait (the default) holds this command until the run ends; --no-wait returns at once.
         if (!values['no-wait'])
-            while (['pending', 'running'].includes(loadRun(dir).status) && alive(child.pid))
-                await new Promise((r) => setTimeout(r, 200));
+            await waitRun(dir, child.pid);
         return showRun(dir, cfg, 'verify', !alive(child.pid));
     }
     return showRun(dir, cfg, 'verify');
@@ -953,13 +1043,152 @@ function cmdStatus(argv) {
     const repo = repoRoot();
     const cfg = loadConfig(repo);
     const root = runsRoot(cfg.app);
-    const mine = existsSync(root) ? readdirSync(root).filter((n) => existsSync(join(root, n, 'run.json'))).map((n) => loadRun(join(root, n))).filter((r) => r.repo === repo) : [];
-    const id = values.run ?? mine.sort((a, b) => a.created.localeCompare(b.created)).pop()?.run_id;
-    if (!id)
-        throw new UsageError(`no runs for ${cfg.app} in this checkout yet`, `Start one: done-done verify ${Object.keys(cfg.journeys).length > 1 ? '<journey> ' : ''}--outcome "<what a user can now do>"`);
-    if (!/^[\w-]+$/.test(id) || !existsSync(join(root, id, 'run.json')))
-        throw new UsageError(`no run ${id} in ${root}`, 'Show the newest run: done-done status');
-    return showRun(join(root, id), cfg, 'status');
+    return showRun(join(root, pickId(root, repo, 'status', cfg, values.run)), cfg, 'status');
+}
+async function cmdAttach(argv) {
+    const { values } = parseArgs({ args: argv, options: { run: { type: 'string' } } });
+    const repo = repoRoot();
+    const cfg = loadConfig(repo);
+    const dir = join(runsRoot(cfg.app), pickId(runsRoot(cfg.app), repo, 'attach', cfg, values.run));
+    let shown = 0;
+    for (;;) {
+        const run = loadRun(dir);
+        const gone = runnerGone(run);
+        const lines = existsSync(join(dir, 'events.jsonl')) ? readFileSync(join(dir, 'events.jsonl'), 'utf8').split('\n').slice(0, -1) : [];
+        for (; shown < lines.length; shown++)
+            process.stderr.write(`${lines[shown]}\n`);
+        if (run.status === 'completed' || run.status === 'failed' || run.status === 'cancelled')
+            break;
+        if (gone)
+            break;
+        await new Promise((r) => setTimeout(r, 200));
+    }
+    return showRun(dir, cfg, 'attach');
+}
+function cmdLogs(argv) {
+    const { values } = parseArgs({ args: argv, options: { step: { type: 'string' }, run: { type: 'string' } } });
+    if (!values.step?.trim())
+        throw new UsageError('logs needs --step <name>', 'Run: done-done logs --step <drive|check|receipt> [--run <run-id>]');
+    const repo = repoRoot();
+    const cfg = loadConfig(repo);
+    const id = pickId(runsRoot(cfg.app), repo, 'logs', cfg, values.run);
+    const run = loadRun(join(runsRoot(cfg.app), id));
+    if (!run.steps.some((s) => s.name === values.step))
+        throw new UsageError(`unknown step ${values.step}; this run has: ${run.steps.map((s) => s.name).join(', ')}`, `Read the run: done-done status --run ${id}`);
+    const file = join(runsRoot(cfg.app), id, 'logs', `${values.step}.log`);
+    if (!existsSync(file))
+        throw new UsageError(`no log for step ${values.step} yet`, `Read the run: done-done status --run ${id}`);
+    const text = readFileSync(file, 'utf8');
+    const all = text === '' ? [] : text.replace(/\n$/, '').split('\n');
+    const items = FULL || all.length <= 50 ? all : all.slice(-50);
+    emit({ command: 'logs', run_id: id, step: values.step, lines: items.length, log: items, ...(all.length > items.length && { log_omitted: all.length - items.length }), help: FULL ? [`Read the run: done-done status --run ${id}`] : [`Read the full log: done-done logs --step ${values.step} --run ${id} --full`] });
+    return PASS;
+}
+const drivesClean = (record, head) => {
+    try {
+        const rec = record && JSON.parse(readFileSync(record, 'utf8'));
+        return !!rec && rec.dirty === false && rec.commit === head;
+    }
+    catch {
+        return false;
+    }
+};
+async function cmdRerun(argv) {
+    const { values } = parseArgs({ args: argv, options: { run: { type: 'string' }, wait: { type: 'boolean' }, 'no-wait': { type: 'boolean' } } });
+    if (values.wait && values['no-wait'])
+        throw new UsageError('pass only one of --wait and --no-wait');
+    const repo = repoRoot();
+    const cfg = loadConfig(repo);
+    const root = runsRoot(cfg.app);
+    const srcId = pickId(root, repo, 'rerun', cfg, values.run);
+    const src = loadRun(join(root, srcId));
+    const open = shownStatus(src);
+    if (open === 'pending' || open === 'running')
+        throw new UsageError(`run ${srcId} is still ${open}, so it cannot be rerun while its runner lives`, `Read it: done-done status --run ${srcId}; stop it first: done-done abort --run ${srcId}`);
+    const group = src.runner?.journey_pgid;
+    if (['pending', 'running'].includes(src.status) && group && alive(-group))
+        throw new UsageError(`the journey of run ${srcId} is still running, so it cannot be rerun yet`, `Read it: done-done status --run ${srcId}`);
+    const inputs = inputsOf(src.repo, loadConfig(src.repo), src.journey);
+    const same = !!src.inputs && ['head', 'journey', 'skill'].every((k) => src.inputs[k] === inputs[k]);
+    const driveReuse = same && drivesClean(src.record, src.inputs?.head);
+    const reused = (name) => (name === 'resolve' && same) || (name === 'drive' && driveReuse);
+    const id = newRunId(git(repo, 'rev-parse', 'HEAD'));
+    const dir = join(root, id);
+    mkdirSync(join(dir, 'logs'), { recursive: true });
+    const steps = src.steps.map((s) => (reused(s.name) && s.status === 'completed' ? { ...s } : { name: s.name, status: 'pending' }));
+    const created = now();
+    const run = { schema: 2, run_id: id, kind: src.kind, app: cfg.app, repo: src.repo, journey: src.journey, claim: src.claim, claim_id: src.claim_id, status: 'pending', inputs, steps, created, updated: created, ...(driveReuse && src.record && { record: src.record }) };
+    saveRun(dir, run);
+    for (const s of steps) {
+        const f = join(root, srcId, 'logs', `${s.name}.log`);
+        if (s.status === 'completed' && existsSync(f))
+            writeFileSync(join(dir, 'logs', `${s.name}.log`), readFileSync(f));
+    }
+    logEvent(dir, { status: 'pending', rerun_of: srcId, reused: steps.filter((s) => s.status === 'completed').map((s) => s.name) });
+    const fd = openSync(join(dir, 'logs', 'runner.log'), 'a');
+    const child = spawn(process.execPath, [CLI_PATH, '__runner', dir], { cwd: src.repo, detached: true, stdio: ['ignore', fd, fd] });
+    child.unref();
+    closeSync(fd);
+    if (!values['no-wait'])
+        await waitRun(dir, child.pid);
+    return showRun(dir, cfg, 'rerun', !alive(child.pid));
+}
+async function waitGone(pid) {
+    for (let i = 0; i < 25 && alive(pid); i++)
+        await new Promise((r) => setTimeout(r, 200));
+}
+async function cmdAbort(argv) {
+    const { values } = parseArgs({ args: argv, options: { run: { type: 'string' } } });
+    const repo = repoRoot();
+    const cfg = loadConfig(repo);
+    const id = pickId(runsRoot(cfg.app), repo, 'abort', cfg, values.run);
+    const dir = join(runsRoot(cfg.app), id);
+    const closed = (r, status = shownStatus(r)) => {
+        if (status === 'pending' || status === 'running')
+            return false;
+        emit({ command: 'abort', run_id: id, status, reason: `run ${id} is already ${status}`, help: [`List past runs: done-done history`, `Start again: done-done rerun --run ${id}`] });
+        return true;
+    };
+    const latest = loadRun(dir);
+    if (['pending', 'running'].includes(latest.status) && runnerGone(latest))
+        reapJourney(dir, latest);
+    if (closed(latest))
+        return FAIL;
+    if (latest.runner && !isOurRunner(latest.runner.pid, dir)) {
+        emit({ command: 'abort', run_id: id, status: latest.status, reason: `could not confirm pid ${latest.runner.pid} is this run's runner, so nothing was killed or cancelled`, help: [`Read the run: done-done status --run ${id}`] });
+        return FAIL;
+    }
+    if (latest.runner) {
+        try {
+            process.kill(latest.runner.pid, 'SIGKILL');
+        }
+        catch { /* exited since the check */ }
+        await waitGone(latest.runner.pid);
+    }
+    const after = loadRun(dir);
+    if (closed(after, after.status))
+        return FAIL;
+    reapJourney(dir, after);
+    after.status = 'cancelled';
+    after.reason = 'aborted';
+    logEvent(dir, { status: 'cancelled' });
+    saveRun(dir, after);
+    emit({ command: 'abort', run_id: id, status: 'cancelled', reason: after.reason, help: [`Read the run: done-done status --run ${id}`, `Start again: done-done rerun --run ${id}`] });
+    return PASS;
+}
+function cmdHistory(argv) {
+    const { values } = parseArgs({ args: argv, options: { limit: { type: 'string' } } });
+    if (values.limit !== undefined && (!/^\d+$/.test(values.limit) || Number(values.limit) <= 0))
+        throw new UsageError('--limit needs a positive integer', 'Run: done-done history --limit <n>');
+    const n = values.limit === undefined ? Infinity : Number(values.limit);
+    const repo = repoRoot();
+    const cfg = loadConfig(repo);
+    const root = runsRoot(cfg.app);
+    const mine = existsSync(root) ? readdirSync(root).filter((x) => existsSync(join(root, x, 'run.json'))).map((x) => loadRun(join(root, x))).filter((r) => r.repo === repo).sort((a, b) => b.created.localeCompare(a.created)) : [];
+    const matched = mine.slice(0, n);
+    const rows = cap(matched.map((r) => ({ run_id: r.run_id, kind: r.kind, status: shownStatus(r), ...(r.result && { result: r.result }), claim: r.claim, journey: r.journey, created: r.created })));
+    emit({ command: 'history', runs: matched.length, history: rows.items, ...(rows.omitted && { history_omitted: rows.omitted }), help: rows.items.length ? [`Read the newest run: done-done status --run ${rows.items[0].run_id}`] : ['Start one: done-done verify --outcome "<what a user can now do>"'] });
+    return PASS;
 }
 // Append `<rel>/` to .gitignore unless git already ignores it. Never rewrites existing bytes.
 function ensureIgnored(repo, rel) {
@@ -1649,6 +1878,16 @@ async function main(argv) {
             return await cmdVerify(rest);
         if (cmd === 'status')
             return cmdStatus(rest);
+        if (cmd === 'attach')
+            return await cmdAttach(rest);
+        if (cmd === 'logs')
+            return cmdLogs(rest);
+        if (cmd === 'rerun')
+            return await cmdRerun(rest);
+        if (cmd === 'abort')
+            return cmdAbort(rest);
+        if (cmd === 'history')
+            return cmdHistory(rest);
         if (cmd === '__runner') {
             await runVerify(rest[0]);
             return PASS;

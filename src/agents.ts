@@ -18,7 +18,7 @@ export type AgentCall = {
   schema: { required?: string[] } & Record<string, unknown>;
   cwd: string;
   timeoutMs: number;
-  tools: 'none' | 'read' | 'edit'; // none for the judge and readers
+  tools: 'none' | 'read' | 'edit'; // none for the judge and most readers; read for the claude reader
   record: string; // where the call record is written
 };
 export type AgentAnswer = { ok: boolean; answer?: Record<string, unknown>; error?: string; record?: string; recordError?: string };

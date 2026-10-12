@@ -14,9 +14,9 @@ const CITED_CHARS = 60_000;
 const BLOCKING = new Set(['coverage', 'repo-changed']);
 // Notices are listed in the run but do not make the result drift.
 const NOTICE = new Set(['truncated']);
-// Pi and gemini readers get no tools, so plain code puts each feature's cited source in the prompt. claude and
-// opencode readers read the repo themselves, with read tools only.
-const TOOLLESS_READERS = new Set(['pi', 'gemini']);
+// Readers without tools get each feature's cited source from plain code. Only claude reads the repo itself: its read
+// tools refuse paths outside it, while opencode follows an in-repo symlink to an outside target.
+const TOOLLESS_READERS = new Set(['pi', 'gemini', 'opencode']);
 const git = (cwd, ...args) => execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: 64 << 20 });
 // The read-only proof: HEAD, the status, and the content of every changed or untracked path. Regular files are hashed
 // with sha256 as they are read, and symlinks are fingerprinted by their target text, never read through.
@@ -79,7 +79,7 @@ const realInside = (repo, p) => realpathSync(p).startsWith(`${realpathSync(repo)
 function citeProblem(repo, file, line, end = line) {
     const p = resolve(repo, file);
     const r = relative(repo, p);
-    if (!r || r.startsWith('..') || isAbsolute(r))
+    if (!r || r === '..' || r.startsWith(`..${sep}`) || isAbsolute(r))
         return `${file} is outside the repository`;
     let n;
     try {
@@ -173,7 +173,8 @@ export async function maintainSteps(run, dir, cfg, h) {
     const docFiles = (dir) => readdirSync(dir, { withFileTypes: true }).flatMap((e) => {
         const p = join(dir, e.name);
         if (e.isSymbolicLink()) {
-            if (e.name.endsWith('.md') || statSync(p, { throwIfNoEntry: false })?.isDirectory())
+            const target = statSync(p, { throwIfNoEntry: false });
+            if (e.name.endsWith('.md') || !target || target.isDirectory())
                 linked(p);
             return [];
         }

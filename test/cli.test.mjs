@@ -2584,7 +2584,7 @@ test('maintain pins the read-only reader to read tools with no user settings, MC
   writeFileSync(join(env.DONE_DONE_HOME, 'config.yaml'), 'agent: opencode\n');
   assert.equal(doctorIn(repo, s.env, 'maintain', '--foreground').code, 0);
   const permission = JSON.parse(s.calls().find((c) => c.agent === 'opencode').permission);
-  assert.deepEqual([permission['*'], 'external_directory' in permission], ['deny', false]);
+  assert.deepEqual(permission, { '*': 'deny' });
 });
 
 test('maintain refuses a skill reached through a symlinked ancestor', () => {
@@ -2884,6 +2884,40 @@ test('maintain reports a cited line in an empty file as a citation finding with 
   const m = toon(r);
   assert.deepEqual([r.code, m.result], [1, 'drift'], r.out);
   assert.match(m.findings.find((f) => f.kind === 'citation').what, /docs\/empty\.md has 0 lines/, r.out);
+});
+
+test('maintain blocks a dangling symlink folder in the skill', () => {
+  const { repo, env, sh } = setup();
+  const s = stubAgents(env, JSON.stringify({ drift: [], recipe: 'open it', recipes: [], missing: [] }));
+  const skill = join(repo, '.agents', 'skills', 'verify-notes');
+  mkdirSync(join(skill, 'features'), { recursive: true });
+  writeFileSync(join(skill, 'SKILL.md'), '# verify-notes\n');
+  writeFileSync(join(skill, 'features', 'README.md'), '# features\n\n- [Home](home.md)\n');
+  writeFileSync(join(skill, 'features', 'home.md'), '# Home\n');
+  symlinkSync('../missing', join(skill, 'refs'));
+  sh('add', '-A');
+  sh('commit', '-qm', 'skill');
+  const r = doctorIn(repo, s.env, 'maintain', '--foreground');
+  const m = toon(r);
+  assert.equal(m.result, 'blocked', r.out);
+  assert.deepEqual(m.findings.map((f) => [f.kind, f.file]), [['coverage', '.agents/skills/verify-notes/refs']], r.out);
+});
+
+test('maintain reads a cited path whose first segment starts with two dots as inside the repo', () => {
+  const { repo, env, sh } = setup();
+  const s = stubAgents(env, JSON.stringify({ drift: [], recipe: 'open it', recipes: [], missing: [] }));
+  mkdirSync(join(repo, '..cache'));
+  writeFileSync(join(repo, '..cache', 'app.js'), 'export const app = 1;\n');
+  const skill = join(repo, '.agents', 'skills', 'verify-notes');
+  mkdirSync(join(skill, 'features'), { recursive: true });
+  writeFileSync(join(skill, 'SKILL.md'), '# verify-notes\n\nSee ..cache/app.js:1.\n');
+  writeFileSync(join(skill, 'features', 'README.md'), '# features\n\n- [Home](home.md)\n');
+  writeFileSync(join(skill, 'features', 'home.md'), '# Home\n');
+  sh('add', '-A');
+  sh('commit', '-qm', 'skill');
+  const r = doctorIn(repo, s.env, 'maintain', '--foreground');
+  const m = toon(r);
+  assert.deepEqual([r.code, m.result], [0, 'clean'], r.out);
 });
 
 test('maintain fingerprints an untracked file whose name has a newline', () => {

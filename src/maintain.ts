@@ -30,9 +30,9 @@ const CITED_CHARS = 60_000;
 const BLOCKING = new Set(['coverage', 'repo-changed']);
 // Notices are listed in the run but do not make the result drift.
 const NOTICE = new Set(['truncated']);
-// Pi and gemini readers get no tools, so plain code puts each feature's cited source in the prompt. claude and
-// opencode readers read the repo themselves, with read tools only.
-const TOOLLESS_READERS = new Set(['pi', 'gemini']);
+// Readers without tools get each feature's cited source from plain code. Only claude reads the repo itself: its read
+// tools refuse paths outside it, while opencode follows an in-repo symlink to an outside target.
+const TOOLLESS_READERS = new Set(['pi', 'gemini', 'opencode']);
 
 const git = (cwd: string, ...args: string[]) => execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: 64 << 20 });
 // The read-only proof: HEAD, the status, and the content of every changed or untracked path. Regular files are hashed
@@ -93,7 +93,7 @@ const realInside = (repo: string, p: string) => realpathSync(p).startsWith(`${re
 function citeProblem(repo: string, file: string, line: number, end = line): string {
   const p = resolve(repo, file);
   const r = relative(repo, p);
-  if (!r || r.startsWith('..') || isAbsolute(r)) return `${file} is outside the repository`;
+  if (!r || r === '..' || r.startsWith(`..${sep}`) || isAbsolute(r)) return `${file} is outside the repository`;
   let n: number;
   try {
     if (!realInside(repo, p)) return `${file} is outside the repository`;
@@ -188,7 +188,8 @@ export async function maintainSteps<S>(run: { repo: string; findings?: Finding[]
     readdirSync(dir, { withFileTypes: true }).flatMap((e) => {
       const p = join(dir, e.name);
       if (e.isSymbolicLink()) {
-        if (e.name.endsWith('.md') || statSync(p, { throwIfNoEntry: false })?.isDirectory()) linked(p);
+        const target = statSync(p, { throwIfNoEntry: false });
+        if (e.name.endsWith('.md') || !target || target.isDirectory()) linked(p);
         return [];
       }
       if (e.isDirectory()) return docFiles(p);

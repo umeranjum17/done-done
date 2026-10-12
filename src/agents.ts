@@ -134,8 +134,9 @@ export function askAgent(c: AgentCall): AgentAnswer {
     for (;;) {
       attempts++;
       // An ask-again names what was wrong with the last answer; the first try is the prompt untouched.
-      const promptText = attempts === 1 ? c.prompt : `${c.prompt}\n\nYour previous answer was not valid (${lastError}). Answer with only one JSON object that matches this JSON schema, and no other text:\n${JSON.stringify(c.schema)}\n`;
-      if (adapter.file) writeFileSync(join(dir, 'prompt.md'), `${promptText}\n\nAnswer with only one JSON object that matches this JSON schema, and no other text:\n${JSON.stringify(c.schema)}\n`, { mode: 0o600 });
+      const schemaTrailer = `\n\nAnswer with only one JSON object that matches this JSON schema, and no other text:\n${JSON.stringify(c.schema)}\n`;
+      const promptText = attempts === 1 ? c.prompt : `${c.prompt}\n\nYour previous answer was not valid (${lastError}).${schemaTrailer}`;
+      if (adapter.file) writeFileSync(join(dir, 'prompt.md'), attempts === 1 ? `${promptText}${schemaTrailer}` : promptText, { mode: 0o600 });
       res = spawnSync(onPath(c.agent) || c.agent, adapter.argv(c, dir), { cwd, input: adapter.file ? '' : promptText, env: { ...process.env, ...adapter.env?.(c) }, encoding: 'utf8', timeout: c.timeoutMs, maxBuffer: 64 << 20 });
       if (res.error) throw res.error;
       if (res.status !== 0) {

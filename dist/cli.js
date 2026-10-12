@@ -1513,7 +1513,7 @@ async function cmdDoctor(argv) {
             ? fixes
             : names.length
                 ? [`Capture proof with \`done-done run ${names[0]}\`, then check it with ${check}`]
-                : [`Add a journey to .done-done.yaml, commit, then \`done-done run smoke\` and ${check}`];
+                : [`Add a journey to .done-done.yaml (${journeyExample}), commit, then \`done-done run smoke\` and ${check}`];
     }
     else {
         result.help = fixes;

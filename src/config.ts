@@ -38,6 +38,15 @@ const KEYS: Record<string, { scope: 'global' | 'repo'; type: 'string' | 'boolean
 };
 const SECTIONS = new Set(['evidence', 'checks', 'judge']);
 
+// The judge default stays cheap: Haiku reads images (Anthropic vision docs list
+// text-and-image input for Haiku, and the Bedrock model card marks image input
+// supported), and the judge runs through the user's own `claude` binary, which
+// only accepts Claude model ids — so an opencode model id can never be the default here.
+// Users may still set any model they like via judge.model.
+export const DEFAULT_JUDGE_MODEL = 'claude-haiku-5-5';
+// Flagship models must never become a default again; the cheap-default test guards this.
+export const FLAGSHIP_MODEL_PATTERN = /opus|sonnet/i;
+
 export const home = () => process.env.DONE_DONE_HOME || join(homedir(), '.done-done');
 
 function flatten(doc: unknown, file: string): Map<string, unknown> {
@@ -97,7 +106,7 @@ export function loadConfig(repo: string, projectText?: string | null): Config {
     journeys: {},
     evidence: { local_root: join(home(), 'evidence'), root: '', allow_dirty: false, ignore_paths: [] },
     checks: { not_proven: 'inconclusive', fix_title: '^(fix|bugfix|hotfix)\\b' },
-    judge: { enabled: false, model: 'claude-opus-5-5', bin: '', config_dir: join(home(), 'claude') },
+    judge: { enabled: false, model: DEFAULT_JUDGE_MODEL, bin: '', config_dir: join(home(), 'claude') },
     trusted: projectText != null,
   };
   const globalFile = join(home(), 'config.yaml');

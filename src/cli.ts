@@ -8,7 +8,7 @@ import { parseArgs } from 'node:util';
 import { encode } from '@toon-format/toon';
 import { parse, stringify } from 'yaml';
 import { type Config, home, loadConfig, UsageError } from './config.js';
-import { type Capture, judge, type Judged } from './judge.js';
+import { type Capture, judge, type Judged, quote } from './judge.js';
 import { checkMedia } from './media.js';
 
 const PASS = 0, FAIL = 1, USAGE = 2, INCONCLUSIVE = 3;
@@ -252,7 +252,7 @@ function closeRun(repo: string, cfg: Config, rec: RunRecord): number {
   if (rec.command) {
     const template = rec.command.replaceAll(rec.run_id, '${RUN_ID}');
     const recorded = Object.values(cfg.journeys).some((j) => j.command === rec.command || j.command === template);
-    if (!recorded) (result.help as string[]).push(`this command's recipe is not in the repo (.done-done.yaml journeys); record it with: done-done init --journey <name> -- ${template}`);
+    if (!recorded) (result.help as string[]).push(`this command's recipe is not in the repo (.done-done.yaml journeys); record it with: done-done init --journey <name> -- ${quote(template)}`);
   }
   emit(result);
   return reason ? FAIL : PASS;

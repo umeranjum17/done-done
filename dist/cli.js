@@ -802,12 +802,13 @@ const alive = (pid) => {
     }
 };
 // One run as status shows it. A run still marked running whose runner is gone is shown as failed at its step.
-function showRun(dir, command) {
+// `gone`: the caller saw its runner child exit, which also covers a runner that died before it wrote its pid.
+function showRun(dir, command, gone = false) {
     const run = loadRun(dir);
     const at = run.steps.find((s) => s.status === 'running') ?? run.steps.find((s) => s.status === 'pending');
     let { status, reason } = run;
     const open = status === 'pending' || status === 'running';
-    if (open && ((run.runner && !alive(run.runner.pid)) || Date.now() - Date.parse(run.runner?.heartbeat ?? run.created) > STALE_MS)) {
+    if (open && (gone || (run.runner && !alive(run.runner.pid)) || Date.now() - Date.parse(run.runner?.heartbeat ?? run.created) > STALE_MS)) {
         status = 'failed';
         reason = `the runner died at step ${at?.name}${run.runner ? ` (pid ${run.runner.pid}, last heartbeat ${run.runner.heartbeat})` : ' before it started'}`;
     }
@@ -821,7 +822,7 @@ function showRun(dir, command) {
         result.result = run.result;
     if (reason)
         result.reason = reason;
-    Object.assign(result, { claim: run.claim, journey: run.journey, ...(run.head && { head: run.head }), steps: run.steps.map((s) => ({ name: s.name, status: s.status })) });
+    Object.assign(result, { claim: run.claim, journey: run.journey, ...(run.head && { head: run.head }), steps: run.steps.map((s) => ({ name: s.name, status: status === 'failed' && s === at ? 'failed' : s.status })) });
     if (ev.items.length)
         result.evidence = ev.items;
     if (ev.omitted)
@@ -855,10 +856,14 @@ async function cmdVerify(argv) {
     const cfg = loadConfig(repo);
     const names = Object.keys(cfg.journeys);
     const journey = positionals[0] ?? (names.length === 1 ? names[0] : undefined);
+    if (!journey && names.length)
+        throw new UsageError(`verify needs a journey name; .done-done.yaml defines: ${names.join(', ')}`, `Run: done-done verify <${names.join('|')}> --outcome "<what a user can now do>"`);
     if (!journey)
-        throw new UsageError(names.length ? `verify needs a journey name; .done-done.yaml defines: ${names.join(', ')}` : 'verify needs a journey, and .done-done.yaml defines none', names.length ? `Run: done-done verify <${names.join('|')}> --outcome "<what a user can now do>"` : 'Record one: done-done init --journey <name> -- <command that drives the real app>');
+        throw new UsageError('verify needs a journey, and .done-done.yaml defines none', 'Record one: done-done init --journey <name> -- <command that drives the real app>');
     if (!cfg.journeys[journey])
         throw new UsageError(`unknown journey ${journey}; .done-done.yaml defines: ${names.join(', ')}`);
+    if (values['claim-id']?.trim() === '')
+        throw new UsageError('--claim-id needs a non-empty id');
     if (!values['claim-id'] && !git(repo, 'branch', '--show-current'))
         throw new UsageError('HEAD is detached, so no branch names this claim; pass --claim-id <id>');
     const id = newRunId(git(repo, 'rev-parse', 'HEAD'));
@@ -882,6 +887,7 @@ async function cmdVerify(argv) {
         const until = Date.now() + (values['no-wait'] ? 0 : Number(wait[1]) * (wait[2] === 'm' ? 60_000 : 1000));
         while (Date.now() < until && ['pending', 'running'].includes(loadRun(dir).status) && alive(child.pid))
             await new Promise((r) => setTimeout(r, 200));
+        return showRun(dir, 'verify', !alive(child.pid));
     }
     return showRun(dir, 'verify');
 }
@@ -891,7 +897,7 @@ function cmdStatus(argv) {
     const root = runsRoot(cfg.app);
     const id = values.run ?? (existsSync(root) ? readdirSync(root).sort().pop() : undefined);
     if (!id)
-        throw new UsageError(`no runs for ${cfg.app} yet`, 'Start one: done-done verify --outcome "<what a user can now do>"');
+        throw new UsageError(`no runs for ${cfg.app} yet`, `Start one: done-done verify ${Object.keys(cfg.journeys).length > 1 ? '<journey> ' : ''}--outcome "<what a user can now do>"`);
     if (!/^[\w-]+$/.test(id) || !existsSync(join(root, id, 'run.json')))
         throw new UsageError(`no run ${id} in ${root}`, 'Show the newest run: done-done status');
     return showRun(join(root, id), 'status');

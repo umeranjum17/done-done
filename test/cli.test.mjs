@@ -1362,12 +1362,11 @@ test('a runner killed mid-step shows as failed at that step', async () => {
   process.kill(run.runner.pid, 'SIGKILL');
   let r;
   for (let i = 0; i < 100 && (r = dd('status')).code === 4; i++) await new Promise((res) => setTimeout(res, 50));
-  try {
-    process.kill(-run.runner.pid, 'SIGKILL'); // the journey the killed runner left behind
-  } catch {}
+  spawnSync('kill', ['-KILL', `-${run.runner.pid}`]); // the journey the killed runner left behind
   assert.equal(r.code, 1, r.out);
   const s = toon(r);
   assert.equal(s.status, 'failed');
+  assert.equal(s.steps[1].status, 'failed');
   assert.match(s.reason, new RegExp(`^the runner died at step drive \\(pid ${run.runner.pid},`));
   assert.equal(JSON.parse(readFileSync(join(runs, run.run_id, 'run.json'), 'utf8')).status, 'running', 'status only reads the store');
   assert.match(s.help[1], /^Fix the cause, commit, then start a new run: done-done verify slow --outcome 'home and settings render'$/);
@@ -1375,7 +1374,8 @@ test('a runner killed mid-step shows as failed at that step', async () => {
 
 test('verify --foreground fails at a broken journey and skips the rest; usage errors name the next step', () => {
   const { dd } = slowRepo();
-  assert.equal(toon(dd('status')).help[0], 'Start one: done-done verify --outcome "<what a user can now do>"');
+  assert.equal(toon(dd('status')).help[0], 'Start one: done-done verify <journey> --outcome "<what a user can now do>"');
+  assert.equal(dd('verify', 'shots', '--outcome', 'x', '--claim-id', '').code, 2);
   const none = dd('verify', '--outcome', 'x');
   assert.equal(none.code, 2, none.out);
   assert.equal(toon(none).help[0], 'Run: done-done verify <shots|slow|broken> --outcome "<what a user can now do>"');

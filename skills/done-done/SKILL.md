@@ -28,7 +28,8 @@ You do not need done-done installed - invoke it as `npx -y --allow-git=all githu
 command starting with `done-done`, run it the same way.
 
 Results are TOON (`init` prints plain text): read `result` and follow the `help` lines through
-`init`, `run`, `check` and `receipt`. Proof comes from driving the real product, not from a unit test run. `fail` or
+`init`, `run`, `check` and `receipt`. Proof comes from driving the real product, not from a unit test run, and counts only from a committed
+tree: commit the done-done setup (config, .gitignore, capture script) before you capture. `fail` or
 `inconclusive` is not done: fix the cause and re-run, or tell the user exactly what is still unproven.
 
 ## Request

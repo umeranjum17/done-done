@@ -965,7 +965,7 @@ function showRun(dir: string, cfg: Config, command: string, gone = false): numbe
   if (code === WAITING) result.step = at?.name;
   if (run.result && status === 'completed') result.result = run.result;
   if (reason) result.reason = reason;
-  Object.assign(result, { claim: run.claim, journey: run.journey, repo: run.repo, ...(rec && { head: rec.commit }), steps: run.steps.map((s) => ({ name: s.name, status: status === 'failed' && s === at ? 'failed' : s.status })) });
+  Object.assign(result, { claim: run.claim, journey: run.journey, repo: run.repo, ...(rec && { head: rec.commit }), steps: run.steps.map((s) => ({ name: s.name, status: s === at && (status === 'failed' || (status === 'cancelled' && s.status === 'running')) ? status : s.status })) });
   if (ev.items.length) result.evidence = ev.items;
   if (ev.omitted) result.evidence_omitted = ev.omitted;
   if (run.receipt) result.receipt = run.receipt;

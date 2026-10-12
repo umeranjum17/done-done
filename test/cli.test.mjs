@@ -2094,6 +2094,18 @@ test('abort on a run whose runner died still stops its orphaned journey', async 
   assert.throws(() => process.kill(-journey.pid, 0), 'the orphaned journey group was signalled');
 });
 
+test('a cancelled run shows the step it was in as cancelled', () => {
+  const t = setup();
+  const { id } = pendingRun(t, (run) => {
+    run.steps[0].status = 'running';
+  });
+  assert.equal(t.dd('abort', '--run', id).code, 0);
+  const s = toon(t.dd('status', '--run', id));
+  assert.equal(s.status, 'cancelled');
+  assert.equal(s.steps[0].status, 'cancelled');
+  assert.equal(s.steps[1].status, 'pending');
+});
+
 // A run as `verify` left it, rewritten to pending with no runner: the state a run is in before its runner boots.
 function pendingRun(t, edit = () => {}) {
   const src = toon(t.dd('verify', 'shots', '--outcome', 'home renders', '--foreground'));

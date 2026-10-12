@@ -1475,6 +1475,8 @@ async function cmdDoctor(argv: string[]): Promise<number> {
   }
   const agent = agentCfg && selectAgent(agentCfg);
   const startable = AGENTS.filter(supported).join(' and ');
+  const installFix = `Install ${startable}, or set agent: to an installed one of ${AGENTS.join(', ')}`;
+  const switchFix = `Set agent: to ${startable}`;
   if (!agent) {
     checks.push({ check: 'agent', status: 'missing', detail: agentError, fix: 'Fix the config file named above, then re-run: done-done doctor' });
   } else {
@@ -1482,9 +1484,9 @@ async function cmdDoctor(argv: string[]): Promise<number> {
     const what = `${agent.agent} (model ${agent.model || 'none'}; ${agent.from === 'auto' ? 'agent: auto' : 'from config'}${skipping})`;
     checks.push(
       !agent.path
-        ? { check: 'agent', status: 'missing', detail: `${what} is not on PATH`, fix: `Install ${startable}, or set agent: to an installed one of ${AGENTS.join(', ')}` }
+        ? { check: 'agent', status: 'missing', detail: `${what} is not on PATH`, fix: installFix }
         : !supported(agent.agent)
-          ? { check: 'agent', status: 'missing', detail: `${what} at ${agent.path}, but done-done cannot start ${agent.agent} yet (${startable} for now)`, fix: `Set agent: to ${startable}` }
+          ? { check: 'agent', status: 'missing', detail: `${what} at ${agent.path}, but done-done cannot start ${agent.agent} yet (${startable} for now)`, fix: switchFix }
           : { check: 'agent', status: 'ok', detail: `${what} at ${agent.path}`, fix: '' },
     );
   }
@@ -1522,13 +1524,13 @@ async function cmdDoctor(argv: string[]): Promise<number> {
   if (values.probe && !agent) checks.push({ check: 'probe', status: 'missing', detail: 'unknown without a valid config', fix: '' });
   if (values.probe && agent) {
     const record = join(home(), 'agents', `probe-${new Date().toISOString().replace(/[:.]/g, '-')}-${agent.agent}.json`);
-    const probe: { ok: boolean; answer?: Record<string, unknown>; error?: string; record?: string } = !agent.path ? { ok: false, error: `${agent.agent} is not on PATH` }
-      : !supported(agent.agent) ? { ok: false, error: `done-done cannot start ${agent.agent} yet (${startable} for now)` }
+    const probe: { ok: boolean; answer?: Record<string, unknown>; error?: string; record?: string; fix?: string } = !agent.path ? { ok: false, error: `${agent.agent} is not on PATH`, fix: installFix }
+      : !supported(agent.agent) ? { ok: false, error: `done-done cannot start ${agent.agent} yet (${startable} for now)`, fix: switchFix }
       : askAgent({ agent: agent.agent, model: agent.model, prompt: 'This is a connectivity probe from done-done doctor. Use no tools. Answer with ok set to true.', schema: PROBE_SCHEMA, cwd: repo ?? process.cwd(), timeoutMs: 180_000, tools: 'none', record });
     checks.push(
       probe.ok && probe.answer?.ok === true
         ? { check: 'probe', status: 'ok', detail: `${agent.agent} (model ${agent.model}) answered the schema question; record ${record}`, fix: '' }
-        : { check: 'probe', status: 'missing', detail: `${agent.agent} did not answer: ${probe.error ?? `answer ${JSON.stringify(probe.answer)}`}${probe.record ? `; record ${record}` : ''}`, fix: `Check that ${agent.agent} is signed in${agent.model ? ` and can use model ${agent.model}` : ''}, or set agent_config.${agent.agent}.model` },
+        : { check: 'probe', status: 'missing', detail: `${agent.agent} did not answer: ${probe.error ?? `answer ${JSON.stringify(probe.answer)}`}${probe.record ? `; record ${record}` : ''}`, fix: probe.fix ?? `Check that ${agent.agent} is signed in${agent.model ? ` and can use model ${agent.model}` : ''}, or set agent_config.${agent.agent}.model` },
     );
   }
   const required = ['git', 'config', 'evidence_root', ...(values.probe ? ['probe'] : [])];

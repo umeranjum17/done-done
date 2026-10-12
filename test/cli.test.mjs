@@ -1958,13 +1958,14 @@ test('the agent comes from config (a fallback list moves past missing agents), a
   const failed = doctorIn(repo, bad.env, 'doctor', '--probe');
   assert.equal(failed.code, 2, failed.out);
   assert.match(toon(failed).checks.find((x) => x.check === 'probe').detail, /claude did not answer: claude exited 1: You have hit your session limit; record /);
+  assert.equal(toon(failed).checks.find((x) => x.check === 'probe').fix, `Check that claude is signed in and can use model claude-haiku-5-5, or set agent_config.claude.model`, 'a probe that ran and failed points at the sign-in');
   assert.equal(doctorIn(repo, bad.env, 'doctor').code, 0);
   assert.equal(bad.calls().length, 1);
   // An agent without an adapter yet, an explicit judge route, and bad values.
   const pi = doctor('agent: pi\n', '--probe');
   assert.equal(pi.code, 2, pi.out);
   assert.match(pi.by('probe').detail, /cannot start pi yet/);
-  assert.equal(pi.by('probe').fix, 'Check that pi is signed in, or set agent_config.pi.model', 'no empty model in the fix');
+  assert.equal(pi.by('probe').fix, 'Set agent: to claude and opencode', 'a probe that never ran points at the agent fix, not a sign-in');
   writeFileSync(join(s.bin, 'gemini'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
   const pg = doctor('agent: [pi, gemini]\n');
   assert.equal(pg.by('agent').status, 'missing');

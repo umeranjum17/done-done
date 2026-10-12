@@ -1714,3 +1714,86 @@ test('the default judge model is cheap, never a flagship', () => {
   assert.equal(cfg.judge.model, DEFAULT_JUDGE_MODEL, 'the default is the exported cheap default');
   assert.doesNotMatch(cfg.judge.model, FLAGSHIP_MODEL_PATTERN, 'the default must never be a flagship model again');
 });
+
+// doctor: read-only health check. Required items (git, config, evidence root) gate
+// exit 0/2; the skill, agent, judge and ffprobe items are optional and never fail it.
+// An isolated PATH holding only git plus the named stub binaries, so agent/judge/ffprobe
+// detection never depends on what the host happens to have installed.
+function pathEnv(env, bins) {
+  const gitPath = spawnSync('sh', ['-c', 'command -v git'], { encoding: 'utf8' }).stdout.trim();
+  const dir = mkdtempSync(join(tmpdir(), 'done-done-doctor-path-'));
+  after(() => rmSync(dir, { recursive: true, force: true }));
+  symlinkSync(gitPath, join(dir, 'git'));
+  for (const b of bins) writeFileSync(join(dir, b), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+  return { ...env, PATH: dir };
+}
+
+const doctorIn = (cwd, env, ...args) => {
+  const r = spawnSync(process.execPath, [CLI, ...args], { cwd, env, encoding: 'utf8' });
+  return { code: r.status, out: r.stdout + r.stderr };
+};
+
+test('doctor passes in a set-up repo and lists every check', () => {
+  const { dd } = setup();
+  const r = dd('doctor');
+  assert.equal(r.code, 0, r.out);
+  const d = toon(r);
+  assert.equal(d.result, 'pass');
+  assert.deepEqual(d.checks.map((c) => c.check), ['git', 'config', 'evidence_root', 'verify_skill', 'agent', 'judge', 'ffprobe']);
+  assert.deepEqual(d.checks.slice(0, 3).map((c) => c.status), ['ok', 'ok', 'ok']);
+  assert.match(d.checks[1].detail, /app notes/);
+  assert.equal(d.checks[3].status, 'missing', 'no verify skill yet, and that is optional');
+  assert.match(d.checks[3].fix, /SKILL\.md/);
+  assert.ok(d.help.length >= 1);
+  const j = json(dd('doctor', '--json'));
+  assert.equal(j.result, 'pass');
+  assert.equal(j.checks.length, 7);
+});
+
+test('doctor reports a present verify skill as ok', () => {
+  const { repo, dd } = setup();
+  mkdirSync(join(repo, '.agents', 'skills', 'verify-notes'), { recursive: true });
+  writeFileSync(join(repo, '.agents', 'skills', 'verify-notes', 'SKILL.md'), '# verify-notes\n');
+  const d = toon(dd('doctor'));
+  assert.equal(d.checks[3].status, 'ok');
+  assert.match(d.checks[3].detail, /SKILL\.md/);
+});
+
+test('doctor in a bare repo fails with the init fix; a malformed config names the file', () => {
+  const b = bareRepo();
+  const r = b.dd('doctor');
+  assert.equal(r.code, 2, r.out);
+  const d = toon(r);
+  assert.equal(d.result, 'fail');
+  assert.equal(d.checks[0].status, 'ok');
+  assert.equal(d.checks[1].status, 'missing');
+  assert.match(d.checks[1].fix, /done-done init/);
+  assert.ok(d.help.some((h) => h.includes('done-done init')));
+  writeFileSync(join(b.repo, '.done-done.yaml'), 'app: [unclosed\n');
+  const r2 = b.dd('doctor');
+  assert.equal(r2.code, 2, r2.out);
+  assert.match(toon(r2).checks[1].detail, /\.done-done\.yaml/);
+  const outside = doctorIn(b.dir, b.env, 'doctor');
+  assert.equal(outside.code, 2, outside.out);
+  assert.equal(toon(outside).checks[0].status, 'missing');
+  assert.match(toon(outside).checks[0].fix, /inside a git repository/);
+});
+
+test('doctor finds agent, judge and ffprobe binaries from PATH; missing optionals never fail it', () => {
+  const { repo, env } = setup();
+  const full = doctorIn(repo, pathEnv(env, ['claude', 'codex', 'opencode', 'ffprobe']), 'doctor');
+  assert.equal(full.code, 0, full.out);
+  const f = toon(full);
+  assert.match(f.checks[4].detail, /found claude at .*claude/, 'claude wins over codex and opencode');
+  assert.match(f.checks[5].detail, /never called/, 'the judge binary is never run');
+  assert.match(f.checks[6].detail, /found at .*ffprobe/);
+  const codexOnly = toon(doctorIn(repo, pathEnv(env, ['codex']), 'doctor'));
+  assert.match(codexOnly.checks[4].detail, /found codex/);
+  const none = doctorIn(repo, pathEnv(env, []), 'doctor');
+  assert.equal(none.code, 0, 'missing optionals still exit 0 when every required item is ok');
+  const n = toon(none);
+  assert.deepEqual(n.checks.slice(4).map((c) => c.status), ['missing', 'missing', 'missing']);
+  assert.match(n.checks[4].fix, /agent CLI/);
+  assert.match(n.checks[5].fix, /judge\.bin/);
+  assert.match(n.checks[6].fix, /ffprobe/);
+});

@@ -1,6 +1,6 @@
 # done-done reference
 
-Everything `init`, `run`, `check`, `receipt` and the config files do. For the overview and quick start, see the [README](../README.md).
+Everything `init`, `doctor`, `run`, `check`, `receipt` and the config files do. For the overview and quick start, see the [README](../README.md).
 
 ## Install
 
@@ -43,6 +43,14 @@ done-done init --agent opencode
 ```
 
 `--agent opencode` instead writes a session-start plugin to the repo's `.opencode/plugins/done-done.js` (project scope; your `~/.config/opencode` is never touched), so the bare `done-done` state is added to the first message of each session, not at session open (opencode's plugin hooks cannot add context when a session is created). The plugin remembers sessions in memory, so a resumed session gets the state again after opencode restarts. That `chat.message` hook runs `command -v done-done >/dev/null && done-done || true` and waits for it (up to 30 seconds) before appending the output to the message: without done-done on PATH it appends nothing and never throws, so it never breaks a session. Other files in `.opencode/plugins/` are untouched; re-running adds no duplicate. The result's `opencode_plugin` says `added to .opencode/plugins/done-done.js` or `unchanged`. Delete the file to opt out. Commit it to share the plugin.
+
+### Check the setup
+
+```sh
+done-done doctor
+```
+
+`doctor` answers "is this repo worth driving" and changes nothing. It checks seven items, each reported `ok` or `missing` with the exact fix command: `git` (inside a repository), `config` (a valid `.done-done.yaml`), `evidence_root` (writable), `verify_skill` (`.agents/skills/verify-<app>/SKILL.md`), `agent` (`claude`, `codex` or `opencode` on PATH; the first one wins), `judge` (a `claude` binary is present; the model is never called) and `ffprobe` (video evidence only). Only the first three are required: `doctor` exits 0 when they are all ok and 2 otherwise, so missing optionals never fail the run. In a fresh repo with nothing set up, `doctor` names each missing piece, starting with `done-done init`.
 
 ### Run a journey
 
@@ -182,7 +190,7 @@ done-done status [--run <run-id>]                                   # the newest
 
 ### Output
 
-Every command prints one machine-readable result on stdout. By default it is [TOON](https://github.com/toon-format/spec) in the AXI convention (the shape `no-mistakes axi status` uses): scalar `key: value` lines, tabular arrays, and a `help` list that names the exact next command. `--json` prints the same result as JSON. `--full` lists every evidence file or finding; without it, lists longer than five rows are truncated and the count of dropped rows is reported (`evidence_omitted` or `findings_omitted`).
+Every command prints one machine-readable result on stdout. By default it is [TOON](https://github.com/toon-format/spec) in the AXI convention (the shape `no-mistakes axi status` uses): scalar `key: value` lines, tabular arrays, and a `help` list that names the exact next command. `--json` prints the same result as JSON. `--full` lists every evidence file or finding; without it, lists longer than five rows are truncated and the count of dropped rows is reported (`evidence_omitted` or `findings_omitted`). `doctor` always lists every check: its seven rows never truncate.
 
 Running `done-done` with no subcommand prints the repo's config state (`config: present | missing | none`), its journeys and run count, and the next step. Usage and config errors also print one result: the `command` that failed, an `error` field and a `help` line with the recovery command (for example `done-done init` when no config exists, or the command's valid flags after an unknown one).
 

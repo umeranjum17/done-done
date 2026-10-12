@@ -2,7 +2,7 @@
 import assert from 'node:assert/strict';
 import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
-import { appendFileSync, cpSync, mkdirSync, mkdtempSync, existsSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
+import { appendFileSync, chmodSync, cpSync, mkdirSync, mkdtempSync, existsSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 import { after, test } from 'node:test';
@@ -2481,6 +2481,44 @@ test('maintain fingerprints untracked symlinks without reading through them and 
   const m = toon(r);
   assert.deepEqual([r.code, m.result, m.git_status], [3, 'blocked', 'same'], r.out);
   assert.match(m.reason, /^coverage: .*broken\.md/);
+});
+
+test('maintain runs a reader with no user settings or MCP servers', () => {
+  const { repo, env, sh } = setup();
+  const s = stubAgents(env, JSON.stringify({ drift: [], recipe: 'open it', recipes: [], missing: [] }));
+  const skill = join(repo, '.agents', 'skills', 'verify-notes');
+  mkdirSync(join(skill, 'features'), { recursive: true });
+  writeFileSync(join(skill, 'SKILL.md'), '# verify-notes\n');
+  writeFileSync(join(skill, 'features', 'README.md'), '# features\n\n- [Home](home.md)\n');
+  writeFileSync(join(skill, 'features', 'home.md'), '# Home\n');
+  sh('add', '-A');
+  sh('commit', '-qm', 'skill');
+  const r = doctorIn(repo, s.env, 'maintain', '--foreground');
+  assert.equal(r.code, 0, r.out);
+  const reader = s.calls()[0].argv;
+  assert.deepEqual([reader[reader.indexOf('--tools') + 1], reader[reader.indexOf('--setting-sources') + 1], reader.includes('--strict-mcp-config')], ['Read,Grep,Glob', '', true]);
+});
+
+test('maintain blocks on an unreadable feature file instead of crashing', { skip: process.getuid?.() === 0 && 'root reads files whatever their mode' }, () => {
+  const { repo, env, sh } = setup();
+  const s = stubAgents(env, JSON.stringify({ drift: [], recipe: 'open it', recipes: [], missing: [] }));
+  const skill = join(repo, '.agents', 'skills', 'verify-notes');
+  const home = join(skill, 'features', 'home.md');
+  mkdirSync(join(skill, 'features'), { recursive: true });
+  writeFileSync(join(skill, 'SKILL.md'), '# verify-notes\n');
+  writeFileSync(join(skill, 'features', 'README.md'), '# features\n\n- [Home](home.md)\n');
+  writeFileSync(home, '# Home\n');
+  sh('add', '-A');
+  sh('commit', '-qm', 'skill');
+  chmodSync(home, 0);
+  try {
+    const r = doctorIn(repo, s.env, 'maintain', '--foreground');
+    const m = toon(r);
+    assert.deepEqual([r.code, m.result], [3, 'blocked'], r.out);
+    assert.match(m.reason, /^coverage: .*home\.md: cannot be read/);
+  } finally {
+    chmodSync(home, 0o644);
+  }
 });
 
 test('maintain reports a dead link, a wrong file:line and drift from read-only readers, and changes nothing', () => {

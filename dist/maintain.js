@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { existsSync, lstatSync, readdirSync, readFileSync, readlinkSync, statSync } from 'node:fs';
+import { accessSync, constants, existsSync, lstatSync, readdirSync, readFileSync, readlinkSync, statSync } from 'node:fs';
 import { dirname, extname, isAbsolute, join, relative, resolve } from 'node:path';
 import { askAgent, selectAgent, supported } from './agents.js';
 // Plan 1.5 shared rules: a per-run call cap and a per-call timeout stop runaway cost.
@@ -7,7 +7,6 @@ const MAX_CALLS = 30;
 const CALL_MS = 20 * 60_000;
 const CHURN_SINCE = '30.days.ago';
 const FEATURE_CHARS = 20_000;
-const SOURCE_FILE = /\.(m?[jt]sx?|py|go|rb|rs|php|swift|kt|java|dart)$/;
 // Findings that mean the pass could not finish, so the result is blocked, not drift.
 const BLOCKING = new Set(['coverage', 'repo-changed']);
 // Notices are listed in the run but do not make the result drift.
@@ -15,19 +14,31 @@ const NOTICE = new Set(['truncated']);
 const git = (cwd, ...args) => execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: 64 << 20 });
 // The read-only proof: HEAD, the status, and the content of every changed or untracked path. git hashes regular files
 // in a stream (no --no-filters blob is written), and symlinks are fingerprinted by their target text, never read through.
+const readable = (p) => {
+    try {
+        accessSync(p, constants.R_OK);
+        return true;
+    }
+    catch {
+        return false;
+    }
+};
 const repoState = (repo) => {
     const paths = [...new Set([...git(repo, 'diff', '--name-only', '-z', 'HEAD').split('\0'), ...git(repo, 'ls-files', '-z', '--others', '--exclude-standard').split('\0')])].filter(Boolean);
     const files = [];
-    const links = [];
+    const extra = [];
     for (const p of paths) {
-        const st = lstatSync(join(repo, p), { throwIfNoEntry: false });
+        const abs = join(repo, p);
+        const st = lstatSync(abs, { throwIfNoEntry: false });
         if (st?.isSymbolicLink())
-            links.push(`${p} -> ${readlinkSync(join(repo, p))}`);
-        else if (st?.isFile())
+            extra.push(`${p} -> ${readlinkSync(abs)}`);
+        else if (st?.isFile() && readable(abs))
             files.push(p);
+        else if (st?.isFile())
+            extra.push(`${p} unreadable ${st.mode}`);
     }
     const hashes = files.length ? execFileSync('git', ['hash-object', '--no-filters', '--stdin-paths'], { cwd: repo, encoding: 'utf8', input: files.join('\n'), maxBuffer: 64 << 20 }).split('\n') : [];
-    return [git(repo, 'rev-parse', 'HEAD'), git(repo, 'status', '--porcelain', '--untracked-files=all'), ...links, ...files.map((p, i) => `${p} ${hashes[i]}`)].join('\n');
+    return [git(repo, 'rev-parse', 'HEAD'), git(repo, 'status', '--porcelain', '--untracked-files=all'), ...extra, ...files.map((p, i) => `${p} ${hashes[i]}`)].join('\n');
 };
 const lines = (p) => readFileSync(p, 'utf8').split('\n');
 const mdFiles = (dir) => readdirSync(dir, { recursive: true, withFileTypes: true }).filter((e) => e.isFile() && e.name.endsWith('.md')).map((e) => join(e.parentPath, e.name)).sort();
@@ -89,6 +100,16 @@ export async function maintainSteps(run, dir, cfg, h) {
     const findings = (run.findings = []);
     const add = (f) => findings.push({ id: `F${findings.length + 1}`, ...f });
     const rel = (p) => relative(repo, p);
+    // A skill path that cannot be read is blocking coverage, not a crash.
+    const tryRead = (p, fallback, read) => {
+        try {
+            return read();
+        }
+        catch (e) {
+            add({ kind: 'coverage', file: rel(p), what: `cannot be read: ${e.code ?? 'an error'}` });
+            return fallback;
+        }
+    };
     // 1 locate
     let step = h.begin('locate');
     const skill = join(repo, cfg.skill);
@@ -98,9 +119,10 @@ export async function maintainSteps(run, dir, cfg, h) {
     }
     h.set(step, 'completed', { outputs: [cfg.skill] });
     // 2 hygiene: every local link in the skill resolves; the index lists each feature file once.
+    const docs = tryRead(skill, [], () => mdFiles(skill)).map((f) => ({ f, ls: tryRead(f, [], () => lines(f)) }));
     step = h.begin('hygiene');
-    for (const f of mdFiles(skill))
-        lines(f).forEach((text, i) => {
+    for (const { f, ls } of docs)
+        ls.forEach((text, i) => {
             for (const m of text.matchAll(LINK)) {
                 const t = localTarget(m[1]);
                 if (t && !existsSync(resolve(dirname(f), t)))
@@ -109,12 +131,12 @@ export async function maintainSteps(run, dir, cfg, h) {
         });
     const featDir = join(skill, 'features');
     const index = join(featDir, 'README.md');
-    const features = existsSync(featDir) ? readdirSync(featDir).filter((n) => n.endsWith('.md') && n !== 'README.md').sort() : [];
+    const features = existsSync(featDir) ? tryRead(featDir, [], () => readdirSync(featDir)).filter((n) => n.endsWith('.md') && n !== 'README.md').sort() : [];
     if (!statSync(index, { throwIfNoEntry: false })?.isFile())
         add({ kind: 'index', file: rel(index), what: 'the feature map has no index' });
     else {
         const listed = new Map();
-        lines(index).forEach((text, i) => {
+        tryRead(index, [], () => lines(index)).forEach((text, i) => {
             for (const m of text.matchAll(LINK)) {
                 const t = localTarget(m[1]);
                 if (!t)
@@ -144,15 +166,19 @@ export async function maintainSteps(run, dir, cfg, h) {
     const read = agentBlock ? [] : features.slice(0, MAX_CALLS - 1);
     if (!agentBlock && read.length < features.length)
         add({ kind: 'coverage', file: rel(featDir), what: `${features.length - read.length} feature files not read: the run's call cap is ${MAX_CALLS}` });
-    const regular = read.filter((name) => {
-        const ok = statSync(join(featDir, name), { throwIfNoEntry: false })?.isFile() ?? false;
-        if (!ok)
-            add({ kind: 'coverage', file: rel(join(featDir, name)), what: 'the feature entry is not a readable file, so no reader covers it' });
-        return ok;
-    });
-    const readers = regular.map((name) => {
+    const regular = read.flatMap((name) => {
         const file = join(featDir, name);
-        const text = readFileSync(file, 'utf8');
+        const text = tryRead(file, undefined, () => {
+            if (!statSync(file, { throwIfNoEntry: false })?.isFile()) {
+                add({ kind: 'coverage', file: rel(file), what: 'the feature entry is not a readable file, so no reader covers it' });
+                return undefined;
+            }
+            return readFileSync(file, 'utf8');
+        });
+        return text === undefined ? [] : [{ name, text }];
+    });
+    const readers = regular.map(({ name, text }) => {
+        const file = join(featDir, name);
         if (text.length > FEATURE_CHARS)
             add({ kind: 'truncated', file: rel(file), what: `the reader saw only the first ${FEATURE_CHARS} characters of this feature file` });
         const prompt = `You are a read-only source reader for done-done maintain. Do not edit, create or delete any file, and do not run the app or any command.
@@ -174,8 +200,8 @@ ${text.slice(0, FEATURE_CHARS)}`;
     step = h.begin('reconcile');
     const tracked = git(repo, 'ls-files', '-z').split('\0').filter(Boolean);
     const exts = new Set(tracked.map((p) => extname(p)));
-    for (const f of mdFiles(skill))
-        lines(f).forEach((text, i) => {
+    for (const { f, ls } of docs)
+        ls.forEach((text, i) => {
             for (const m of text.matchAll(CITE)) {
                 if (!m[1].includes('/') && !exts.has(extname(m[1])))
                     continue;
@@ -196,18 +222,18 @@ ${text.slice(0, FEATURE_CHARS)}`;
     }
     const skillDir = rel(skill);
     const churn = [...new Set(git(repo, 'log', `--since=${CHURN_SINCE}`, '--name-only', '-z', '--format=').split('\0'))]
-        .filter((p) => p && SOURCE_FILE.test(p) && !p.startsWith(`${skillDir}/`) && existsSync(join(repo, p)))
+        .filter((p) => p && !p.startsWith(`${skillDir}/`) && existsSync(join(repo, p)))
         .sort();
     let recipes = [];
     const answered = readers.filter((r) => r.ok);
     if (answered.length && calls < MAX_CALLS) {
         const prompt = `You reconcile the source readers of done-done maintain for the verification skill of ${cfg.app}. Use no tools.
 - recipes: merge the readers' recipes below into as few app states as practical, each {state: what to set up once, features: the feature files it covers, steps: the drive steps in order}.
-- missing: from the recently changed source files listed below, each one that is a user-facing surface no feature covers, as {file: the path exactly as listed, why}. Empty when none.
+- missing: from the recently changed files listed below, each one that is a user-facing surface no feature covers, as {file: the path exactly as listed, why}. Empty when none.
 
 Features (JSON): ${JSON.stringify(answered.map((r) => ({ feature: r.feature, recipe: r.recipe })))}
 
-Recently changed source files (git log since ${CHURN_SINCE}): ${churn.length ? churn.join(', ') : 'none'}`;
+Recently changed files (git log since ${CHURN_SINCE}): ${churn.length ? churn.join(', ') : 'none'}`;
         const a = askAgent({ agent: agent.agent, model: agent.model, prompt, schema: RECONCILE_SCHEMA, cwd: repo, timeoutMs: CALL_MS, tools: 'none', record: record('reconcile') });
         if (!a.ok)
             add({ kind: 'coverage', file: skillDir, what: `the reconcile call did not answer: ${a.error}` });

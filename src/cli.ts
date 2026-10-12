@@ -506,12 +506,19 @@ function writeReceipt(cfg: Config, rec: Receipt): string {
   return path;
 }
 
-// Verify a recorded receipt for `head`; read-only, so a missing or changed record is a failure, not a usage error.
+// Verify a recorded receipt for `headArg`, which may be a full sha or a ref (HEAD, a branch or a tag).
+// Read-only, so a missing or changed record is a failure, not a usage error.
 function verifyReceipt(repo: string, cfg: Config, headArg: string): number {
-  const short = headArg.slice(0, 12);
-  const path = join(receiptsDir(cfg), `${headArg}.json`);
+  let commit = headArg;
+  try {
+    commit = git(repo, 'rev-parse', '--verify', `${headArg}^{commit}`);
+  } catch {
+    // Unresolvable: keep the argument so the lookup below fails with the current "no receipt" shape.
+  }
+  const short = commit.slice(0, 12);
+  const path = join(receiptsDir(cfg), `${commit}.json`);
   const fail = (reason: string) => {
-    emit({ command: 'receipt', result: 'fail', head: headArg, reason, help: ['Record a passing check for this head: done-done receipt --from <file|->'] });
+    emit({ command: 'receipt', result: 'fail', head: commit, reason, help: ['Record a passing check for this head: done-done receipt --from <file|->'] });
     return FAIL;
   };
   if (!existsSync(path)) return fail(`no receipt for ${short} in ${receiptsDir(cfg)}`);
@@ -523,9 +530,9 @@ function verifyReceipt(repo: string, cfg: Config, headArg: string): number {
   }
   if (!rec || typeof rec !== 'object' || rec.schema !== 1 || rec.result !== 'pass' || !Array.isArray(rec.files) || !rec.files.length) return fail(`receipt for ${short} is malformed`);
   if (!rec.files.every((f) => f && typeof f === 'object' && typeof f.path === 'string' && typeof f.sha256 === 'string')) return fail(`receipt for ${short} is malformed`);
-  if (rec.head !== headArg) return fail(`receipt records head ${String(rec.head).slice(0, 12)}, not ${short}`);
+  if (rec.head !== commit) return fail(`receipt records head ${String(rec.head).slice(0, 12)}, not ${short}`);
   const now = head(repo);
-  if (now.commit !== headArg) return fail(`HEAD is ${now.commit.slice(0, 12)}, not ${short}`);
+  if (now.commit !== commit) return fail(`HEAD is ${now.commit.slice(0, 12)}, not ${short}`);
   const bad: string[] = [];
   for (const f of rec.files) {
     let bytes: Buffer;
@@ -538,7 +545,7 @@ function verifyReceipt(repo: string, cfg: Config, headArg: string): number {
     if (sha256(bytes) !== f.sha256) bad.push(`${f.path}: hash changed`);
   }
   if (bad.length) return fail(`cited evidence no longer matches the receipt: ${bad.join('; ')}`);
-  emit({ command: 'receipt', result: 'pass', head: headArg, tree: rec.tree, claim: rec.claim, files: rec.files.length, at: rec.at, help: ['This receipt is valid for this head.'] });
+  emit({ command: 'receipt', result: 'pass', head: commit, tree: rec.tree, claim: rec.claim, files: rec.files.length, at: rec.at, help: ['This receipt is valid for this head.'] });
   return PASS;
 }
 
@@ -548,7 +555,7 @@ async function cmdReceipt(argv: string[]): Promise<number> {
   let rest = argv;
   if (vi >= 0) {
     verifyHead = argv[vi + 1] ?? null;
-    if (!verifyHead || verifyHead.startsWith('--')) throw new UsageError('receipt --verify needs a head sha');
+    if (!verifyHead || verifyHead.startsWith('--')) throw new UsageError('receipt --verify needs a head sha or ref');
     rest = [...argv.slice(0, vi), ...argv.slice(vi + 2)];
   }
   const repo = repoRoot();

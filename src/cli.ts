@@ -940,6 +940,9 @@ const isOurRunner = (pid: number, dir: string) => {
   return r.status === 0 && r.stdout.includes(`__runner ${dir}`);
 };
 const shownStatus = (run: Run): Run['status'] => ((run.status === 'pending' || run.status === 'running') && runnerGone(run) ? 'failed' : run.status);
+const reapJourney = (dir: string, run: Run) => {
+  if (run.runner?.journey_pgid && createOnce(join(dir, 'journey.killed'))) killGroup(run.runner.journey_pgid);
+};
 
 // One run as status shows it. A run still marked running whose runner is gone is shown as failed at its step.
 // `gone`: the caller saw its runner child exit, which also covers a runner that died before it wrote its pid.
@@ -953,7 +956,7 @@ function showRun(dir: string, cfg: Config, command: string, gone = false): numbe
     status = 'failed';
     const beat = run.runner && Math.round((Date.now() - Date.parse(run.runner.heartbeat)) / 1000);
     reason = `the runner died at step ${at?.name}${run.runner ? ` (pid ${run.runner.pid}, last heartbeat ${beat}s ago)` : ' before it started'}`;
-    if (run.runner?.journey_pgid && createOnce(join(dir, 'journey.killed'))) killGroup(run.runner.journey_pgid);
+    reapJourney(dir, run);
   }
   const code = status === 'pending' || status === 'running' ? WAITING : status === 'cancelled' || status === 'failed' || run.result === 'fail' ? FAIL : run.result === 'inconclusive' ? INCONCLUSIVE : PASS;
   const again = `done-done verify ${run.journey} --outcome ${arg(run.claim)}${run.claim_id ? ` --claim-id ${arg(run.claim_id)}` : ''}`;
@@ -1059,7 +1062,8 @@ function cmdLogs(argv: string[]): number {
   if (!run.steps.some((s) => s.name === values.step)) throw new UsageError(`unknown step ${values.step}; this run has: ${run.steps.map((s) => s.name).join(', ')}`, `Read the run: done-done status --run ${id}`);
   const file = join(runsRoot(cfg.app), id, 'logs', `${values.step}.log`);
   if (!existsSync(file)) throw new UsageError(`no log for step ${values.step} yet`, `Read the run: done-done status --run ${id}`);
-  const all = readFileSync(file, 'utf8').replace(/\n$/, '').split('\n');
+  const text = readFileSync(file, 'utf8');
+  const all = text === '' ? [] : text.replace(/\n$/, '').split('\n');
   const items = FULL || all.length <= 50 ? all : all.slice(-50);
   emit({ command: 'logs', run_id: id, step: values.step, lines: items.length, log: items, ...(all.length > items.length && { log_omitted: all.length - items.length }), help: FULL ? [`Read the run: done-done status --run ${id}`] : [`Read the full log: done-done logs --step ${values.step} --run ${id} --full`] });
   return PASS;
@@ -1118,23 +1122,24 @@ function cmdAbort(argv: string[]): number {
     emit({ command: 'abort', run_id: id, status, reason: `run ${id} is already ${status}`, help: [`List past runs: done-done history`, `Start again: done-done rerun --run ${id}`] });
     return true;
   };
-  const run = loadRun(dir);
-  if (closed(run)) return FAIL;
-  if (run.runner && !isOurRunner(run.runner.pid, dir)) {
-    emit({ command: 'abort', run_id: id, status: run.status, reason: `could not confirm pid ${run.runner.pid} is this run's runner, so nothing was killed or cancelled`, help: [`Read the run: done-done status --run ${id}`] });
+  const latest = loadRun(dir);
+  if (['pending', 'running'].includes(latest.status) && runnerGone(latest)) reapJourney(dir, latest);
+  if (closed(latest)) return FAIL;
+  if (latest.runner && !isOurRunner(latest.runner.pid, dir)) {
+    emit({ command: 'abort', run_id: id, status: latest.status, reason: `could not confirm pid ${latest.runner.pid} is this run's runner, so nothing was killed or cancelled`, help: [`Read the run: done-done status --run ${id}`] });
     return FAIL;
   }
-  if (run.runner) {
-    try { process.kill(run.runner.pid, 'SIGKILL'); } catch { /* exited since the check */ }
+  if (latest.runner) {
+    try { process.kill(latest.runner.pid, 'SIGKILL'); } catch { /* exited since the check */ }
   }
-  const latest = loadRun(dir);
-  if (closed(latest, latest.status)) return FAIL;
-  if (latest.runner?.journey_pgid) killGroup(latest.runner.journey_pgid);
-  latest.status = 'cancelled';
-  latest.reason = 'aborted';
+  const after = loadRun(dir);
+  if (closed(after, after.status)) return FAIL;
+  reapJourney(dir, after);
+  after.status = 'cancelled';
+  after.reason = 'aborted';
   logEvent(dir, { status: 'cancelled' });
-  saveRun(dir, latest);
-  emit({ command: 'abort', run_id: id, status: 'cancelled', reason: latest.reason, help: [`Read the run: done-done status --run ${id}`, `Start again: done-done rerun --run ${id}`] });
+  saveRun(dir, after);
+  emit({ command: 'abort', run_id: id, status: 'cancelled', reason: after.reason, help: [`Read the run: done-done status --run ${id}`, `Start again: done-done rerun --run ${id}`] });
   return PASS;
 }
 

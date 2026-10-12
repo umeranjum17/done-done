@@ -2070,6 +2070,28 @@ test('a rerun whose source record is gone starts a fresh run', () => {
   assert.equal(toon(r).result, 'pass');
 });
 
+test('logs reports zero lines for an empty step log', () => {
+  const t = setup();
+  const a = toon(t.dd('verify', 'shots', '--outcome', 'home renders', '--foreground'));
+  const r = toon(t.dd('logs', '--step', 'drive', '--run', a.run_id));
+  assert.equal(r.lines, 0);
+  assert.deepEqual(r.log, []);
+});
+
+test('abort on a run whose runner died still stops its orphaned journey', async () => {
+  const t = setup();
+  const journey = spawn('sleep', ['30'], { detached: true, stdio: 'ignore' });
+  after(() => { try { process.kill(-journey.pid, 'SIGKILL'); } catch { /* already gone */ } });
+  const dead = spawnSync(process.execPath, ['-e', ''], { encoding: 'utf8' });
+  const { id } = pendingRun(t, (run) => {
+    run.status = 'running';
+    run.runner = { pid: dead.pid, started: new Date().toISOString(), heartbeat: new Date().toISOString(), journey_pgid: journey.pid };
+  });
+  assert.equal(t.dd('abort', '--run', id).code, 1);
+  await new Promise((r) => setTimeout(r, 300));
+  assert.throws(() => process.kill(-journey.pid, 0), 'the orphaned journey group was signalled');
+});
+
 // A run as `verify` left it, rewritten to pending with no runner: the state a run is in before its runner boots.
 function pendingRun(t, edit = () => {}) {
   const src = toon(t.dd('verify', 'shots', '--outcome', 'home renders', '--foreground'));

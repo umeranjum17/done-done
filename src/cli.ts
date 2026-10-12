@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import { encode } from '@toon-format/toon';
 import { Document, parseDocument } from 'yaml';
-import { ACPX_INSTALL, askAgent, selectAgent, supported, type AgentAnswer } from './agents.js';
+import { ACPX_INSTALL, askAgent, knownAgentOf, selectAgent, supported, type AgentAnswer } from './agents.js';
 import { AGENTS, type Config, home, loadConfig, parseDuration, UsageError } from './config.js';
 import { backend, type Capture, judge, type Judged, onPath } from './judge.js';
 import { checkMedia } from './media.js';
@@ -1757,7 +1757,7 @@ async function cmdDoctor(argv: string[]): Promise<number> {
     const judge = cfg.judge;
     const route = judge.route ? `; judge.route ${judge.route} is recorded, not used yet` : '';
     const judgeChoice = (detail: string, ok: boolean, fix = ''): DoctorCheck => ({ check: 'judge_choice', status: ok ? 'ok' : 'missing', detail: `claude judge (model ${judge.model || 'none'})${detail}${route}`, fix });
-    const apart = agent.agent.replace(/^acp:/, '') !== 'claude'; // acp:claude is claude through acpx
+    const apart = knownAgentOf(agent.agent) !== 'claude';
     checks.push(
       !agent.path || !supported(agent.agent) ? judgeChoice(`, and no ${agent.path ? 'startable ' : ''}author agent is installed, so there is no independence to check`, false, 'Install an agent (see the agent check) so the judge can be checked against it')
         : apart ? judgeChoice(`, a different agent from the author (${agent.agent})`, true)

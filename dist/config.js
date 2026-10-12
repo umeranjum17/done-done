@@ -14,8 +14,9 @@ export class UsageError extends Error {
 export const AGENTS = ['claude', 'codex', 'opencode', 'pi', 'gemini'];
 // Or acp:<target>, any agent the user's acpx bridge can start; the target is one argv word, so it never reads as a flag.
 const isAgent = (v) => AGENTS.includes(v) || (typeof v === 'string' && /^acp:[A-Za-z0-9][\w.-]*$/.test(v));
-// The cost guard is this table: a default model is always the agent's cheap one, never a flagship,
-// whatever the vendor; any other model runs only when the user names it. pi and gemini get theirs with their adapters.
+// The cost guard is this table: a default model for an agent here is always its cheap one, never a flagship,
+// whatever the vendor; any other model runs only when the user names it. pi and acp:<target> have no public cheap alias,
+// so they run their own default model, and agent_config.<agent>.model caps their cost. codex and gemini get theirs with their adapters.
 export const CHEAP_MODELS = { claude: 'claude-haiku-5-5', opencode: 'opencode-go/muse-spark-1.3-contributor' };
 // Where each key may be set. Global-only keys describe the machine; repo-only keys describe the project; `any` may be in either.
 const KEYS = {

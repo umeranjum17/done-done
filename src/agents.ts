@@ -25,23 +25,29 @@ export type AgentAnswer = { ok: boolean; answer?: Record<string, unknown>; error
 // argv never carries the prompt: it goes on stdin, or (file: true) into a 0600 prompt file the argv points at.
 type Adapter = { argv: (c: AgentCall, dir: string) => string[]; answer: (stdout: string) => unknown; file?: boolean; env?: (c: AgentCall) => Record<string, string> };
 
-// The JSON object in an agent's free text: the longest '{'..'}' span that parses, so braces in narration around it are skipped.
+// The JSON object in an agent's free text: the last top-level '{'..'}' span that parses, since the answer comes after
+// narration; braces in narration are skipped, and a span nested inside an accepted object is not a candidate.
 // ponytail: tries every brace pair (quadratic in the braces), fine for one answer's text.
 function jsonIn(text: string): unknown {
-  const at = (ch: string) => [...text].flatMap((c, i) => (c === ch ? [i] : []));
-  const spans = at('{').flatMap((o) => at('}').filter((c) => c > o).map((c) => [o, c + 1])).sort((a, b) => b[1] - b[0] - (a[1] - a[0]));
-  for (const [o, c] of spans) {
-    try { return JSON.parse(text.slice(o, c)); } catch { /* not this span */ }
+  const ends = [...text].flatMap((c, i) => (c === '}' ? [i + 1] : [])).reverse();
+  let answer: { end: number; value: unknown } | undefined;
+  for (let start = text.indexOf('{'); start >= 0; start = text.indexOf('{', start + 1)) {
+    if (answer && start < answer.end) continue;
+    for (const end of ends) {
+      if (end <= start) break;
+      try { answer = { end, value: JSON.parse(text.slice(start, end)) }; break; } catch { /* not this span */ }
+    }
   }
-  throw new Error(`no JSON object in the answer: ${text.slice(0, 200)}`);
+  if (!answer) throw new Error(`no JSON object in the answer: ${text.slice(0, 200)}`);
+  return answer.value;
 }
 
 // acp:<target> runs any Agent Client Protocol agent through the user's acpx bridge (acpx's own registry names
 // the targets): the prompt and the schema on stdin (exec --file -), and the answer is the JSON object in the agent's
-// message chunks of acpx's JSON-RPC event stream. The tool policy maps to acpx's permission mode; a prompt that
-// mode would raise is denied, since nobody can answer it. No model means the target's own default.
+// message chunks of acpx's JSON-RPC event stream. Every tool is denied, and a permission prompt is denied too, since
+// nobody can answer it. No model means the target's own default.
 const ACP: Adapter = {
-  argv: (c, dir) => ['--cwd', c.tools === 'none' ? dir : c.cwd, '--format', 'json', '--json-strict', c.tools === 'edit' ? '--approve-all' : c.tools === 'read' ? '--approve-reads' : '--deny-all',
+  argv: (c, dir) => ['--cwd', c.tools === 'none' ? dir : c.cwd, '--format', 'json', '--json-strict', '--deny-all',
     '--non-interactive-permissions', 'deny', ...(c.model ? ['--model', c.model] : []), c.agent.slice('acp:'.length), 'exec', '--file', '-'],
   answer: (out) => {
     const events = out.split('\n').filter((l) => l.startsWith('{')).map((l) => JSON.parse(l));
@@ -96,6 +102,13 @@ export function selectAgent(cfg: Config): { agent: string; model: string; path: 
 }
 
 export const modelFor = (cfg: Config, agent: string) => cfg.agent_config[agent]?.model || CHEAP_MODELS[agent] || '';
+
+// The known agent an agent names, for the judge-independence check: acp:claude-code is claude; a target that
+// names no known agent (acp:claudex, acp:foo) stays as named.
+export function knownAgentOf(agent: string): string {
+  const target = agent.replace(/^acp:/, '');
+  return AGENTS.find((a) => target === a || (target.startsWith(a) && !/[A-Za-z0-9]/.test(target[a.length]))) ?? agent;
+}
 
 const adapterFor = (agent: string): Adapter | undefined => (agent.startsWith('acp:') ? ACP : Object.hasOwn(ADAPTERS, agent) ? ADAPTERS[agent] : undefined);
 

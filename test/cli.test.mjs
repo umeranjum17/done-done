@@ -2078,7 +2078,7 @@ process.exitCode = ${exit};
     return { ...r, by: (n) => toon(r).checks.find((c) => c.check === n) };
   };
   // The answer arrives in message chunks after narration with braces, around a refused side request, fenced as models often do.
-  acpx(0, [{ jsonrpc: '2.0', id: 0, result: {} }, chunk('I will check {config} and answer {}.\n'), chunk('```json\n{"ok":'), { jsonrpc: '2.0', id: 3, error: { code: -32601, message: 'Method not found' } }, chunk('true}\n```')]);
+  acpx(0, [{ jsonrpc: '2.0', id: 0, result: {} }, chunk('I will check {config} and answer {}.\n'), chunk('Notes {"note": "a longer narrated object than the answer", "a": 1, "b": 2, "c": 3}. '), chunk('```json\n{"ok":'),{ jsonrpc: '2.0', id: 3, error: { code: -32601, message: 'Method not found' } }, chunk('true}\n```')]);
   const ok = doctor('agent: acp:gemini\n', '--probe');
   assert.equal(ok.code, 0, ok.out);
   assert.match(ok.by('agent').detail, /^acp:gemini \(model none; from config\) at .*acpx$/);
@@ -2092,6 +2092,7 @@ process.exitCode = ${exit};
   assert.deepEqual([rec.agent, rec.model, rec.ok, rec.answer], ['acp:gemini', '', true, { ok: true }]);
   // claude through acpx is still claude: the claude judge is not independent of it.
   assert.equal(doctor('agent: acp:claude\n').by('judge_choice').status, 'missing');
+  assert.equal(doctor('agent: acp:claude-code\n').by('judge_choice').status, 'missing');
   // A model named in the global config goes to acpx ahead of the target.
   writeFileSync(join(env.DONE_DONE_HOME, 'config.yaml'), 'agent_config:\n  acp:gemini: { model: flash-lite }\n');
   assert.equal(doctor('agent: acp:gemini\n', '--probe').code, 0);

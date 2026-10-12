@@ -109,8 +109,10 @@ done-done init
 ```yaml
 journeys:
   smoke:
-    command: npm test > .proof/${RUN_ID}.log
+    command: npm test > $DONE_DONE_EVIDENCE_ROOT/${RUN_ID}.log
 ```
+
+The command runs from the repo root with `DONE_DONE_EVIDENCE_ROOT` (the evidence root) and `DONE_DONE_RUN_ID` set, and `${RUN_ID}` in it is replaced. A run that writes nothing under the evidence root fails.
 
 Commit the config, because proof only counts from a clean tree:
 

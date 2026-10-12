@@ -102,7 +102,7 @@ export function askAgent(c) {
         writeFileSync(c.record, `${JSON.stringify(record, null, 2)}\n`, { mode: 0o600 });
     }
     catch (e) {
-        out = { ok: false, error: `cannot write the call record: ${e.message}`, record: c.record };
+        out = { ok: false, error: `cannot write the call record: ${e.message}` };
     }
     return out;
 }

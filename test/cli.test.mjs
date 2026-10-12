@@ -10,7 +10,6 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { crc32, deflateSync } from 'node:zlib';
 import { parse } from 'yaml';
 import { decode } from '@toon-format/toon';
-import { loadConfig } from '../dist/config.js';
 
 const CLI = join(dirname(fileURLToPath(import.meta.url)), '..', 'dist', 'cli.js');
 
@@ -1700,26 +1699,6 @@ test('without the optional kit, --judge is a config error naming the npx command
   assert.equal(j.calls()[0].model, 'claude-haiku-5-5');
 });
 
-test('the default judge model is the cheap Claude model and agent defaults to auto', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'done-done-cheap-default-'));
-  after(() => rmSync(dir, { recursive: true, force: true }));
-  const repo = join(dir, 'repo');
-  mkdirSync(repo, { recursive: true });
-  const home = join(dir, 'home');
-  mkdirSync(home, { recursive: true });
-  const prev = process.env.DONE_DONE_HOME;
-  process.env.DONE_DONE_HOME = home;
-  let cfg;
-  try {
-    cfg = loadConfig(repo);
-  } finally {
-    if (prev === undefined) delete process.env.DONE_DONE_HOME;
-    else process.env.DONE_DONE_HOME = prev;
-  }
-  assert.equal(cfg.judge.model, 'claude-haiku-5-5', 'the judge default is Claude\'s cheap model');
-  assert.equal(cfg.agent, 'auto');
-});
-
 // doctor: read-only health check. Required items (git, config, evidence root) gate
 // exit 0/2; the skill, agent, judge and ffprobe items are optional and never fail it.
 // An isolated PATH holding only git plus the named stub binaries, so agent/judge/ffprobe
@@ -1815,6 +1794,13 @@ test('doctor in a bare repo fails with the init fix; a malformed config names th
   assert.match(toon(outside).checks[0].fix, /inside a git repository/);
 });
 
+test('with no config, doctor names agent: auto and the cheap default judge model', () => {
+  const { repo, env } = setup();
+  const d = toon(doctorIn(repo, pathEnv(env, ['claude']), 'doctor'));
+  assert.match(d.checks[4].detail, /^claude \(model claude-haiku-5-5; agent: auto\)/);
+  assert.match(d.checks[7].detail, /^claude judge \(model claude-haiku-5-5\)/);
+});
+
 test('doctor reports the judge missing when claude has no sign-in or judge.bin is relative', () => {
   const { repo, env, dd } = setup();
   const noSignIn = toon(doctorIn(repo, pathEnv(env, ['claude']), 'doctor'));
@@ -1875,7 +1861,7 @@ test('doctor finds agent, judge and ffprobe binaries from PATH; missing optional
   assert.equal(codexOnly.checks[4].status, 'missing');
   assert.match(codexOnly.checks[4].detail, /^codex \(model none; agent: auto\) at .*, but done-done cannot start codex yet \(claude and opencode for now\)/);
   assert.equal(codexOnly.checks[7].status, 'missing', 'an author done-done cannot start is no author');
-  assert.match(codexOnly.checks[7].detail, /^claude judge \(model claude-haiku-5-5\), and no author agent is installed/);
+  assert.match(codexOnly.checks[7].detail, /^claude judge \(model claude-haiku-5-5\), and no startable author agent is installed/);
   const two = toon(doctorIn(repo, pathEnv(env, ['codex', 'opencode']), 'doctor'));
   assert.match(two.checks[4].detail, /^opencode .* at /, 'auto skips an installed agent done-done cannot start');
   assert.equal(two.checks[7].status, 'ok', 'the author is opencode, so the claude judge is apart from it');

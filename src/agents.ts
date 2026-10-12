@@ -20,7 +20,7 @@ export type AgentCall = {
   tools: 'none' | 'read' | 'edit'; // none for the judge and readers
   record: string; // where the call record is written
 };
-export type AgentAnswer = { ok: boolean; answer?: Record<string, unknown>; error?: string; record: string };
+export type AgentAnswer = { ok: boolean; answer?: Record<string, unknown>; error?: string; record?: string };
 
 // argv never carries the prompt: it goes on stdin, or (file: true) into a 0600 prompt file the argv points at.
 type Adapter = { argv: (c: AgentCall, dir: string) => string[]; answer: (stdout: string) => unknown; file?: boolean; env?: (c: AgentCall) => Record<string, string> };
@@ -113,7 +113,7 @@ export function askAgent(c: AgentCall): AgentAnswer {
     mkdirSync(dirname(c.record), { recursive: true });
     writeFileSync(c.record, `${JSON.stringify(record, null, 2)}\n`, { mode: 0o600 });
   } catch (e) {
-    out = { ok: false, error: `cannot write the call record: ${(e as Error).message}`, record: c.record };
+    out = { ok: false, error: `cannot write the call record: ${(e as Error).message}` };
   }
   return out;
 }

@@ -438,18 +438,22 @@ test('init outside a git repository reports a clear usage error', () => {
 
 test('a repo set up by init captures and checks real evidence, then catches stale and missing', () => {
   const { repo, sh, dd } = bareRepo();
-  assert.equal(dd('init').code, 0);
-  writeFileSync(join(repo, 'make-log.mjs'), "import { mkdirSync, writeFileSync } from 'node:fs';\nconst out = '.proof/' + process.argv[2];\nmkdirSync(out, { recursive: true });\nwriteFileSync(out + '/session.log', '$ notes add milk\\nadded: milk\\nexit 0\\n');\n");
+  const init = dd('init');
+  assert.equal(init.code, 0);
+  // Follow init's hint as printed: its example journey, placeholder filled in, becomes the config.
+  const example = init.out.match(/journeys: \{.*\} \}/)[0].replace('<drive the real app>', 'echo added: milk');
+  appendFileSync(join(repo, '.done-done.yaml'), `${example}\n`);
   sh('add', '-A');
-  sh('commit', '-qm', 'config and capture script');
-  const r = dd('run', '--', 'node make-log.mjs ${RUN_ID}');
+  sh('commit', '-qm', 'config');
+  const r = dd('run', 'smoke');
   assert.equal(r.code, 0, r.out);
   const id = toon(r).run_id;
-  assert.equal(dd('check', '--outcome', 'notes add works', `.proof/${id}/session.log`).code, 0);
-  assert.equal(dd('check', '--outcome', 'gone', `.proof/${id}/missing.log`).code, 1, 'a missing file fails');
+  assert.equal(dd('check', '--outcome', 'notes add works', `.proof/${id}.log`).code, 0);
+  assert.equal(dd('check', '--outcome', 'gone', `.proof/${id}-missing.log`).code, 1, 'a missing file fails');
   writeFileSync(join(repo, 'app.js'), 'export const app = 2;\n');
-  sh('commit', '-qam', 'code');
-  const stale = dd('check', '--outcome', 'notes add works', `.proof/${id}/session.log`);
+  sh('add', '-A');
+  sh('commit', '-qm', 'code');
+  const stale = dd('check', '--outcome', 'notes add works', `.proof/${id}.log`);
   assert.equal(stale.code, 1, stale.out);
   assert.match(stale.out, /evidence is for commit/);
 });

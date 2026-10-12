@@ -32,6 +32,7 @@ For current commands, flags and config, run the CLI rather than relying on memor
    writes screenshots, recordings or logs into the evidence root. A unit test run is not the app.
 3. `run` the journey, then `check` the files it recorded against the outcome the user asked for.
    Proof counts only from a clean, committed tree. `receipt` records a passing check for HEAD.
-4. Every command prints one TOON result: read `result` and do what its `help` lines say.
+4. `run`, `check`, `receipt` and bare `done-done` print one TOON result: read `result` and do
+   what its `help` lines say. `init` prints its next step as plain text.
 5. Report only what the result says. `fail` or `inconclusive` is not done: fix the cause and
    re-run, or tell the user exactly what is still unproven.

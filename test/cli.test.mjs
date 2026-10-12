@@ -2322,6 +2322,7 @@ test('doctor --probe asks gemini with the prompt on stdin, and reports a signed-
   const record = probe.detail.match(/; record (\S+)$/)[1];
   assert.equal(probe.detail, `gemini did not answer: gemini exited 130: Authentication cancelled by user.; record ${record}`, 'one clean line: no stack, no colour codes');
   assert.match(JSON.parse(readFileSync(record, 'utf8')).stderr, /at initOauthClient[\s\S]*\u001b\[31mAuthentication cancelled/, 'the call record keeps the raw stderr');
+  assert.match(JSON.parse(readFileSync(record, 'utf8')).error, /at initOauthClient[\s\S]*\u001b\[31mAuthentication cancelled/, 'the call record keeps the raw error text');
   assert.match(probe.fix, /Check that gemini is signed in and can use model flash-lite/);
 });
 

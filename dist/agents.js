@@ -18,8 +18,10 @@ function errorLine(text) {
     return line.length > 200 ? `${line.slice(0, 199)}…` : line;
 }
 class ProviderError extends Error {
-    constructor(text) {
-        super(errorLine(text));
+    detail;
+    constructor(text, prefix = '', suffix = '') {
+        super(`${prefix}${errorLine(text)}${suffix}`);
+        this.detail = `${prefix}${text}${suffix}`;
     }
 }
 // The one JSON object inside free model text (often fenced): shared by the adapters that answer in text.
@@ -140,6 +142,7 @@ export function askAgent(c) {
     let res;
     let attempts = 0;
     let out;
+    let failure;
     try {
         dir = mkdtempSync(join(tmpdir(), 'done-done-agent-'));
         cwd = c.tools === 'none' ? dir : c.cwd;
@@ -158,15 +161,17 @@ export function askAgent(c) {
                 throw res.error;
             if (res.status !== 0) {
                 // An agent that exits non-zero may still say why in its own output (claude: a usage limit, a bad model).
-                let why = errorLine(String(res.stderr || res.stdout));
+                let text = String(res.stderr || res.stdout).trim().slice(-500);
                 try {
                     adapter.answer(String(res.stdout));
                 }
                 catch (e) {
-                    if (!(e instanceof SyntaxError))
-                        why = e.message;
+                    if (e instanceof ProviderError)
+                        text = e.detail;
+                    else if (!(e instanceof SyntaxError))
+                        text = e.message;
                 }
-                throw new Error(`${c.agent} exited ${res.status}: ${why}${adapter.hint && c.tools !== 'none' ? `; ${adapter.hint}` : ''}`);
+                throw new ProviderError(text, `${c.agent} exited ${res.status}: `, adapter.hint && c.tools !== 'none' ? `; ${adapter.hint}` : '');
             }
             try {
                 const answer = adapter.answer(String(res.stdout));
@@ -190,6 +195,7 @@ export function askAgent(c) {
     }
     catch (e) {
         out = { ok: false, error: e.message };
+        failure = e instanceof ProviderError ? e.detail : e.message;
     }
     finally {
         if (dir)
@@ -198,7 +204,7 @@ export function askAgent(c) {
     // The record holds what ran and what came back, never the prompt text.
     const { prompt, ...call } = c;
     try {
-        const record = { ...call, cwd, prompt_bytes: Buffer.byteLength(prompt), argv: adapter?.argv(c, '<tmp>') ?? [], ms: Date.now() - started, exit: res?.status ?? null, attempts, ...out, stderr: String(res?.stderr ?? '').slice(-2000) };
+        const record = { ...call, cwd, prompt_bytes: Buffer.byteLength(prompt), argv: adapter?.argv(c, '<tmp>') ?? [], ms: Date.now() - started, exit: res?.status ?? null, attempts, ...out, error: failure, stderr: String(res?.stderr ?? '').slice(-2000) };
         mkdirSync(dirname(c.record), { recursive: true });
         writeFileSync(c.record, `${JSON.stringify(record, null, 2)}\n`, { mode: 0o600 });
         out = { ...out, record: c.record };

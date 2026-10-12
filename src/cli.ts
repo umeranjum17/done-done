@@ -8,7 +8,8 @@ import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import { encode } from '@toon-format/toon';
 import { Document, parseDocument } from 'yaml';
-import { type Config, home, loadConfig, parseDuration, UsageError } from './config.js';
+import { askAgent, selectAgent, supported, type AgentAnswer } from './agents.js';
+import { AGENTS, type Config, home, loadConfig, parseDuration, UsageError } from './config.js';
 import { backend, type Capture, judge, type Judged, onPath } from './judge.js';
 import { checkMedia } from './media.js';
 
@@ -29,11 +30,14 @@ const CHECKS_TEXT = `Checks block (--from): the newest "## Checks" heading, then
   evidence: <the evidence file paths, or "not proven: <cause>">`;
 const RUNS_TEXT = `runs: each verify run lives in $DONE_DONE_HOME/runs/<app>/<run-id> (run.json, events.jsonl, logs/<step>.log)
   and goes on when the command that started it ends; its steps are resolve, drive (the journey), check, receipt, report`;
-const AGENTS = ['claude', 'codex', 'opencode'];
-const DOCTOR_TEXT = `doctor is read-only and exits 0 when every required item is ok, 2 otherwise.
+const HOOK_AGENTS = ['claude', 'codex', 'opencode'];
+const DOCTOR_TEXT = `doctor changes nothing except the --probe call record (the agent itself may keep its own session files) and exits 0 when every required item is ok, 2 otherwise.
   required: git (inside a repository), config (a valid .done-done.yaml), evidence_root (writable).
-  optional: verify_skill (.agents/skills/verify-<app>/), agent (claude, codex or opencode on PATH),
-  judge (an executable claude binary, a sign-in folder and the judge kit; the model is never called), ffprobe (video evidence only).
+  optional: verify_skill (.agents/skills/verify-<app>/), agent (the configured agent, or with agent: auto the first
+  of claude, codex, opencode, pi, gemini on PATH that done-done can start, and its model), judge_choice (the claude judge, and whether it is
+  apart from the author), judge (an executable claude binary, a sign-in folder and the judge kit; the model is never called), ffprobe (video evidence only).
+  --probe also asks the agent one JSON-schema question (one call at the agent's model, its cheap default unless you set agent_config.<agent>.model; its record goes to
+  $DONE_DONE_HOME/agents/) and then requires a valid answer.
   doctor lists every check; --full changes nothing. Missing optionals never fail the run.`;
 
 // One table drives `--help` and every `<command> --help`: each command's usage lines and the flags it takes.
@@ -53,6 +57,7 @@ const FLAGS: Record<string, string> = {
   '--no-wait': 'start the run and return at once (exit 4); read it later with done-done status',
   '--foreground': 'run every step in this process instead of a detached runner (use in CI)',
   '--run <run-id>': 'the run to show (default: the newest run of this checkout)',
+  '--probe': 'ask the configured agent one JSON-schema question and require a valid answer (one call at the agent\'s model, its cheap default unless you set agent_config.<agent>.model)',
   '--agent <agent>': 'also add a SessionStart hook to .claude/settings.json (claude) or .codex/hooks.json (codex) that shows `done-done` to each session, or a plugin to .opencode/plugins that adds it to the first message of each opencode session (opt-in)',
 };
 // `more` is the reference text a command needs beyond its flags, shared with the top-level help.
@@ -72,8 +77,9 @@ const COMMANDS: Record<string, { usage: [string, string][]; flags: string[]; mor
   doctor: {
     usage: [
       ['done-done doctor', 'check this repo is worth driving: git, config, evidence root, skill, agent, judge, ffprobe'],
+      ['done-done doctor --probe', 'also ask the configured agent one question to prove it answers'],
     ],
-    flags: [],
+    flags: ['--probe'],
     more: [DOCTOR_TEXT],
   },
   run: {
@@ -1274,7 +1280,7 @@ function cmdInit(argv: string[]): number {
   });
   const parts = dash < 0 ? [] : argv.slice(dash + 1);
   const journey = values.journey ?? null;
-  if (values.agent !== undefined && !AGENTS.includes(values.agent))
+  if (values.agent !== undefined && !HOOK_AGENTS.includes(values.agent))
     throw new UsageError(`--agent ${values.agent} is not supported; the supported values are claude, codex, opencode`, 'Run: done-done init --agent <claude|codex|opencode>');
   if (journey === null && parts.length) throw new UsageError('init needs --journey <name> to record a command after --');
   if (journey !== null && !parts.some((p) => p.trim())) throw new UsageError(`init --journey ${journey} needs a command after --`);
@@ -1395,14 +1401,20 @@ function writableDir(p: string): boolean {
   }
 }
 
+const PROBE_SCHEMA = { type: 'object', properties: { ok: { type: 'boolean' } }, required: ['ok'], additionalProperties: false };
 type DoctorCheck = { check: string; status: 'ok' | 'missing'; detail: string; fix: string };
 const unknownRow = (check: string): DoctorCheck => ({ check, status: 'missing', detail: 'unknown without a valid config', fix: '' });
 
 // Is this repo worth driving: git, a valid config and a writable evidence root are
 // required; the verify skill, an agent CLI, the judge binary and ffprobe are optional.
-// Read-only: a missing repo or config is a finding, never a crash, and nothing is created.
+// doctor changes nothing except the --probe call record (the agent itself may keep its own session files): a missing repo or config is a finding, never a crash.
 async function cmdDoctor(argv: string[]): Promise<number> {
-  if (argv.length) throw new UsageError('doctor takes no arguments', 'Run `done-done doctor` with no arguments');
+  let values: { probe?: boolean };
+  try {
+    ({ values } = parseArgs({ args: argv, options: { probe: { type: 'boolean' } }, allowPositionals: false }));
+  } catch (e) {
+    throw new UsageError((e as Error).message, 'Run `done-done doctor` (or `done-done doctor --probe`) with no other arguments');
+  }
   let repo: string | null = null;
   try {
     repo = git(process.cwd(), 'rev-parse', '--show-toplevel');
@@ -1451,12 +1463,36 @@ async function cmdDoctor(argv: string[]): Promise<number> {
         fix: `Write ${shown(repo, skillFile)} describing how to drive this app (a later done-done init will scaffold it)`,
       });
   }
-  const agent = AGENTS.map((n) => ({ name: n, path: onPath(n) })).find((a) => a.path);
-  checks.push(
-    agent
-      ? { check: 'agent', status: 'ok', detail: `found ${agent.name} at ${agent.path}`, fix: '' }
-      : { check: 'agent', status: 'missing', detail: 'no claude, codex or opencode binary on PATH', fix: 'Install an agent CLI (claude, codex or opencode); without one, init stays scaffold-only' },
-  );
+  // A repo file that exists but is invalid makes the agent unknown; the global config alone resolves it only when there is no repo file.
+  const repoFileInvalid = !cfg && !!repo && existsSync(join(repo, '.done-done.yaml'));
+  let agentCfg = cfg;
+  let agentError = '';
+  if (!agentCfg && !repoFileInvalid) {
+    try {
+      agentCfg = loadConfig(repo ?? process.cwd(), '');
+    } catch (e) {
+      agentError = (e as Error).message;
+    }
+  }
+  const agent = agentCfg && selectAgent(agentCfg);
+  const startable = AGENTS.filter(supported).join(' and ');
+  const installFix = `Install ${startable}, or set agent: to an installed one of ${AGENTS.join(', ')}`;
+  const switchFix = `Set agent: to ${startable}`;
+  if (repoFileInvalid) {
+    checks.push(unknownRow('agent'));
+  } else if (!agent) {
+    checks.push({ check: 'agent', status: 'missing', detail: agentError, fix: 'Fix the config file named above, then re-run: done-done doctor' });
+  } else {
+    const skipping = agent.skipped.map((a) => `; skipped ${a}: done-done cannot start it yet`).join('');
+    const what = `${agent.agent} (model ${agent.model || 'none'}; ${agent.from === 'auto' ? 'agent: auto' : 'from config'}${skipping})`;
+    checks.push(
+      !agent.path
+        ? { check: 'agent', status: 'missing', detail: `${what} is not on PATH`, fix: installFix }
+        : !supported(agent.agent)
+          ? { check: 'agent', status: 'missing', detail: `${what} at ${agent.path}, but done-done cannot start ${agent.agent} yet (${startable} for now)`, fix: switchFix }
+          : { check: 'agent', status: 'ok', detail: `${what} at ${agent.path}`, fix: '' },
+    );
+  }
   if (!cfg) {
     checks.push(unknownRow('judge'));
   } else {
@@ -1473,7 +1509,34 @@ async function cmdDoctor(argv: string[]): Promise<number> {
       ? { check: 'ffprobe', status: 'ok', detail: `found at ${ffprobe}`, fix: '' }
       : { check: 'ffprobe', status: 'missing', detail: 'no ffprobe on PATH; video evidence is unverified, never a pass', fix: 'Install ffprobe (ffmpeg) to verify video evidence' },
   );
-  const required = ['git', 'config', 'evidence_root'];
+  // The judge --judge runs today is the claude judge (judge.ts, at judge.model); judge.route is recorded but not used until judge routes land.
+  if (!cfg || !agent) {
+    checks.push(unknownRow('judge_choice'));
+  } else {
+    const judge = cfg.judge;
+    const route = judge.route ? `; judge.route ${judge.route} is recorded, not used yet` : '';
+    const judgeChoice = (detail: string, ok: boolean, fix = ''): DoctorCheck => ({ check: 'judge_choice', status: ok ? 'ok' : 'missing', detail: `claude judge (model ${judge.model || 'none'})${detail}${route}`, fix });
+    const apart = agent.agent !== 'claude';
+    checks.push(
+      !agent.path || !supported(agent.agent) ? judgeChoice(`, and no ${agent.path ? 'startable ' : ''}author agent is installed, so there is no independence to check`, false, 'Install an agent (see the agent check) so the judge can be checked against it')
+        : apart ? judgeChoice(`, a different agent from the author (${agent.agent})`, true)
+        : judge.allow_same ? judgeChoice(' in a fresh session, the same agent as the author; judge.allow_same accepts it (session-only independence)', true)
+          : judgeChoice(' in a fresh session, the same agent as the author (session-only independence)', false, 'Set agent: to an agent other than claude, or set judge.allow_same: true in the global config to accept it'),
+    );
+  }
+  if (values.probe && !agent) checks.push(unknownRow('probe'));
+  if (values.probe && agent) {
+    const record = join(home(), 'agents', `probe-${new Date().toISOString().replace(/[:.]/g, '-')}-${agent.agent}.json`);
+    const probe: AgentAnswer & { fix?: string } = !agent.path ? { ok: false, error: `${agent.agent} is not on PATH`, fix: installFix }
+      : !supported(agent.agent) ? { ok: false, error: `done-done cannot start ${agent.agent} yet (${startable} for now)`, fix: switchFix }
+      : askAgent({ agent: agent.agent, model: agent.model, prompt: 'This is a connectivity probe from done-done doctor. Use no tools. Answer with ok set to true.', schema: PROBE_SCHEMA, cwd: repo ?? process.cwd(), timeoutMs: 180_000, tools: 'none', record });
+    checks.push(
+      probe.ok && probe.answer?.ok === true
+        ? { check: 'probe', status: 'ok', detail: `${agent.agent} (model ${agent.model}) answered the schema question; ${probe.recordError ? `the call record could not be written: ${probe.recordError}` : `record ${record}`}`, fix: '' }
+        : { check: 'probe', status: 'missing', detail: `${agent.agent} did not answer: ${probe.error ?? `answer ${JSON.stringify(probe.answer)}`}${probe.record ? `; record ${record}` : ''}${probe.recordError ? `; the call record could not be written: ${probe.recordError}` : ''}`, fix: probe.fix ?? `Check that ${agent.agent} is signed in${agent.model ? ` and can use model ${agent.model}` : ''}, or set agent_config.${agent.agent}.model` },
+    );
+  }
+  const required = ['git', 'config', 'evidence_root', ...(values.probe ? ['probe'] : [])];
   const missingRequired = checks.filter((c) => c.status === 'missing' && required.includes(c.check));
   const result: Record<string, unknown> = { command: 'doctor', result: missingRequired.length ? 'fail' : 'pass', checks };
   // Several missing items can share one fix (set up the config once); name each fix only once.

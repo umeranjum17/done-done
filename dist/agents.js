@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { stripVTControlCharacters } from 'node:util';
-import { AGENTS, CHEAP_MODELS } from './config.js';
+import { AGENTS, CHEAP_MODELS, UsageError } from './config.js';
 import { onPath } from './judge.js';
 // argv never carries the prompt: it goes on stdin, or (file: true) into a 0600 prompt file the argv points at.
 // done-done parses the answer, validates it against the schema, and asks a tool-less call again, at most ASK_ATTEMPTS calls.
@@ -57,7 +57,8 @@ const ADAPTERS = {
     // and the answer is the JSON object in the text parts of its JSON event stream.
     opencode: {
         file: true,
-        argv: (c, dir) => ['run', 'Follow the attached instructions.', '--format', 'json', '-m', c.model, '-f', join(dir, 'prompt.md')],
+        images: true,
+        argv: (c, dir) => ['run', 'Follow the attached instructions.', '--format', 'json', '-m', c.model, '-f', join(dir, 'prompt.md'), ...(c.files ?? []).flatMap((f) => ['-f', f])],
         answer: (out) => {
             const events = out.split('\n').filter((l) => l.startsWith('{')).map((l) => JSON.parse(l));
             const error = events.find((e) => e.type === 'error');
@@ -133,6 +134,37 @@ export function selectAgent(cfg) {
 export const modelFor = (cfg, agent) => cfg.agent_config[agent]?.model || CHEAP_MODELS[agent] || '';
 export function supported(agent) {
     return Object.hasOwn(ADAPTERS, agent);
+}
+export const claudeBin = (cfg) => cfg.judge.claude_code.bin || onPath('claude');
+const routeOf = (agent) => (agent === 'claude' ? 'claude-code' : `answerer:${agent}`);
+const canJudge = (agent) => agent === 'claude' || !!ADAPTERS[agent]?.images;
+export const JUDGES = AGENTS.filter(canJudge);
+export function selectJudge(cfg, author) {
+    const pick = (agent, model, from) => {
+        const independence = agent !== author.agent ? 'agent' : model !== author.model ? 'model' : 'session-only';
+        return { route: routeOf(agent), agent, model, independence, from, author };
+    };
+    const route = cfg.judge.route;
+    if (route === 'auto') {
+        // The first installed agent that can judge and is not the author, at its cheap model; else the author's agent.
+        const ready = AGENTS.filter((a) => canJudge(a) && (a === 'claude' ? claudeBin(cfg) : onPath(a)));
+        const other = ready.find((a) => a !== author.agent);
+        if (other)
+            return pick(other, CHEAP_MODELS[other], 'auto');
+        if (ready.includes(author.agent))
+            return pick(author.agent, CHEAP_MODELS[author.agent], 'auto');
+        throw new UsageError(`judge: no installed agent can judge (judge.route auto looks for ${JUDGES.join(', ')})`, 'Install one of them, or set judge.route in ~/.done-done/config.yaml');
+    }
+    const agent = route === 'claude-code' ? 'claude' : route.slice('answerer:'.length);
+    if (route !== 'claude-code' && !ADAPTERS[agent]?.images)
+        throw new UsageError(`judge: done-done cannot judge through ${agent} yet (done-done cannot send its CLI an image)`, `Set judge.route to claude-code or answerer:<one of ${JUDGES.filter((a) => a !== 'claude').join(', ')}>`);
+    const model = cfg.judge.model || CHEAP_MODELS[agent] || '';
+    if (!model)
+        throw new UsageError(`judge: no model for ${route}`, `Set judge.model in ~/.done-done/config.yaml`);
+    const choice = pick(agent, model, 'config');
+    if (choice.independence === 'session-only' && !cfg.judge.allow_same)
+        throw new UsageError(`judge: judge.route ${route} at model ${model} is the author's own agent and model (${author.agent}), and the judge is never the agent that did the work`, 'Set judge.route or judge.model to another agent or model, or set judge.allow_same: true in ~/.done-done/config.yaml to accept a fresh session of the same one');
+    return choice;
 }
 export function askAgent(c) {
     const adapter = ADAPTERS[c.agent];

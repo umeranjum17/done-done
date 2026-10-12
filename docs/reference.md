@@ -50,7 +50,7 @@ done-done init --agent opencode
 done-done doctor
 ```
 
-`doctor` answers "is this repo worth driving" and changes nothing except the `--probe` call record (the agent itself may keep its own session files). It checks eight items, each reported `ok` or `missing` with the exact fix command (plus a `tool_gate` `warning` row when the agent is pi; see [Agents](#agents)): `git` (inside a repository), `config` (a valid `.done-done.yaml`), `evidence_root` (writable), `verify_skill` (`.agents/skills/verify-<app>/SKILL.md`), `agent` (the coding agent done-done starts, its model and where it came from; `missing` when it is not installed or done-done cannot start it yet; see [Agents](#agents)), `judge` (an executable `claude` binary, a sign-in folder and the judge kit are present, and login is checked only when a capture is judged; the model is never called), `ffprobe` (video evidence only) and `judge_choice` (the claude judge that `--judge` runs, at `judge.model`: `ok` when the author is another agent that done-done can start; `missing` when the author is claude, in a fresh session, unless `judge.allow_same: true` in the global config, and also when no startable author is installed; `judge.route` is recorded and not used yet). Only the first three are required: `doctor` exits 0 when they are all ok and 2 otherwise, so missing optionals never fail the run. In a fresh repo with nothing set up, `doctor` names each missing piece, starting with `done-done init`.
+`doctor` answers "is this repo worth driving" and changes nothing except the `--probe` call record (the agent itself may keep its own session files). It checks eight items, each reported `ok` or `missing` with the exact fix command (plus a `tool_gate` `warning` row when the agent is pi; see [Agents](#agents)): `git` (inside a repository), `config` (a valid `.done-done.yaml`), `evidence_root` (writable), `verify_skill` (`.agents/skills/verify-<app>/SKILL.md`), `agent` (the coding agent done-done starts, its model and where it came from; `missing` when it is not installed or done-done cannot start it yet; see [Agents](#agents)), `judge` (the judge kit is present, and the route's own setup: for `claude-code` an executable `claude` binary and a sign-in folder, with login checked only when a capture is judged; for `answerer:<agent>` the agent on PATH; the model is never called), `ffprobe` (video evidence only) and `judge_choice` (the route and model that `--judge` runs and the author it judges, see [Judge relevance](#judge-relevance-opt-in): `ok` when the judge is another agent or another model; `missing` when it is the author's own agent and model (session-only), unless `judge.allow_same: true` in the global config, and also when no agent that can judge is installed). Only the first three are required: `doctor` exits 0 when they are all ok and 2 otherwise, so missing optionals never fail the run. In a fresh repo with nothing set up, `doctor` names each missing piece, starting with `done-done init`.
 
 ```sh
 done-done doctor --probe
@@ -154,21 +154,27 @@ done-done receipt --judge --from pr-body.md
 
 - **Off by default.** Turn it on per run with `--judge`, or for a project with `judge.enabled: true`. With it off, nothing changes and no model is asked.
 - **One question per capture.** Each cited PNG or JPEG that is in a done-done run record goes to the model with the claim's `outcome:` line and nothing else: no repo, no paths, no other files. Text, log and video evidence are not judged, and the result says so.
-- **Your own Claude plan, through BYOKit.** The judge uses [`@byokit/decide`](https://www.npmjs.com/package/@byokit/decide)'s Claude Code backend, which runs your own `claude` binary against a sign-in folder kept only for done-done. done-done never reads, copies or stores a credential. The kit is an optional peer dependency, so a plain install stays small; the judge needs it and Node 22.18 or later. Without it, `--judge` exits 2 with the command to run the same check with the kit:
+- **A fresh, tools-off call on your own plan, through BYOKit.** Each question is one single-shot call through [`@byokit/decide`](https://www.npmjs.com/package/@byokit/decide) on a route set by `judge.route`:
+  - `claude-code`: BYOKit's Claude Code backend runs your own `claude` binary against a sign-in folder kept only for done-done (`judge.claude_code.config_dir`).
+  - `answerer:<agent>`: BYOKit's answerer calls that coding agent's CLI through the same adapter as the [agent](#agents) itself, with every tool off and the capture attached (opencode today; for example `answerer:opencode` on `opencode-go/muse-spark-1.3-contributor`). It uses the agent's existing login.
+  - `auto` (the default): the first installed agent that can judge (claude, then opencode) that is not the author, at its cheap model. With only the author's agent installed, it judges at the author's cheap model in a fresh session.
+
+  done-done never reads, copies or stores a credential. The kit is an optional peer dependency, so a plain install stays small; the judge needs it and Node 22.18 or later. Without it, `--judge` exits 2 with the command to run the same check with the kit:
 
   ```sh
-  npx -y --allow-git=all -p github:umeranjum17/done-done-axi -p @byokit/decide@0.6.5 done-done-axi check --judge --from pr-body.md
+  npx -y --allow-git=all -p github:umeranjum17/done-done-axi -p @byokit/decide@0.8.0 done-done-axi check --judge --from pr-body.md
   ```
 
-  In a project that installs done-done-axi, `npm install -D @byokit/decide@0.6.5` adds it for good. Sign in once:
+  In a project that installs done-done-axi, `npm install -D @byokit/decide@0.8.0` adds it for good. For the `claude-code` route, sign in once:
 
   ```sh
   mkdir -p ~/.done-done/claude && CLAUDE_CONFIG_DIR=~/.done-done/claude claude auth login
   ```
 
 - **Bounded.** Captures longer than 1280 px on their long side are downscaled first (8-bit PNG; a larger JPEG is reported unsure). One request per capture, at most 10 requests per check (later captures are unsure), a 120-second timeout, no retries.
-- **Cached.** Verdicts are kept in `$DONE_DONE_HOME/judge/`, keyed by the capture's sha256, the outcome text and the model, so a re-run asks no model.
-- **Only runs on a passing check.** When the deterministic checks already fail, no capture is judged.
+- **The judge is never the author.** The author is the coding agent done-done starts (`agent:`). The result names how far apart they are: `agent` (another agent), `model` (the same agent at another model) or `session-only` (the same agent and model, in a fresh session). A `judge.route` and `judge.model` that are the author's own agent and model are a config error (exit 2) unless `judge.allow_same: true` in the global config.
+- **Cached and recorded.** Verdicts are kept in `$DONE_DONE_HOME/runs/<app>/judge/`, keyed by the capture's sha256, the outcome text, the route and the model, so a re-run asks no model. Each call writes a 0600 record (route, model, capture, sha256, timing, verdict, reason, usage; never the prompt text) to the run's `agents/` folder under `verify`, else to `$DONE_DONE_HOME/agents/`.
+- **Only runs on a passing check.** When the deterministic checks already fail, no capture is judged, and a judge pass never turns a failed check into a pass.
 
 | Verdict | Result | Exit |
 |---|---|---|
@@ -176,7 +182,7 @@ done-done receipt --judge --from pr-body.md
 | `fail`: wrong screen | fail | 1 |
 | `unsure`: the model said it cannot tell, was less than 80% sure, or did not answer (a model error or a used-up plan) | inconclusive | 3 |
 
-The result gains a `judge` block with the model and, for each judged file, its verdict, a short reason and whether it came from the cache. A missing or signed-out sign-in folder, a sign-in that is not a Claude subscription, a sign-in folder that is (or links to) your own `~/.claude`, a missing or non-executable `claude` binary, a missing `@byokit/decide` kit or a Node older than 22.18 is a config error (exit 2) whose `help` line is the command to fix it. The kit cannot tell a bad `judge.model` from a used-up plan, so both are `unsure` with a reason naming each. The judge's confidence is the model's own estimate, not a calibrated score.
+The result gains a `judge` block with the route, the model, the independence, the author and, for each judged file, its verdict, a short reason and whether it came from the cache. For the `claude-code` route, a missing or signed-out sign-in folder, a sign-in that is not a Claude subscription, a sign-in folder that is (or links to) your own `~/.claude`, a missing or non-executable `claude` binary, a missing `@byokit/decide` kit or a Node older than 22.18 is a config error (exit 2) whose `help` line is the command to fix it. The kit cannot tell a bad `judge.model` from a used-up plan, so both are `unsure` with a reason naming each. The judge's confidence is the model's own estimate, not a calibrated score.
 
 ### Record a receipt
 
@@ -187,9 +193,9 @@ done-done receipt --from pr-body.md       # or --outcome "<claim>" <files...>, o
 done-done receipt --verify <head>         # read-only: check a recorded receipt
 ```
 
-`receipt` takes the same claim inputs as `check` and runs that check. It writes `<root>/.done-done/receipts/<head>.json` only when the check passes on the current HEAD, the tracked tree is clean, and the check cited at least one evidence file; a dirty tracked tree, a failed or inconclusive check, a pass that cited no evidence (for example `not proven:` allowed by trusted config), or a moved HEAD writes nothing and exits non-zero. The record holds the repo, the head and tree sha, the claim outcome, and every cited file with its sha256 and a timestamp. A cited file is stored relative to the repo, or as `<evidence root>/<path>` when it is under an evidence root outside the repo, so the receipt still finds it from another checkout or a restored evidence root.
+`receipt` takes the same claim inputs as `check` and runs that check. It writes `<root>/.done-done/receipts/<head>.json` only when the check passes on the current HEAD, the tracked tree is clean, and the check cited at least one evidence file; a dirty tracked tree, a failed or inconclusive check, a pass that cited no evidence (for example `not proven:` allowed by trusted config), or a moved HEAD writes nothing and exits non-zero. The record holds the repo, the head and tree sha, the claim outcome, and every cited file with its sha256 and a timestamp. A judged receipt is schema 2 and adds a `judge` block: the route, model, independence and author, and each judged file's path, sha256 and verdict. A cited file is stored relative to the repo, or as `<evidence root>/<path>` when it is under an evidence root outside the repo, so the receipt still finds it from another checkout or a restored evidence root.
 
-`receipt --verify <head>` changes nothing. The argument may be a full commit sha or a ref (`HEAD`, a branch or a tag), resolved to the commit with `git rev-parse --verify <arg>^{commit}` before the receipt lookup; an unresolvable argument fails with the same missing-receipt shape. It succeeds only when the receipt exists, is PASS, the current HEAD is still that head, and every cited file still hashes to the recorded sha256. A missing or malformed receipt and a hash mismatch are failures (exit 1), not usage errors. When the mismatched path is named in a run record, the failure names it as `changed after run <run-id>`.
+`receipt --verify <head>` changes nothing. The argument may be a full commit sha or a ref (`HEAD`, a branch or a tag), resolved to the commit with `git rev-parse --verify <arg>^{commit}` before the receipt lookup; an unresolvable argument fails with the same missing-receipt shape. It succeeds only when the receipt exists, is PASS, the current HEAD is still that head, and every cited file still hashes to the recorded sha256. It reads schema 1 and 2; a schema 2 receipt also needs a well-formed `judge` block whose every verdict is `pass` for a cited file with the same sha256, and the result shows that block. A missing or malformed receipt and a hash mismatch are failures (exit 1), not usage errors. When the mismatched path is named in a run record, the failure names it as `changed after run <run-id>`.
 
 ### Verify a change in one run
 
@@ -203,7 +209,7 @@ done-done abort [--run <run-id>]                                    # stop a liv
 done-done history [--limit <n>]                                     # this checkout's runs, newest first
 ```
 
-`verify` writes `$DONE_DONE_HOME/runs/<app>/<run-id>/run.json` (schema 2), then starts a detached runner that drives the journey, checks the files it wrote and records a receipt (steps `resolve`, `drive`, `check`, `receipt`, `report`). The runner goes on when the command or shell that started it ends. It writes its pid, the journey's process group and a heartbeat to `run.json`, each step to `events.jsonl`, and step output to `logs/`. `run.json` keeps the run's inputs and step state; the head, tree, dirty flag and evidence come from the evidence run record it points to. `verify` waits until the run ends (`--wait`, the default), then prints it like `status`; `--no-wait` returns at once. A journey still running after `journeys.<name>.timeout` (default `30m`, e.g. `90s`) is killed with everything it started, and the run ends inconclusive (exit 3) with `journey timed out after <timeout>`. `status` only reads the store, except that an open run whose runner is gone (its pid is no longer alive, or it never wrote a pid and is still open after 60 s) is shown as `failed` at the step it was on and its journey's process group is killed once (a `journey.killed` marker in the run folder keeps later reads from signalling again). Runs are stored per app, shared by every checkout of it; `status` shows the newest run of the current checkout and names its `repo`.
+`verify` writes `$DONE_DONE_HOME/runs/<app>/<run-id>/run.json` (schema 2), then starts a detached runner that drives the journey, checks the files it wrote and records a receipt (steps `resolve`, `drive`, `check`, `judge`, `receipt`, `report`; `judge` runs only with `--judge` or `judge.enabled`, and its output goes to `logs/judge.log`). The runner goes on when the command or shell that started it ends. It writes its pid, the journey's process group and a heartbeat to `run.json`, each step to `events.jsonl`, and step output to `logs/`. `run.json` keeps the run's inputs and step state; the head, tree, dirty flag and evidence come from the evidence run record it points to. `verify` waits until the run ends (`--wait`, the default), then prints it like `status`; `--no-wait` returns at once. A journey still running after `journeys.<name>.timeout` (default `30m`, e.g. `90s`) is killed with everything it started, and the run ends inconclusive (exit 3) with `journey timed out after <timeout>`. `status` only reads the store, except that an open run whose runner is gone (its pid is no longer alive, or it never wrote a pid and is still open after 60 s) is shown as `failed` at the step it was on and its journey's process group is killed once (a `journey.killed` marker in the run folder keeps later reads from signalling again). Runs are stored per app, shared by every checkout of it; `status` shows the newest run of the current checkout and names its `repo`.
 
 `attach` prints each new event line to stderr while the run goes on, and exits when the run ends or its runner is gone. The step names for `logs --step` are the run's steps (`resolve`, `drive`, `check`, `receipt`, `report`).
 
@@ -263,11 +269,12 @@ agent: auto                           # also allowed in .done-done.yaml, which w
 agent_config:                         # per-agent model; global only, a project file may not set it
   opencode: { model: opencode-go/muse-spark-1.3-contributor }
 judge:                                # used only when the judge is on
-  route: ''                           # recorded only; judge routes land next, and --judge runs the claude judge until then
-  allow_same: false                   # true: accept the claude judge as the author's session-only judge; global only
-  model: claude-haiku-5-5              # the default: cheap and reads images; set any model you like
-  bin: /usr/local/bin/claude          # default: the first `claude` on PATH; an absolute path to an executable
-  config_dir: ~/.done-done/claude     # the default; a sign-in folder for done-done only
+  route: auto                         # auto, claude-code or answerer:<agent> (answerer:opencode today)
+  model: ''                           # only with an explicit route; default: that agent's cheap model
+  allow_same: false                   # true: accept a judge that is the author's own agent and model
+  claude_code:                        # the claude-code route only
+    bin: /usr/local/bin/claude        # default: the first `claude` on PATH; an absolute path to an executable
+    config_dir: ~/.done-done/claude   # the default; a sign-in folder for done-done only
 ```
 
 **Project:** `<repo>/.done-done.yaml`.

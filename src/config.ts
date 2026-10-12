@@ -18,7 +18,8 @@ export type Config = {
   journeys: Record<string, { command: string; timeout?: string }>;
   evidence: { local_root: string; root: string; allow_dirty: boolean; ignore_paths: string[] };
   checks: { not_proven: 'inconclusive' | 'allow'; fix_title: string };
-  judge: { enabled: boolean; model: string; bin: string; config_dir: string; route: string; allow_same: boolean };
+  // route: auto, claude-code, or answerer:<agent>; model: '' for the route's cheap default; claude_code: that route's own config.
+  judge: { enabled: boolean; route: string; model: string; allow_same: boolean; claude_code: { bin: string; config_dir: string } };
   trusted: boolean; // project file came from --trusted-ref
 };
 
@@ -31,7 +32,7 @@ export const AGENTS = ['claude', 'codex', 'opencode', 'pi', 'gemini'];
 export const CHEAP_MODELS: Record<string, string> = { claude: 'claude-haiku-5-5', opencode: 'opencode-go/muse-spark-1.3-contributor', gemini: 'flash-lite' };
 
 // Where each key may be set. Global-only keys describe the machine; repo-only keys describe the project; `any` may be in either.
-const KEYS: Record<string, { scope: 'global' | 'repo' | 'any'; type: 'string' | 'boolean' | 'string[]' | 'journeys' | 'agent' | 'agent_config' }> = {
+const KEYS: Record<string, { scope: 'global' | 'repo' | 'any'; type: 'string' | 'boolean' | 'string[]' | 'journeys' | 'agent' | 'agent_config' | 'route' | 'claude_code' }> = {
   agent: { scope: 'any', type: 'agent' },
   agent_config: { scope: 'global', type: 'agent_config' },
   'evidence.local_root': { scope: 'global', type: 'string' },
@@ -45,12 +46,13 @@ const KEYS: Record<string, { scope: 'global' | 'repo' | 'any'; type: 'string' | 
   'checks.fix_title': { scope: 'repo', type: 'string' },
   'judge.enabled': { scope: 'repo', type: 'boolean' },
   'judge.model': { scope: 'global', type: 'string' },
-  'judge.bin': { scope: 'global', type: 'string' },
-  'judge.config_dir': { scope: 'global', type: 'string' },
-  'judge.route': { scope: 'global', type: 'string' },
+  'judge.route': { scope: 'global', type: 'route' },
+  'judge.claude_code': { scope: 'global', type: 'claude_code' },
   'judge.allow_same': { scope: 'global', type: 'boolean' },
 };
 const SECTIONS = new Set(['evidence', 'checks', 'judge']);
+// Keys that moved, so an old config names the new key instead of failing as unknown.
+const MOVED: Record<string, string> = { 'judge.bin': 'judge.claude_code.bin', 'judge.config_dir': 'judge.claude_code.config_dir' };
 
 export const home = () => process.env.DONE_DONE_HOME || join(homedir(), '.done-done');
 
@@ -85,6 +87,7 @@ function apply(target: Record<string, any>, text: string | undefined, file: stri
   }
   for (const [key, value] of flatten(doc, file)) {
     const spec = KEYS[key];
+    if (MOVED[key]) throw new UsageError(`${file}: ${key} is now ${MOVED[key]}`);
     if (!spec) throw new UsageError(`${file}: unknown key ${key}`);
     if (spec.scope !== scope && spec.scope !== 'any') throw new UsageError(`${file}: ${key} may only be set in the ${spec.scope === 'global' ? 'global config' : 'project .done-done.yaml'}`);
     const ok =
@@ -92,13 +95,16 @@ function apply(target: Record<string, any>, text: string | undefined, file: stri
       : spec.type === 'boolean' ? typeof value === 'boolean'
       : spec.type === 'string[]' ? Array.isArray(value) && value.every((v) => typeof v === 'string')
       : spec.type === 'agent' ? value === 'auto' || [value].flat().every((v) => AGENTS.includes(v as string)) && [value].flat().length > 0
+      : spec.type === 'route' ? typeof value === 'string' && (['auto', 'claude-code'].includes(value) || AGENTS.some((a) => value === `answerer:${a}`))
+      : spec.type === 'claude_code' ? !!value && typeof value === 'object' && !Array.isArray(value) && Object.entries(value).every(([k, v]) => ['bin', 'config_dir'].includes(k) && typeof v === 'string')
       : spec.type === 'agent_config' ? !!value && typeof value === 'object' && Object.entries(value).every(([a, c]) => AGENTS.includes(a) && !!c && typeof c === 'object' && Object.entries(c).every(([k, m]) => k === 'model' && typeof m === 'string'))
       : !!value && typeof value === 'object' && Object.values(value).every((j: any) => j && typeof j.command === 'string');
-    const want = { journeys: 'a map of name: {command: <string>}', agent: `auto, or one or a list of ${AGENTS.join(', ')}`, agent_config: `a map of <agent>: {model: <string>} for ${AGENTS.join(', ')}` } as Record<string, string>;
+    const want = { journeys: 'a map of name: {command: <string>}', agent: `auto, or one or a list of ${AGENTS.join(', ')}`, agent_config: `a map of <agent>: {model: <string>} for ${AGENTS.join(', ')}`, route: `auto, claude-code, or answerer:<agent> for one of ${AGENTS.join(', ')}`, claude_code: 'a map with bin and config_dir, each a string' } as Record<string, string>;
     if (!ok) throw new UsageError(`${file}: ${key} must be ${want[spec.type] ?? `a ${spec.type}`}`);
     if (key === 'checks.not_proven' && value !== 'inconclusive' && value !== 'allow') throw new UsageError(`${file}: checks.not_proven must be inconclusive or allow`);
     const [a, b] = key.split('.');
-    if (b) target[a][b] = value;
+    if (key === 'judge.claude_code') target.judge.claude_code = { ...target.judge.claude_code, ...(value as object) };
+    else if (b) target[a][b] = value;
     else if (key === 'agent') target.agent = value === 'auto' ? 'auto' : [value].flat();
     else if (key === 'agent_config') target.agent_config = { ...target.agent_config, ...(value as object) };
     else target[a] = value;
@@ -124,7 +130,7 @@ function defaultConfig(repo: string): Config {
     journeys: {},
     evidence: { local_root: join(home(), 'evidence'), root: '', allow_dirty: false, ignore_paths: [] },
     checks: { not_proven: 'inconclusive', fix_title: '^(fix|bugfix|hotfix)\\b' },
-    judge: { enabled: false, model: CHEAP_MODELS.claude, bin: '', config_dir: join(home(), 'claude'), route: '', allow_same: false },
+    judge: { enabled: false, route: 'auto', model: '', allow_same: false, claude_code: { bin: '', config_dir: join(home(), 'claude') } },
     trusted: false,
   };
 }
@@ -140,8 +146,10 @@ export function loadConfig(repo: string, projectText?: string | null): Config {
   cfg.skill ||= `.agents/skills/verify-${cfg.app}`;
   const tilde = (p: string) => p.replace(/^~(?=\/|$)/, homedir());
   const local = tilde(cfg.evidence.local_root);
-  cfg.judge.bin = tilde(cfg.judge.bin);
-  cfg.judge.config_dir = tilde(cfg.judge.config_dir);
+  cfg.judge.claude_code.bin = tilde(cfg.judge.claude_code.bin);
+  cfg.judge.claude_code.config_dir = tilde(cfg.judge.claude_code.config_dir);
+  // auto picks each agent's own cheap model, so a model alone names no judge.
+  if (cfg.judge.route === 'auto' && cfg.judge.model) throw new UsageError(`${globalFile}: judge.model needs judge.route (claude-code or answerer:<agent>); judge.route auto uses each agent's cheap model`);
   // A relative root is under the repo (and dies with the checkout); an absolute one is used as-is.
   cfg.evidence.root = cfg.evidence.root ? resolve(repo, cfg.evidence.root) : join(local, cfg.app);
   return cfg;

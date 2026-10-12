@@ -8,7 +8,9 @@ set -eu
 id=$1 head=$3 pr=$4
 cd "$2" || exit 2
 ref=$(git symbolic-ref -q --short refs/remotes/origin/HEAD) ||
-  { git rev-parse -q --verify origin/main >/dev/null && ref=origin/main; } || ref=origin/master
+  for ref in origin/main origin/master main master; do
+    git rev-parse -q --verify "$ref^{commit}" >/dev/null && break
+  done || :
 git cat-file -e "$ref:.done-done.yaml" 2>/dev/null ||
   echo "merge-gate: no .done-done.yaml at $ref, so done-done uses its default rules; merge the config to $ref first" >&2
 if [ "$pr" = - ]; then

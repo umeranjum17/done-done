@@ -517,10 +517,12 @@ test('the Firstmate merge gate passes fresh proof with a receipt, and refuses a 
   assert.doesNotMatch(stale.out, /command: receipt/, 'a failed check refuses before the receipt is read');
 });
 
-test('the Firstmate merge gate reads a local-only task\'s rules from the default branch, not the task branch', () => {
+for (const remote of [true, false]) test(`the Firstmate merge gate reads a local-only task's rules from the default branch${remote ? '' : ' (local main in a repo with no remote)'}, not the task branch`, () => {
   const { dir, repo, env, sh, dd, head, shots } = setup();
-  sh('update-ref', 'refs/remotes/origin/main', 'HEAD');
-  sh('symbolic-ref', 'refs/remotes/origin/HEAD', 'refs/remotes/origin/main');
+  if (remote) {
+    sh('update-ref', 'refs/remotes/origin/main', 'HEAD');
+    sh('symbolic-ref', 'refs/remotes/origin/HEAD', 'refs/remotes/origin/main');
+  } else sh('checkout', '-qb', 'fm/t2');
   // The task branch ignores src/ so its own stale evidence would pass; the default branch does not.
   writeFileSync(join(repo, '.done-done.yaml'), 'app: notes\nevidence:\n  root: .proof\n  ignore_paths: ["docs/**", "src/**"]\njourneys:\n  shots:\n    command: node make-shots.mjs ${RUN_ID}\n');
   sh('commit', '-qam', 'branch loosens ignore_paths');

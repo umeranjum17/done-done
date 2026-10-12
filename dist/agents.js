@@ -44,9 +44,9 @@ const ADAPTERS = {
     // pi -p reads the prompt on stdin (probed 12 Oct: with no positional message, stdin becomes the user
     // message); --mode json streams JSONL events whose assistant message_end holds the answer text,
     // --no-session keeps the probe ephemeral. No schema flag: parse + validate + ask again.
-    // Pi has no hard permission gate, so read/edit steps still see every tool pi loads.
+    // Pi has no permission gate for edit steps, so doctor warns about it. Without a model, pi runs its own default.
     pi: {
-        argv: (c) => ['-p', '--mode', 'json', '--no-session', ...(c.tools === 'none' ? ['--no-tools'] : c.tools === 'read' ? ['-t', 'read,grep,find,ls'] : []), '--model', c.model],
+        argv: (c) => ['-p', '--mode', 'json', '--no-session', ...(c.tools === 'none' ? ['--no-tools'] : c.tools === 'read' ? ['-t', 'read,grep,find,ls'] : []), ...(c.model ? ['--model', c.model] : [])],
         answer: (out) => {
             let text = '';
             let failure = '';
@@ -72,11 +72,11 @@ const ADAPTERS = {
     },
     // gemini -p text is appended to stdin, so -p carries only a fixed trailer and the prompt goes on stdin;
     // -o json prints one object {response, stats, error?} (its headless.md). plan mode is read-only, so a
-    // headless call never blocks on an approval prompt; yolo is only for edit steps. --skip-trust is the
+    // headless call never blocks on an approval prompt; auto_edit (edits approved, shell still asks) is only for edit steps. --skip-trust is the
     // CLI's own documented headless path (its trusted-folders.md): done-done never runs interactively, so
     // the trust dialog could never be answered. No schema flag either: parse + validate + ask again.
     gemini: {
-        argv: (c) => ['-p', 'Follow the instructions on stdin.', '-o', 'json', '-m', c.model, '--approval-mode', c.tools === 'edit' ? 'yolo' : 'plan', '--skip-trust'],
+        argv: (c) => ['-p', 'Follow the instructions on stdin.', '-o', 'json', '-m', c.model, '--approval-mode', c.tools === 'edit' ? 'auto_edit' : 'plan', '--skip-trust'],
         answer: (out) => {
             const r = JSON.parse(out);
             if (!r.response && r.error)
@@ -113,8 +113,6 @@ export function askAgent(c) {
         cwd = c.tools === 'none' ? dir : c.cwd;
         if (!adapter)
             throw new Error(`no adapter for ${c.agent} yet`);
-        if (!c.model)
-            throw new Error(`no model for ${c.agent}; set agent_config.${c.agent}.model`);
         let lastError = '';
         for (;;) {
             attempts++;

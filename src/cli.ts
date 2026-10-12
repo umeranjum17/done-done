@@ -1615,8 +1615,9 @@ function writableDir(p: string): boolean {
 }
 
 const PROBE_SCHEMA = { type: 'object', properties: { ok: { type: 'boolean' } }, required: ['ok'], additionalProperties: false };
-type DoctorCheck = { check: string; status: 'ok' | 'missing'; detail: string; fix: string };
+type DoctorCheck = { check: string; status: 'ok' | 'missing' | 'warning'; detail: string; fix: string };
 const unknownRow = (check: string): DoctorCheck => ({ check, status: 'missing', detail: 'unknown without a valid config', fix: '' });
+const modelName = (model: string) => (model ? `model ${model}` : 'its own default model');
 
 // Is this repo worth driving: git, a valid config and a writable evidence root are
 // required; the verify skill, an agent CLI, the judge binary and ffprobe are optional.
@@ -1698,7 +1699,7 @@ async function cmdDoctor(argv: string[]): Promise<number> {
     checks.push({ check: 'agent', status: 'missing', detail: agentError, fix: 'Fix the config file named above, then re-run: done-done doctor' });
   } else {
     const skipping = agent.skipped.map((a) => `; skipped ${a}: done-done cannot start it yet`).join('');
-    const what = `${agent.agent} (model ${agent.model || 'none'}; ${agent.from === 'auto' ? 'agent: auto' : 'from config'}${skipping})`;
+    const what = `${agent.agent} (${modelName(agent.model)}; ${agent.from === 'auto' ? 'agent: auto' : 'from config'}${skipping})`;
     checks.push(
       !agent.path
         ? { check: 'agent', status: 'missing', detail: `${what} is not on PATH`, fix: installFix }
@@ -1706,6 +1707,7 @@ async function cmdDoctor(argv: string[]): Promise<number> {
           ? { check: 'agent', status: 'missing', detail: `${what} at ${agent.path}, but done-done cannot start ${agent.agent} yet (${startable} for now)`, fix: switchFix }
           : { check: 'agent', status: 'ok', detail: `${what} at ${agent.path}`, fix: '' },
     );
+    if (agent.agent === 'pi') checks.push({ check: 'tool_gate', status: 'warning', detail: 'pi has no permission gate: every pi tool runs without approval', fix: '' });
   }
   if (!cfg) {
     checks.push(unknownRow('judge'));
@@ -1746,7 +1748,7 @@ async function cmdDoctor(argv: string[]): Promise<number> {
       : askAgent({ agent: agent.agent, model: agent.model, prompt: 'This is a connectivity probe from done-done doctor. Use no tools. Answer with ok set to true.', schema: PROBE_SCHEMA, cwd: repo ?? process.cwd(), timeoutMs: 180_000, tools: 'none', record });
     checks.push(
       probe.ok && probe.answer?.ok === true
-        ? { check: 'probe', status: 'ok', detail: `${agent.agent} (model ${agent.model}) answered the schema question; ${probe.recordError ? `the call record could not be written: ${probe.recordError}` : `record ${record}`}`, fix: '' }
+        ? { check: 'probe', status: 'ok', detail: `${agent.agent} (${modelName(agent.model)}) answered the schema question; ${probe.recordError ? `the call record could not be written: ${probe.recordError}` : `record ${record}`}`, fix: '' }
         : { check: 'probe', status: 'missing', detail: `${agent.agent} did not answer: ${probe.error ?? `answer ${JSON.stringify(probe.answer)}`}${probe.record ? `; record ${record}` : ''}${probe.recordError ? `; the call record could not be written: ${probe.recordError}` : ''}`, fix: probe.fix ?? `Check that ${agent.agent} is signed in${agent.model ? ` and can use model ${agent.model}` : ''}, or set agent_config.${agent.agent}.model` },
     );
   }

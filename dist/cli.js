@@ -1657,6 +1657,7 @@ function writableDir(p) {
 }
 const PROBE_SCHEMA = { type: 'object', properties: { ok: { type: 'boolean' } }, required: ['ok'], additionalProperties: false };
 const unknownRow = (check) => ({ check, status: 'missing', detail: 'unknown without a valid config', fix: '' });
+const modelName = (model) => (model ? `model ${model}` : 'its own default model');
 // Is this repo worth driving: git, a valid config and a writable evidence root are
 // required; the verify skill, an agent CLI, the judge binary and ffprobe are optional.
 // doctor changes nothing except the --probe call record (the agent itself may keep its own session files): a missing repo or config is a finding, never a crash.
@@ -1747,12 +1748,14 @@ async function cmdDoctor(argv) {
     }
     else {
         const skipping = agent.skipped.map((a) => `; skipped ${a}: done-done cannot start it yet`).join('');
-        const what = `${agent.agent} (model ${agent.model || 'none'}; ${agent.from === 'auto' ? 'agent: auto' : 'from config'}${skipping})`;
+        const what = `${agent.agent} (${modelName(agent.model)}; ${agent.from === 'auto' ? 'agent: auto' : 'from config'}${skipping})`;
         checks.push(!agent.path
             ? { check: 'agent', status: 'missing', detail: `${what} is not on PATH`, fix: installFix }
             : !supported(agent.agent)
                 ? { check: 'agent', status: 'missing', detail: `${what} at ${agent.path}, but done-done cannot start ${agent.agent} yet (${startable} for now)`, fix: switchFix }
                 : { check: 'agent', status: 'ok', detail: `${what} at ${agent.path}`, fix: '' });
+        if (agent.agent === 'pi')
+            checks.push({ check: 'tool_gate', status: 'warning', detail: 'pi has no permission gate: every pi tool runs without approval', fix: '' });
     }
     if (!cfg) {
         checks.push(unknownRow('judge'));
@@ -1792,7 +1795,7 @@ async function cmdDoctor(argv) {
             : !supported(agent.agent) ? { ok: false, error: `done-done cannot start ${agent.agent} yet (${startable} for now)`, fix: switchFix }
                 : askAgent({ agent: agent.agent, model: agent.model, prompt: 'This is a connectivity probe from done-done doctor. Use no tools. Answer with ok set to true.', schema: PROBE_SCHEMA, cwd: repo ?? process.cwd(), timeoutMs: 180_000, tools: 'none', record });
         checks.push(probe.ok && probe.answer?.ok === true
-            ? { check: 'probe', status: 'ok', detail: `${agent.agent} (model ${agent.model}) answered the schema question; ${probe.recordError ? `the call record could not be written: ${probe.recordError}` : `record ${record}`}`, fix: '' }
+            ? { check: 'probe', status: 'ok', detail: `${agent.agent} (${modelName(agent.model)}) answered the schema question; ${probe.recordError ? `the call record could not be written: ${probe.recordError}` : `record ${record}`}`, fix: '' }
             : { check: 'probe', status: 'missing', detail: `${agent.agent} did not answer: ${probe.error ?? `answer ${JSON.stringify(probe.answer)}`}${probe.record ? `; record ${record}` : ''}${probe.recordError ? `; the call record could not be written: ${probe.recordError}` : ''}`, fix: probe.fix ?? `Check that ${agent.agent} is signed in${agent.model ? ` and can use model ${agent.model}` : ''}, or set agent_config.${agent.agent}.model` });
     }
     const required = ['git', 'config', 'evidence_root', ...(values.probe ? ['probe'] : [])];

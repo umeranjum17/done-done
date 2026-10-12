@@ -1863,7 +1863,7 @@ test('doctor finds agent, judge and ffprobe binaries from PATH; missing optional
   assert.match(f.checks[6].detail, /found at .*ffprobe/);
   const codexOnly = toon(doctorIn(repo, pathEnv(env, ['codex']), 'doctor'));
   assert.equal(codexOnly.checks[4].status, 'missing');
-  assert.match(codexOnly.checks[4].detail, /^codex \(model none; agent: auto\) at .*, but done-done cannot start codex yet \(claude, opencode, pi and gemini for now\)/);
+  assert.match(codexOnly.checks[4].detail, /^codex \(its own default model; agent: auto\) at .*, but done-done cannot start codex yet \(claude, opencode, pi and gemini for now\)/);
   assert.equal(codexOnly.checks[7].status, 'missing', 'an author done-done cannot start is no author');
   assert.match(codexOnly.checks[7].detail, /^claude judge \(model claude-haiku-5-5\), and no startable author agent is installed/);
   const two = toon(doctorIn(repo, pathEnv(env, ['codex', 'opencode']), 'doctor'));
@@ -2258,18 +2258,18 @@ test('doctor --probe asks pi on stdin (never in argv) with tools off and a scrat
   const r = doctorIn(repo, s.env, 'doctor', '--probe');
   assert.equal(r.code, 0, r.out);
   const d = toon(r);
-  assert.match(d.checks.find((x) => x.check === 'agent').detail, /^pi \(model claude-bridge\/claude-haiku-4-5; from config\)/);
+  assert.match(d.checks.find((x) => x.check === 'agent').detail, /^pi \(its own default model; from config\)/);
   assert.equal(d.checks.find((x) => x.check === 'probe').status, 'ok');
   const [call] = s.calls();
   assert.equal(call.agent, 'pi');
   assert.match(call.stdin, /connectivity probe/, 'the prompt goes on stdin (the schema is enforced by done-done, then asked again)');
   assert.ok(!call.argv.some((a) => a.includes('connectivity probe')), 'never in argv');
-  assert.deepEqual(call.argv, ['-p', '--mode', 'json', '--no-session', '--no-tools', '--model', 'claude-bridge/claude-haiku-4-5']);
+  assert.deepEqual(call.argv, ['-p', '--mode', 'json', '--no-session', '--no-tools'], 'no model is passed, so pi runs its own default');
   assert.notEqual(call.cwd, repo, 'a tool-less probe runs in a scratch dir, never the repo');
   const record = d.checks.find((x) => x.check === 'probe').detail.match(/record (\S+)$/)[1];
   assert.equal(statSync(record).mode & 0o777, 0o600);
   const rec = JSON.parse(readFileSync(record, 'utf8'));
-  assert.deepEqual([rec.agent, rec.model, rec.tools, rec.attempts, rec.ok, rec.answer], ['pi', 'claude-bridge/claude-haiku-4-5', 'none', 1, true, { ok: true }]);
+  assert.deepEqual([rec.agent, rec.model, rec.tools, rec.attempts, rec.ok, rec.answer], ['pi', '', 'none', 1, true, { ok: true }]);
   assert.ok(rec.prompt_bytes > 0 && !JSON.stringify(rec).includes('connectivity probe'), 'the record keeps no prompt text');
 });
 
@@ -2317,9 +2317,40 @@ test('doctor --probe asks gemini with the prompt on stdin, and reports a signed-
   assert.match(probe.fix, /Check that gemini is signed in and can use model flash-lite/);
 });
 
-test('agent auto picks pi over gemini at their cheap defaults', () => {
+test('agent auto picks pi over gemini, and doctor warns that pi has no permission gate', () => {
   const { repo, env } = setup();
   const s = stubPiGemini(env);
   const d = toon(doctorIn(repo, s.env, 'doctor'));
-  assert.match(d.checks.find((x) => x.check === 'agent').detail, /^pi \(model claude-bridge\/claude-haiku-4-5; agent: auto\) at /);
+  assert.match(d.checks.find((x) => x.check === 'agent').detail, /^pi \(its own default model; agent: auto\) at /);
+  const gate = d.checks.find((x) => x.check === 'tool_gate');
+  assert.equal(gate.status, 'warning');
+  assert.equal(gate.detail, 'pi has no permission gate: every pi tool runs without approval');
+});
+
+test('agent_config.pi.model is passed to pi as --model', () => {
+  const { repo, env } = setup();
+  const s = stubPiGemini(env);
+  mkdirSync(env.DONE_DONE_HOME, { recursive: true });
+  writeFileSync(join(env.DONE_DONE_HOME, 'config.yaml'), 'agent: pi\nagent_config:\n  pi: { model: vendor/some-model }\n');
+  const d = toon(doctorIn(repo, s.env, 'doctor', '--probe'));
+  assert.match(d.checks.find((x) => x.check === 'agent').detail, /^pi \(model vendor\/some-model; from config\)/);
+  assert.deepEqual(s.calls()[0].argv, ['-p', '--mode', 'json', '--no-session', '--no-tools', '--model', 'vendor/some-model']);
+});
+
+test('gemini edit steps run with auto_edit, never yolo, and read steps stay in plan mode', async () => {
+  const { repo, env } = setup();
+  const s = stubPiGemini(env);
+  const { askAgent } = await import(pathToFileURL(join(dirname(fileURLToPath(import.meta.url)), '..', 'dist', 'agents.js')).href);
+  const call = { agent: 'gemini', model: 'flash-lite', prompt: 'p', schema: { type: 'object', properties: { ok: { type: 'boolean' } }, required: ['ok'] }, cwd: repo, timeoutMs: 60_000, record: join(s.env.PATH, 'rec.json') };
+  const old = process.env.PATH;
+  process.env.PATH = s.env.PATH;
+  try {
+    askAgent({ ...call, tools: 'edit' });
+    askAgent({ ...call, tools: 'read' });
+  } finally {
+    process.env.PATH = old;
+  }
+  const [edit, read] = s.calls();
+  assert.equal(edit.argv[edit.argv.indexOf('--approval-mode') + 1], 'auto_edit');
+  assert.equal(read.argv[read.argv.indexOf('--approval-mode') + 1], 'plan');
 });

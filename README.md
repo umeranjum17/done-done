@@ -45,7 +45,25 @@ Four moments from a demo notes app. Every picture is real output from the curren
 
 ## Quick start
 
-You need Node 22.5 or later and git. done-done is not on npm yet, so install it from source.
+You need Node 22.5 or later and git.
+
+### Agent skill (recommended)
+
+Let your coding agent drive done-done. Install the skill in the [Agent Skills](https://agentskills.io) format with [`npx skills`](https://github.com/vercel-labs/skills); it works in Claude Code, Codex, opencode and pi:
+
+```sh
+npx skills add umeranjum17/done-done --skill done-done -g
+```
+
+Then, in your app's repo, ask in plain words:
+
+> prove the app in this repo works
+
+The agent sets done-done up, captures proof from your real app, checks it and tells you the result. The skill is minimal: it points the agent to the live CLI guidance (`done-done --help` and the bare `done-done`) through `npx`, so nothing needs installing first and the installed skill never goes stale. Drop `-g` to install it for one project only.
+
+### Manual CLI
+
+done-done is not on npm yet, so install it from source.
 
 **1. Install**
 
@@ -122,6 +140,8 @@ So far: `init`, `run`, `check`, `receipt` and the opt-in screenshot judge. Comin
 ```sh
 npm install
 npm test   # builds, then runs the end-to-end tests against throwaway git repos
+npm run build:skill              # regenerate skills/done-done/SKILL.md from src/skill.ts
+npm run build:skill -- --check   # fail if the committed skill is out of date (CI runs this)
 ```
 
 The terminal pictures (hero, run, pass, reasons, config) are real output from the current build; redraw them with `npm run build && node docs/media/make.mjs`. The wordmark and the flow picture are hand-made SVGs.

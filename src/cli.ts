@@ -1420,10 +1420,9 @@ async function cmdDoctor(argv: string[]): Promise<number> {
     checks.push({ check: 'config', status: 'missing', detail: 'unknown without a git repository', fix: 'Run done-done from inside a git repository' });
   } else {
     try {
-      const loaded = loadConfig(repo);
+      cfg = loadConfig(repo);
       if (existsSync(join(repo, '.done-done.yaml'))) {
-        cfg = loaded;
-        checks.push({ check: 'config', status: 'ok', detail: `.done-done.yaml is valid (app ${loaded.app})`, fix: '' });
+        checks.push({ check: 'config', status: 'ok', detail: `.done-done.yaml is valid (app ${cfg.app})`, fix: '' });
       } else {
         checks.push({ check: 'config', status: 'missing', detail: 'no .done-done.yaml', fix: 'Run `done-done init` to write a minimal .done-done.yaml' });
       }

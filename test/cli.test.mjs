@@ -1760,6 +1760,17 @@ test('doctor does not send a repo with a malformed global config to init', () =>
   assert.ok(!d.help.some((h) => h.includes('done-done init')), 'init would read the same malformed global config and fail');
 });
 
+test('doctor checks the evidence root from a valid global config when the repo has no project file', () => {
+  const b = bareRepo();
+  mkdirSync(b.env.DONE_DONE_HOME, { recursive: true });
+  writeFileSync(join(b.env.DONE_DONE_HOME, 'config.yaml'), 'judge:\n  model: claude-test-1\n');
+  const d = toon(b.dd('doctor'));
+  assert.equal(d.checks[1].status, 'missing');
+  assert.equal(d.checks[2].status, 'ok', 'the loaded config is used, not an unknown row');
+  assert.match(d.checks[2].detail, /writable/);
+  assert.ok(d.help.some((h) => h.includes('done-done init')));
+});
+
 test('doctor reports a present verify skill as ok', () => {
   const { repo, dd } = setup();
   mkdirSync(join(repo, '.agents', 'skills', 'verify-notes'), { recursive: true });
@@ -1811,6 +1822,17 @@ test('doctor reports the judge missing when judge.bin does not exist', () => {
   assert.equal(j.checks[5].status, 'missing');
   assert.match(j.checks[5].detail, /is not an executable file/);
   assert.match(j.checks[5].fix, /judge\.bin/);
+});
+
+test('doctor reports the judge missing when judge.bin is a directory', () => {
+  const { repo, env } = setup();
+  mkdirSync(join(env.DONE_DONE_HOME, 'claude'), { recursive: true });
+  const dirBin = join(env.DONE_DONE_HOME, 'bindir');
+  mkdirSync(dirBin, { recursive: true });
+  writeFileSync(join(env.DONE_DONE_HOME, 'config.yaml'), `judge:\n  bin: ${JSON.stringify(dirBin)}\n`);
+  const j = toon(doctorIn(repo, pathEnv(env, ['claude']), 'doctor'));
+  assert.equal(j.checks[5].status, 'missing');
+  assert.match(j.checks[5].detail, /is not an executable file/);
 });
 
 test('doctor reports the judge missing when its sign-in folder is a ~/.claude', () => {

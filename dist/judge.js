@@ -1,6 +1,6 @@
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { accessSync, constants, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { accessSync, constants, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { delimiter, isAbsolute, join } from 'node:path';
 import { home, UsageError } from './config.js';
@@ -25,7 +25,7 @@ const QUESTION = {
 function isExecutable(path) {
     try {
         accessSync(path, constants.X_OK);
-        return true;
+        return statSync(path).isFile();
     }
     catch {
         return false;

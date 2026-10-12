@@ -1516,7 +1516,7 @@ async function cmdDoctor(argv) {
                 : [`Add a journey to .done-done.yaml, commit, then \`done-done run smoke\` and ${check}`];
     }
     else {
-        result.help = missingRequired.length ? fixes : ['Run `done-done init` to write a minimal .done-done.yaml'];
+        result.help = fixes;
     }
     emit(result);
     return missingRequired.length ? USAGE : PASS;

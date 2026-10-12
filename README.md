@@ -68,7 +68,7 @@ The skill tells your agent to use `done-done` if it is on PATH and otherwise run
 npx -y done-done-axi --help
 ```
 
-The skill stays a short stub and sends the agent to `--help` and the bare command for current instructions, so an installed copy cannot go stale against a newer CLI.
+<The skill stays a short stub and sends the agent to `--help` and the bare command for current instructions, so an installed copy cannot go stale against a newer CLI.
 
 Then, in agents that expose skills as slash commands (Claude Code, for example), invoke it directly:
 
@@ -84,13 +84,13 @@ The skill is the recommended path, but it is not the only one.
 
 ### Manual CLI
 
-**1. Install**
+<**1. Install**
 
 ```sh
-npm install -g done-done-axi
+npm install -g --prefix ~/.local done-done-axi
 ```
 
-This installs two names for the same CLI: `done-done-axi` and the short `done-done` used below. To skip the install, run `npx -y done-done-axi` wherever this README says `done-done`.
+This installs two names for the same CLI: `done-done-axi` and the short `done-done` used below. `--prefix ~/.local` installs into your home folder, so it needs no `sudo`. To skip the install, run `npx -y done-done-axi` wherever this README says `done-done`. If `done-done --version` then says "command not found", add `~/.local/bin` to your `PATH`: `export PATH="$HOME/.local/bin:$PATH"`.
 
 **2. Set it up in your app's repo**
 
@@ -159,18 +159,21 @@ So far: `init`, `run`, `check`, `receipt` and the opt-in screenshot judge. Comin
 ## Develop
 
 ```sh
-git clone https://github.com/umeranjum17/done-done-axi
+<git clone https://github.com/umeranjum17/done-done-axi
 cd done-done-axi
 npm install
+npm install -g --prefix ~/.local .   # optional: links this checkout as done-done on your PATH
 npm test   # builds, then runs the end-to-end tests against throwaway git repos
 npm run build:skill              # regenerate skills/done-done/SKILL.md from src/skill.ts
 npm run build:skill -- --check   # fail if the committed skill is out of date (CI runs this)
 ```
 
-To run your checkout as `done-done` and `done-done-axi`, add `npm link`. To try an unreleased commit without cloning, run it straight from GitHub; the first run builds it (10 to 20 seconds), and npm 12 needs `--allow-git=all`:
+<To try an unreleased commit without cloning, run it straight from GitHub; the first run builds it (10 to 20 seconds), and npm 12 needs `--allow-git=all`:
 
 ```sh
 npx -y --allow-git=all github:umeranjum17/done-done-axi --help
 ```
 
-The terminal pictures (hero, run, pass, reasons, config) are real output from the current build; redraw them with `npm run build && node docs/media/make.mjs`. The wordmark and the flow picture are hand-made SVGs.
+`dist/` is committed, so installing from GitHub needs no build step. `npm test` rebuilds it and fails while the rebuilt `dist/` differs from the commit, so commit `dist/` with your change.
+
+The terminal pictures (hero, run, pass, reasons, config) are real output from the current build; redraw them with `npx tsc && node docs/media/make.mjs`. The wordmark and the flow picture are hand-made SVGs.

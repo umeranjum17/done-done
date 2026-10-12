@@ -50,7 +50,7 @@ done-done init --agent opencode
 done-done doctor
 ```
 
-`doctor` answers "is this repo worth driving" and changes nothing. It checks seven items, each reported `ok` or `missing` with the exact fix command: `git` (inside a repository), `config` (a valid `.done-done.yaml`), `evidence_root` (writable), `verify_skill` (`.agents/skills/verify-<app>/SKILL.md`), `agent` (`claude`, `codex` or `opencode` on PATH; the first one wins), `judge` (an executable `claude` binary, a sign-in folder and the judge kit are present, and login is checked only when a capture is judged; the model is never called) and `ffprobe` (video evidence only). Only the first three are required: `doctor` exits 0 when they are all ok and 2 otherwise, so missing optionals never fail the run. In a fresh repo with nothing set up, `doctor` names each missing piece, starting with `done-done init`.
+`doctor` answers "is this repo worth driving" and changes nothing. It checks seven items, each reported `ok` or `missing`, and each missing item names its fix command: `git` (inside a repository), `config` (a valid `.done-done.yaml`), `evidence_root` (writable), `verify_skill` (`.agents/skills/verify-<app>/SKILL.md`), `agent` (`claude`, `codex` or `opencode` on PATH; the first one wins), `judge` (an executable `claude` binary, a sign-in folder and the judge kit are present, and login is checked only when a capture is judged; the model is never called) and `ffprobe` (video evidence only). Only the first three are required: `doctor` exits 0 when they are all ok and 2 otherwise, so missing optionals never fail the run. In a fresh repo with nothing set up, `doctor` names each missing piece, starting with `done-done init`.
 
 ### Run a journey
 
@@ -164,7 +164,7 @@ done-done receipt --judge --from pr-body.md
 | `fail`: wrong screen | fail | 1 |
 | `unsure`: the model said it cannot tell, was less than 80% sure, or did not answer (a model error or a used-up plan) | inconclusive | 3 |
 
-The result gains a `judge` block with the model and, for each judged file, its verdict, a short reason and whether it came from the cache. A missing or signed-out sign-in folder, a sign-in that is not a Claude subscription, a sign-in folder that is (or links to) your own `~/.claude`, a missing `claude` binary, a missing `@byokit/decide` kit or a Node older than 22.18 is a config error (exit 2) whose `help` line is the command to fix it. The kit cannot tell a bad `judge.model` from a used-up plan, so both are `unsure` with a reason naming each. The judge's confidence is the model's own estimate, not a calibrated score.
+The result gains a `judge` block with the model and, for each judged file, its verdict, a short reason and whether it came from the cache. A missing or signed-out sign-in folder, a sign-in that is not a Claude subscription, a sign-in folder that is (or links to) your own `~/.claude`, a missing or non-executable `claude` binary, a missing `@byokit/decide` kit or a Node older than 22.18 is a config error (exit 2) whose `help` line is the command to fix it. The kit cannot tell a bad `judge.model` from a used-up plan, so both are `unsure` with a reason naming each. The judge's confidence is the model's own estimate, not a calibrated score.
 
 ### Record a receipt
 
@@ -206,6 +206,8 @@ Running `done-done` with no subcommand prints the repo's config state (`config: 
 | 3 | inconclusive (could not be proven either way) |
 | 4 | the run is still running (`verify`, `status`) |
 
+`doctor` exits 2 when a required item (`git`, `config`, `evidence_root`) is missing.
+
 ### In CI or a merge gate
 
 ```sh
@@ -236,7 +238,7 @@ evidence:
   local_root: ~/.done-done/evidence   # evidence root for repos that set none (<local_root>/<app>)
 judge:                                # used only when the judge is on
   model: claude-haiku-5-5              # the default: cheap and reads images; set any model you like
-  bin: /usr/local/bin/claude          # default: the first `claude` on PATH
+  bin: /usr/local/bin/claude          # default: the first `claude` on PATH; an absolute path to an executable
   config_dir: ~/.done-done/claude     # the default; a sign-in folder for done-done only
 ```
 

@@ -10,7 +10,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { crc32, deflateSync } from 'node:zlib';
 import { parse } from 'yaml';
 import { decode } from '@toon-format/toon';
-import { CHEAP_MODELS, loadConfig } from '../dist/config.js';
+import { loadConfig } from '../dist/config.js';
 
 const CLI = join(dirname(fileURLToPath(import.meta.url)), '..', 'dist', 'cli.js');
 
@@ -1510,7 +1510,7 @@ test('the default judge model is the cheap Claude model and agent defaults to au
     if (prev === undefined) delete process.env.DONE_DONE_HOME;
     else process.env.DONE_DONE_HOME = prev;
   }
-  assert.equal(cfg.judge.model, CHEAP_MODELS.claude, 'the judge default is Claude\'s cheap model');
+  assert.equal(cfg.judge.model, 'claude-haiku-5-5', 'the judge default is Claude\'s cheap model');
   assert.equal(cfg.agent, 'auto');
 });
 

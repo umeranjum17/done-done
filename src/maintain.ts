@@ -99,7 +99,7 @@ function citeProblem(repo: string, file: string, line: number, end = line): stri
     if (!lstatSync(p, { throwIfNoEntry: false })?.isFile()) return `${file} is not a file in the repository`;
     if (!realInside(repo, p)) return `${file} is outside the repository`;
     const text = readFileSync(p, 'utf8');
-    n = text.split('\n').length - (text.endsWith('\n') ? 1 : 0);
+    n = text === '' ? 0 : text.split('\n').length - (text.endsWith('\n') ? 1 : 0);
   } catch {
     return `${file} is not a file in the repository`;
   }
@@ -175,6 +175,10 @@ export async function maintainSteps<S>(run: { repo: string; findings?: Finding[]
   if (realpathSync(skill) !== resolve(realpathSync(repo), cfg.skill)) {
     h.set(step, 'failed');
     return h.finish('blocked', `locate: ${cfg.skill} is reached through a symlink; maintain does not read through it`);
+  }
+  if (!realInside(repo, skill)) {
+    h.set(step, 'failed');
+    return h.finish('blocked', `locate: ${cfg.skill} is outside the repository; maintain does not read outside it`);
   }
   h.set(step, 'completed', { outputs: [cfg.skill] });
 

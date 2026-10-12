@@ -2812,6 +2812,37 @@ test('maintain does not follow a committed symlink folder out of the repo to cou
   }
 });
 
+test('maintain blocks a verify skill that resolves outside the repo and reads nothing from it', () => {
+  const { repo, env, sh } = setup('app: notes\nevidence:\n  root: .proof\nskill: ../outside\n');
+  const s = stubAgents(env, JSON.stringify({ drift: [], recipe: 'open it', recipes: [], missing: [] }));
+  const outside = join(repo, '..', 'outside');
+  mkdirSync(join(outside, 'features'), { recursive: true });
+  writeFileSync(join(outside, 'SKILL.md'), '# verify-notes\n');
+  writeFileSync(join(outside, 'features', 'README.md'), '# features\n');
+  writeFileSync(join(outside, 'features', 'home.md'), '# Home\n');
+  const r = doctorIn(repo, s.env, 'maintain', '--foreground');
+  const m = toon(r);
+  assert.equal(m.result, 'blocked', r.out);
+  assert.match(r.out, /outside the repository/, r.out);
+});
+
+test('maintain reports a cited line in an empty file as a citation finding with 0 lines', () => {
+  const { repo, env, sh } = setup();
+  const s = stubAgents(env, JSON.stringify({ drift: [], recipe: 'open it', recipes: [], missing: [] }));
+  writeFileSync(join(repo, 'docs', 'empty.md'), '');
+  const skill = join(repo, '.agents', 'skills', 'verify-notes');
+  mkdirSync(join(skill, 'features'), { recursive: true });
+  writeFileSync(join(skill, 'SKILL.md'), '# verify-notes\n\nSee docs/empty.md:1.\n');
+  writeFileSync(join(skill, 'features', 'README.md'), '# features\n\n- [Home](home.md)\n');
+  writeFileSync(join(skill, 'features', 'home.md'), '# Home\n');
+  sh('add', '-A');
+  sh('commit', '-qm', 'skill');
+  const r = doctorIn(repo, s.env, 'maintain', '--foreground');
+  const m = toon(r);
+  assert.deepEqual([r.code, m.result], [1, 'drift'], r.out);
+  assert.match(m.findings.find((f) => f.kind === 'citation').what, /docs\/empty\.md has 0 lines/, r.out);
+});
+
 test('maintain fingerprints an untracked file whose name has a newline', () => {
   const { repo, env, sh } = setup();
   const s = stubAgents(env, JSON.stringify({ drift: [], recipe: 'open it', recipes: [], missing: [] }));

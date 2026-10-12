@@ -1645,7 +1645,8 @@ const file = argv.includes('-f') ? readFileSync(argv[argv.indexOf('-f') + 1], 'u
 appendFileSync(${JSON.stringify(log)}, JSON.stringify({ agent: ${JSON.stringify(name)}, argv, stdin, file, permission: process.env.OPENCODE_PERMISSION, cwd: process.cwd() }) + '\\n');
 ${reply}
 `, { mode: 0o755 });
-  stub('claude', `process.stdout.write(JSON.stringify({ type: 'result', is_error: ${JSON.stringify(answer)} === 'error', result: 'model not found', structured_output: ${JSON.stringify(answer)} === 'error' ? undefined : JSON.parse(${JSON.stringify(answer)}) }));`);
+  stub('claude', `process.exitCode = ${JSON.stringify(answer)} === 'error' ? 1 : 0;
+process.stdout.write(JSON.stringify({ type: 'result', is_error: ${JSON.stringify(answer)} === 'error', result: 'You have hit your session limit', structured_output: ${JSON.stringify(answer)} === 'error' ? undefined : JSON.parse(${JSON.stringify(answer)}) }));`);
   stub('opencode', `console.log('mise tools: opencode');
 console.log(JSON.stringify({ type: 'step_start', part: { type: 'step-start' } }));
 console.log(JSON.stringify({ type: 'text', part: { type: 'text', text: '\\\`\\\`\\\`json\\n' + ${JSON.stringify(answer)} + '\\n\\\`\\\`\\\`' } }));`);
@@ -1691,7 +1692,7 @@ test('the agent comes from config (a fallback list moves past missing agents), a
   const bad = stubAgents(env, 'error');
   const failed = doctorIn(repo, bad.env, 'doctor', '--probe');
   assert.equal(failed.code, 2, failed.out);
-  assert.match(toon(failed).checks.find((x) => x.check === 'probe').detail, /claude did not answer: model not found; record /);
+  assert.match(toon(failed).checks.find((x) => x.check === 'probe').detail, /claude did not answer: claude exited 1: You have hit your session limit; record /);
   assert.equal(doctorIn(repo, bad.env, 'doctor').code, 0);
   assert.equal(bad.calls().length, 1);
   // An agent without an adapter yet, an explicit judge route, and bad values.

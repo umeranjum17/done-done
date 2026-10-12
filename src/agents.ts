@@ -84,7 +84,16 @@ export function askAgent(c: AgentCall): AgentAnswer {
     if (adapter.file) writeFileSync(join(dir, 'prompt.md'), `${c.prompt}\n\nAnswer with only one JSON object that matches this JSON schema, and no other text:\n${JSON.stringify(c.schema)}\n`, { mode: 0o600 });
     res = spawnSync(onPath(c.agent) || c.agent, adapter.argv(c, dir), { cwd: c.cwd, input: adapter.file ? '' : c.prompt, env: { ...process.env, ...adapter.env?.(c) }, encoding: 'utf8', timeout: c.timeoutMs, maxBuffer: 64 << 20 });
     if (res.error) throw res.error;
-    if (res.status !== 0) throw new Error(`${c.agent} exited ${res.status}: ${String(res.stderr || res.stdout).trim().slice(-500)}`);
+    if (res.status !== 0) {
+      // An agent that exits non-zero may still say why in its own output (claude: a usage limit, a bad model).
+      let why = String(res.stderr || res.stdout).trim().slice(-500);
+      try {
+        adapter.answer(String(res.stdout));
+      } catch (e) {
+        if (!(e instanceof SyntaxError)) why = (e as Error).message;
+      }
+      throw new Error(`${c.agent} exited ${res.status}: ${why}`);
+    }
     const answer = adapter.answer(String(res.stdout));
     const missing = (c.schema.required ?? []).filter((k) => !(answer && typeof answer === 'object' && k in answer));
     if (missing.length) throw new Error(`the answer does not match the schema (missing ${missing.join(', ')})`);

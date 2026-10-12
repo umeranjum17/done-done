@@ -121,7 +121,7 @@ export async function backend(cfg: Config, choice: JudgeChoice, record = () => '
   const signedIn = () => {
     const scratch = mkdtempSync(join(tmpdir(), 'done-done-judge-'));
     try {
-      const r = spawnSync(bin, ['--safe-mode', '--setting-sources', '', 'auth', 'status'], { cwd: scratch, encoding: 'utf8', timeout: 30_000, env: { HOME: scratch, PATH: '/usr/bin:/bin', CLAUDE_CONFIG_DIR: real } });
+      const r = spawnSync(bin, ['--safe-mode', '--setting-sources', '', 'auth', 'status'], { cwd: scratch, encoding: 'utf8', timeout: 30_000, env: { HOME: scratch, PATH: process.env.PATH, CLAUDE_CONFIG_DIR: real } });
       return r.status === 0 && JSON.parse(r.stdout).loggedIn === true;
     } catch {
       return false;

@@ -1,6 +1,6 @@
 // End-to-end: drives the built CLI against throwaway git repos with fictional fixtures.
 import assert from 'node:assert/strict';
-import { execFileSync, spawnSync } from 'node:child_process';
+import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { appendFileSync, cpSync, mkdirSync, mkdtempSync, existsSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -1274,7 +1274,7 @@ test('every command has its own --help, and a usage error names the command and 
   const { dd } = setup();
   const top = dd('--help');
   assert.equal(top.code, 0, top.out);
-  for (const cmd of ['init', 'run', 'check', 'receipt']) {
+  for (const cmd of ['init', 'run', 'check', 'receipt', 'verify', 'status']) {
     const h = dd(cmd, '--help');
     assert.equal(h.code, 0, h.out);
     assert.match(h.out, /^usage:\n( {2}done-done .+\n)+flags:\n( {2}.+\n)+(\S.+\n( {2}.+\n)+)*global flags: .+\nexit codes: .+\n$/, `${cmd} --help has the shared shape`);
@@ -1296,6 +1296,99 @@ test('every command has its own --help, and a usage error names the command and 
   assert.match(dd('receipt', '--help').out, /^Checks block \(--from\): .*\n {2}outcome: /m, 'receipt --help shows the Checks block');
   assert.match(dd('check', '--help').out, /--trusted-ref <ref> +read \.done-done\.yaml/);
   assert.equal(dd('run', '--', 'node', '-e', 'process.exit(0)', '--help').code, 1, 'a --help after -- belongs to the run command');
+});
+
+// A repo with a journey that blocks until the test releases it, so a verify run can be caught mid-step.
+function slowRepo() {
+  const t = setup();
+  const release = join(t.dir, 'release');
+  writeFileSync(
+    join(t.repo, 'slow.mjs'),
+    `import { copyFileSync, existsSync, mkdirSync } from 'node:fs';\nconst out = '.proof/' + process.argv[2];\nmkdirSync(out, { recursive: true });\nwhile (!existsSync(${JSON.stringify(release)})) await new Promise((r) => setTimeout(r, 50));\ncopyFileSync(${JSON.stringify(join(t.dir, 'screen.png'))}, out + '/home.png');\ncopyFileSync(${JSON.stringify(join(t.dir, 'screen2.png'))}, out + '/settings.png');\n`,
+  );
+  appendFileSync(join(t.repo, '.done-done.yaml'), '  slow:\n    command: node slow.mjs ${RUN_ID}\n  broken:\n    command: node -e "process.exit(3)"\n');
+  t.sh('add', '-A');
+  t.sh('commit', '-qm', 'journeys');
+  const runs = join(t.env.DONE_DONE_HOME, 'runs', 'notes');
+  // Wait for the newest run to reach `step` running, and return its record.
+  const runningAt = async (step) => {
+    for (let i = 0; i < 200; i++) {
+      const id = existsSync(runs) && readdirSync(runs).sort().pop();
+      const run = id && existsSync(join(runs, id, 'run.json')) && JSON.parse(readFileSync(join(runs, id, 'run.json'), 'utf8'));
+      if (run?.runner && run.steps.find((s) => s.name === step).status === 'running') return run;
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    assert.fail(`no run reached step ${step}`);
+  };
+  const settled = async () => {
+    for (let i = 0; i < 200; i++) {
+      const r = t.dd('status');
+      if (r.code !== 4) return r;
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    assert.fail('the run never ended');
+  };
+  return { ...t, release, runs, runningAt, settled };
+}
+
+test('verify goes on in a detached runner after the calling shell is killed, and status shows the pass', async () => {
+  const { repo, env, release, runs, runningAt, settled } = slowRepo();
+  const shell = spawn('sh', ['-c', `${JSON.stringify(process.execPath)} ${JSON.stringify(CLI)} verify slow --outcome 'home and settings render'`], { cwd: repo, env, detached: true, stdio: 'ignore' });
+  const run = await runningAt('drive');
+  assert.equal(run.schema, 2);
+  assert.equal(run.status, 'running');
+  process.kill(-shell.pid, 'SIGKILL');
+  await new Promise((r) => shell.on('exit', r));
+  assert.ok(existsSync(join(runs, run.run_id, 'events.jsonl')));
+  writeFileSync(release, '');
+  const r = await settled();
+  assert.equal(r.code, 0, r.out);
+  const s = toon(r);
+  assert.equal(s.run_id, run.run_id);
+  assert.equal(s.result, 'pass');
+  assert.deepEqual(s.steps.map((x) => x.status), ['completed', 'completed', 'completed', 'completed', 'completed']);
+  assert.deepEqual(s.evidence, [`.proof/${run.run_id}/home.png`, `.proof/${run.run_id}/settings.png`]);
+  assert.match(s.help[0], /done-done receipt --verify [0-9a-f]{40}$/);
+  assert.ok(existsSync(join(repo, s.receipt)), 'the runner recorded a receipt');
+  assert.ok(existsSync(join(runs, run.run_id, 'logs', 'check.log')));
+});
+
+test('a runner killed mid-step shows as failed at that step', async () => {
+  const { dd, runs, runningAt } = slowRepo();
+  const started = dd('verify', 'slow', '--outcome', 'home and settings render', '--no-wait');
+  assert.equal(started.code, 4, started.out);
+  assert.match(toon(started).help[0], /done-done status --run /);
+  const run = await runningAt('drive');
+  process.kill(run.runner.pid, 'SIGKILL');
+  let r;
+  for (let i = 0; i < 100 && (r = dd('status')).code === 4; i++) await new Promise((res) => setTimeout(res, 50));
+  try {
+    process.kill(-run.runner.pid, 'SIGKILL'); // the journey the killed runner left behind
+  } catch {}
+  assert.equal(r.code, 1, r.out);
+  const s = toon(r);
+  assert.equal(s.status, 'failed');
+  assert.match(s.reason, new RegExp(`^the runner died at step drive \\(pid ${run.runner.pid},`));
+  assert.equal(JSON.parse(readFileSync(join(runs, run.run_id, 'run.json'), 'utf8')).status, 'running', 'status only reads the store');
+  assert.match(s.help[1], /^Fix the cause, commit, then start a new run: done-done verify slow --outcome 'home and settings render'$/);
+});
+
+test('verify --foreground fails at a broken journey and skips the rest; usage errors name the next step', () => {
+  const { dd } = slowRepo();
+  assert.equal(toon(dd('status')).help[0], 'Start one: done-done verify --outcome "<what a user can now do>"');
+  const none = dd('verify', '--outcome', 'x');
+  assert.equal(none.code, 2, none.out);
+  assert.equal(toon(none).help[0], 'Run: done-done verify <shots|slow|broken> --outcome "<what a user can now do>"');
+  assert.equal(dd('verify', 'shots', '--outcome', 'x', '--no-wait', '--foreground').code, 2);
+  assert.equal(dd('verify', 'shots', '--outcome', 'x', '--wait', 'soon').code, 2);
+  const r = dd('verify', 'broken', '--outcome', 'the app starts', '--foreground');
+  assert.equal(r.code, 1, r.out);
+  const s = toon(r);
+  assert.equal(s.result, 'fail');
+  assert.equal(s.reason, 'drive: the run command exited 3');
+  assert.deepEqual(s.steps.map((x) => x.status), ['completed', 'failed', 'skipped', 'skipped', 'completed']);
+  assert.equal(toon(dd('status')).run_id, s.run_id);
+  assert.equal(dd('status', '--run', '../x').code, 2);
 });
 
 test('a failing check points at the exact command that produces the proof', () => {

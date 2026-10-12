@@ -160,7 +160,7 @@ Run `done-done` with no arguments to see the current config and the next step.
 - 👀 **Shows the outcome** (opt-in): `--judge` asks a model on your own Claude plan whether each screenshot is the right screen for the claim (cheap Haiku by default; set `judge.model` for another); a wrong screen fails.
 - 🔒 **Safe in CI**: `--trusted-ref origin/main` reads the rules from your main branch, so a pull request can't loosen them.
 
-Every answer is an exit code: **0** pass, **1** fail, **2** usage or config error, **3** can't tell either way.
+Every answer is an exit code: **0** pass, **1** fail, **2** usage or config error, **3** can't tell either way, **4** a `verify` run is still running.
 
 ## Use with Firstmate or another agent fleet
 

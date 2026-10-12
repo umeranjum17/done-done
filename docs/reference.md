@@ -171,6 +171,15 @@ done-done receipt --verify <head>         # read-only: check a recorded receipt
 
 `receipt --verify <head>` changes nothing. The argument may be a full commit sha or a ref (`HEAD`, a branch or a tag), resolved to the commit with `git rev-parse --verify <arg>^{commit}` before the receipt lookup; an unresolvable argument fails with the same missing-receipt shape. It succeeds only when the receipt exists, is PASS, the current HEAD is still that head, and every cited file still hashes to the recorded sha256. A missing or malformed receipt and a hash mismatch are failures (exit 1), not usage errors. When the mismatched path is named in a run record, the failure names it as `changed after run <run-id>`.
 
+### Verify a change in one run
+
+```sh
+done-done verify [<journey>] --outcome "<what a user can now do>"   # --no-wait, --wait 90s, or --foreground (CI)
+done-done status [--run <run-id>]                                   # the newest run by default
+```
+
+`verify` writes `$DONE_DONE_HOME/runs/<app>/<run-id>/run.json` (schema 2), then starts a detached runner that drives the journey, checks the files it wrote and records a receipt (steps `resolve`, `drive`, `check`, `receipt`, `report`). The runner goes on when the command or shell that started it ends. It writes its pid and a heartbeat to `run.json`, each step to `events.jsonl`, and step output to `logs/`. `verify` waits up to 8 minutes, then prints the run like `status`. `status` only reads the store; a run whose runner is gone shows as `failed` at the step it was on.
+
 ### Output
 
 `init`, `run`, `check` and `receipt` print one machine-readable result on stdout. By default it is [TOON](https://github.com/toon-format/spec) in the AXI convention (the shape `no-mistakes axi status` uses): scalar `key: value` lines, tabular arrays, and a `help` list that names the exact next command. `--json` prints the same result as JSON. `--full` lists every evidence file or finding; without it, lists longer than five rows are truncated and the count of dropped rows is reported (`evidence_omitted` or `findings_omitted`).
@@ -187,6 +196,7 @@ Running `done-done` with no subcommand prints the repo's config state (`config: 
 | 1 | fail |
 | 2 | usage or config error |
 | 3 | inconclusive (could not be proven either way) |
+| 4 | the run is still running (`verify`, `status`) |
 
 ### In CI or a merge gate
 

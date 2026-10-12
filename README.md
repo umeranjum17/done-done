@@ -94,13 +94,13 @@ npm install -g --prefix ~/.local --allow-git=all github:umeranjum17/done-done-ax
 
 To skip the install, run `npx -y --allow-git=all github:umeranjum17/done-done-axi` wherever this README says `done-done`.
 
-Once 0.1.0 is published, the registry line takes over as the install:
+Once done-done-axi is published to npm, the registry line takes over as the install:
 
 ```sh
 npm install -g --prefix ~/.local done-done-axi
 ```
 
-<!-- TODO(dd-npm-name): when done-done-axi 0.1.0 is published, flip the primary back to the registry line above and make `npx -y done-done-axi` the skip-the-install path. -->
+<!-- TODO(dd-npm-name): when done-done-axi is published to npm, flip the primary back to the registry line above and make `npx -y done-done-axi` the skip-the-install path. -->
 
 **2. Set it up in your app's repo**
 

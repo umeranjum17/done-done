@@ -826,6 +826,7 @@ const logEvent = (dir: string, e: Record<string, unknown>) => appendFileSync(joi
 // The verify steps, all plain code: resolve the head, drive the journey, check its evidence, record a receipt, report.
 async function runVerify(dir: string): Promise<void> {
   const run = loadRun(dir);
+  if (run.status === 'cancelled') return;
   const started = now();
   // The lock refuses a second runner on this run; it stays, so a finished run is never run again.
   writeFileSync(join(dir, 'runner.lock'), `${process.pid} ${started}\n`, { flag: 'wx' });
@@ -1060,9 +1061,9 @@ async function cmdRerun(argv: string[]): Promise<number> {
   mkdirSync(join(dir, 'logs'), { recursive: true });
   const inputs = inputsOf(repo, cfg, src.journey);
   const reuse = !!src.inputs && (['head', 'tree', 'journey', 'skill'] as const).every((k) => src.inputs![k] === inputs[k]);
-  const steps = src.steps.map((s) => (reuse && s.status === 'completed' ? { ...s } : { name: s.name, status: 'pending' as StepState }));
+  const steps = src.steps.map((s) => (reuse && ['resolve', 'drive'].includes(s.name) && s.status === 'completed' ? { ...s } : { name: s.name, status: 'pending' as StepState }));
   const created = now();
-  const run: Run = { schema: 2, run_id: id, kind: src.kind, app: cfg.app, repo: src.repo, journey: src.journey, claim: src.claim, claim_id: src.claim_id, status: 'pending', inputs, steps, created, updated: created, ...(reuse && src.record && { record: src.record }), ...(reuse && src.receipt && { receipt: src.receipt }) };
+  const run: Run = { schema: 2, run_id: id, kind: src.kind, app: cfg.app, repo: src.repo, journey: src.journey, claim: src.claim, claim_id: src.claim_id, status: 'pending', inputs, steps, created, updated: created, ...(reuse && src.record && { record: src.record }) };
   saveRun(dir, run);
   if (reuse) for (const s of steps) {
     const f = join(root, srcId, 'logs', `${s.name}.log`);

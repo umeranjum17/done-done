@@ -85,10 +85,10 @@ export function askAgent(c) {
         const missing = (c.schema.required ?? []).filter((k) => !(k in answer));
         if (missing.length)
             throw new Error(`the answer does not match the schema (missing ${missing.join(', ')})`);
-        out = { ok: true, answer: answer, record: c.record };
+        out = { ok: true, answer: answer };
     }
     catch (e) {
-        out = { ok: false, error: e.message, record: c.record };
+        out = { ok: false, error: e.message };
     }
     finally {
         if (dir)
@@ -100,9 +100,10 @@ export function askAgent(c) {
         const record = { ...call, cwd, prompt_bytes: Buffer.byteLength(prompt), argv: adapter?.argv(c, '<tmp>') ?? [], ms: Date.now() - started, exit: res?.status ?? null, ...out, stderr: String(res?.stderr ?? '').slice(-2000) };
         mkdirSync(dirname(c.record), { recursive: true });
         writeFileSync(c.record, `${JSON.stringify(record, null, 2)}\n`, { mode: 0o600 });
+        out = { ...out, record: c.record };
     }
     catch (e) {
-        out = { ok: false, error: `cannot write the call record: ${e.message}` };
+        out = { ...out, recordError: e.message };
     }
     return out;
 }

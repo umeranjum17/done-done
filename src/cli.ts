@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import { encode } from '@toon-format/toon';
 import { Document, parseDocument } from 'yaml';
-import { askAgent, selectAgent, supported } from './agents.js';
+import { askAgent, selectAgent, supported, type AgentAnswer } from './agents.js';
 import { AGENTS, type Config, home, loadConfig, parseDuration, UsageError } from './config.js';
 import { backend, type Capture, judge, type Judged, onPath } from './judge.js';
 import { checkMedia } from './media.js';
@@ -1511,7 +1511,7 @@ async function cmdDoctor(argv: string[]): Promise<number> {
   );
   // The judge --judge runs today is the claude judge (judge.ts, at judge.model); judge.route is recorded but not used until judge routes land.
   if (!cfg || !agent) {
-    checks.push({ check: 'judge_choice', status: 'missing', detail: 'unknown without a valid config', fix: '' });
+    checks.push(unknownRow('judge_choice'));
   } else {
     const judge = cfg.judge;
     const route = judge.route ? `; judge.route ${judge.route} is recorded, not used yet` : '';
@@ -1524,16 +1524,16 @@ async function cmdDoctor(argv: string[]): Promise<number> {
           : judgeChoice(' in a fresh session, the same agent as the author (session-only independence)', false, 'Set agent: to an agent other than claude, or set judge.allow_same: true in the global config to accept it'),
     );
   }
-  if (values.probe && !agent) checks.push({ check: 'probe', status: 'missing', detail: 'unknown without a valid config', fix: '' });
+  if (values.probe && !agent) checks.push(unknownRow('probe'));
   if (values.probe && agent) {
     const record = join(home(), 'agents', `probe-${new Date().toISOString().replace(/[:.]/g, '-')}-${agent.agent}.json`);
-    const probe: { ok: boolean; answer?: Record<string, unknown>; error?: string; record?: string; fix?: string } = !agent.path ? { ok: false, error: `${agent.agent} is not on PATH`, fix: installFix }
+    const probe: AgentAnswer & { fix?: string } = !agent.path ? { ok: false, error: `${agent.agent} is not on PATH`, fix: installFix }
       : !supported(agent.agent) ? { ok: false, error: `done-done cannot start ${agent.agent} yet (${startable} for now)`, fix: switchFix }
       : askAgent({ agent: agent.agent, model: agent.model, prompt: 'This is a connectivity probe from done-done doctor. Use no tools. Answer with ok set to true.', schema: PROBE_SCHEMA, cwd: repo ?? process.cwd(), timeoutMs: 180_000, tools: 'none', record });
     checks.push(
       probe.ok && probe.answer?.ok === true
-        ? { check: 'probe', status: 'ok', detail: `${agent.agent} (model ${agent.model}) answered the schema question; record ${record}`, fix: '' }
-        : { check: 'probe', status: 'missing', detail: `${agent.agent} did not answer: ${probe.error ?? `answer ${JSON.stringify(probe.answer)}`}${probe.record ? `; record ${record}` : ''}`, fix: probe.fix ?? `Check that ${agent.agent} is signed in${agent.model ? ` and can use model ${agent.model}` : ''}, or set agent_config.${agent.agent}.model` },
+        ? { check: 'probe', status: 'ok', detail: `${agent.agent} (model ${agent.model}) answered the schema question; ${probe.recordError ? `the call record could not be written: ${probe.recordError}` : `record ${record}`}`, fix: '' }
+        : { check: 'probe', status: 'missing', detail: `${agent.agent} did not answer: ${probe.error ?? `answer ${JSON.stringify(probe.answer)}`}${probe.record ? `; record ${record}` : ''}${probe.recordError ? `; the call record could not be written: ${probe.recordError}` : ''}`, fix: probe.fix ?? `Check that ${agent.agent} is signed in${agent.model ? ` and can use model ${agent.model}` : ''}, or set agent_config.${agent.agent}.model` },
     );
   }
   const required = ['git', 'config', 'evidence_root', ...(values.probe ? ['probe'] : [])];

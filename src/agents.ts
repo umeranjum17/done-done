@@ -20,7 +20,7 @@ export type AgentCall = {
   tools: 'none' | 'read' | 'edit'; // none for the judge and readers
   record: string; // where the call record is written
 };
-export type AgentAnswer = { ok: boolean; answer?: Record<string, unknown>; error?: string; record?: string };
+export type AgentAnswer = { ok: boolean; answer?: Record<string, unknown>; error?: string; record?: string; recordError?: string };
 
 // argv never carries the prompt: it goes on stdin, or (file: true) into a 0600 prompt file the argv points at.
 type Adapter = { argv: (c: AgentCall, dir: string) => string[]; answer: (stdout: string) => unknown; file?: boolean; env?: (c: AgentCall) => Record<string, string> };
@@ -100,9 +100,9 @@ export function askAgent(c: AgentCall): AgentAnswer {
     if (!answer || typeof answer !== 'object' || Array.isArray(answer)) throw new Error(`the answer is not a JSON object: ${JSON.stringify(answer)}`);
     const missing = (c.schema.required ?? []).filter((k) => !(k in answer));
     if (missing.length) throw new Error(`the answer does not match the schema (missing ${missing.join(', ')})`);
-    out = { ok: true, answer: answer as Record<string, unknown>, record: c.record };
+    out = { ok: true, answer: answer as Record<string, unknown> };
   } catch (e) {
-    out = { ok: false, error: (e as Error).message, record: c.record };
+    out = { ok: false, error: (e as Error).message };
   } finally {
     if (dir) rmSync(dir, { recursive: true, force: true });
   }
@@ -112,8 +112,9 @@ export function askAgent(c: AgentCall): AgentAnswer {
     const record = { ...call, cwd, prompt_bytes: Buffer.byteLength(prompt), argv: adapter?.argv(c, '<tmp>') ?? [], ms: Date.now() - started, exit: res?.status ?? null, ...out, stderr: String(res?.stderr ?? '').slice(-2000) };
     mkdirSync(dirname(c.record), { recursive: true });
     writeFileSync(c.record, `${JSON.stringify(record, null, 2)}\n`, { mode: 0o600 });
+    out = { ...out, record: c.record };
   } catch (e) {
-    out = { ok: false, error: `cannot write the call record: ${(e as Error).message}` };
+    out = { ...out, recordError: (e as Error).message };
   }
   return out;
 }

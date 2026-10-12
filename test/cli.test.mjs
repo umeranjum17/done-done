@@ -1794,7 +1794,7 @@ test('doctor in a bare repo fails with the init fix; a malformed config names th
   assert.match(toon(outside).checks[0].fix, /inside a git repository/);
 });
 
-test('with no config, doctor names agent: auto and the cheap default judge model', () => {
+test('with no agent key, doctor names agent: auto and the cheap default judge model', () => {
   const { repo, env } = setup();
   const d = toon(doctorIn(repo, pathEnv(env, ['claude']), 'doctor'));
   assert.match(d.checks[4].detail, /^claude \(model claude-haiku-5-5; agent: auto\)/);
@@ -1958,8 +1958,10 @@ test('the agent comes from config (a fallback list moves past missing agents), a
   mkdirSync(blockedHome);
   writeFileSync(join(blockedHome, 'agents'), 'x');
   const unwritable = doctorIn(repo, { ...s.env, DONE_DONE_HOME: blockedHome }, 'doctor', '--probe');
-  assert.equal(unwritable.code, 2, unwritable.out);
-  assert.match(toon(unwritable).checks.find((x) => x.check === 'probe').detail, /cannot write the call record/, 'a record that cannot be written fails the probe, not doctor');
+  const unw = toon(unwritable).checks.find((x) => x.check === 'probe');
+  assert.equal(unwritable.code, 0, unwritable.out);
+  assert.equal(unw.status, 'ok', 'an agent that answered keeps its probe ok when only the record cannot be written');
+  assert.match(unw.detail, /the call record could not be written/);
   assert.equal(doctorIn(repo, bad.env, 'doctor').code, 0);
   assert.equal(bad.calls().length, 1);
   // An agent without an adapter yet, an explicit judge route, and bad values.

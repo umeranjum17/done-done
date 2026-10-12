@@ -112,7 +112,7 @@ function readOptional(path) {
     }
 }
 // The built-in defaults, before any config file is read.
-export function defaultConfig(repo) {
+function defaultConfig(repo) {
     return {
         agent: 'auto',
         agent_config: {},

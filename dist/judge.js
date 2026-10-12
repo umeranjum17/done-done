@@ -47,7 +47,7 @@ async function kit() {
     catch (e) {
         if (e.code !== 'ERR_MODULE_NOT_FOUND')
             throw e;
-        throw new UsageError(`judge: the judge needs the optional ${KIT} kit, which is not installed`, `Run this check with the kit: npx -y -p done-done-axi -p ${KIT} done-done-axi ${process.argv.slice(2).map(quote).join(' ')}`);
+        throw new UsageError(`judge: the judge needs the optional ${KIT} kit, which is not installed`, `Run this check with the kit: npx -y --allow-git=all -p github:umeranjum17/done-done-axi -p ${KIT} done-done-axi ${process.argv.slice(2).map(quote).join(' ')}`);
     }
 }
 async function backend(cfg) {

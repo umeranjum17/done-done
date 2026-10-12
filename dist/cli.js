@@ -63,7 +63,7 @@ const COMMANDS = {
     },
 };
 const rows = (pairs, width = Math.max(...pairs.map(([a]) => a.length)) + 3) => pairs.map(([a, b]) => `  ${a}${' '.repeat(Math.max(3, width - a.length))}${b}`).join('\n');
-const GLOBAL_TEXT = `global flags: --json (JSON instead of TOON), --full (do not truncate lists), --version, --help (this command's usage)
+const GLOBAL_TEXT = `global flags: --json (JSON instead of TOON), --full (do not truncate lists), --help (this command's usage)
 exit codes: 0 pass, 1 fail, 2 usage or config error, 3 inconclusive`;
 const USAGE_TEXT = `install: npm install -g --prefix ~/.local --allow-git=all github:umeranjum17/done-done-axi (installs done-done-axi and done-done), or run npx -y --allow-git=all github:umeranjum17/done-done-axi <command>
 usage:
@@ -775,14 +775,6 @@ async function main(argv) {
             return await cmdReceipt(rest);
         if (cmd === '--help' || cmd === '-h' || cmd === 'help') {
             console.log(USAGE_TEXT);
-            return PASS;
-        }
-        if (cmd === '--version') {
-            const version = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version;
-            if (OUT === 'json')
-                emit({ command: 'done-done', version });
-            else
-                console.log(version);
             return PASS;
         }
         if (cmd === undefined)

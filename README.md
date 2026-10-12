@@ -62,10 +62,10 @@ Use `-a codex` or `-a opencode` for those agents. `-a` and `-y` skip the install
 The skill lands in this project (`.claude/skills/done-done/` for Claude Code, `.agents/skills/done-done/` for Codex and opencode) next to a `skills-lock.json`: commit both so teammates and CI get it too. Or add `-g` to install it once for all your projects (`~/.claude/skills/` for Claude Code) and leave the project untouched.
 
 That is the entire setup - no npm install needed.
-The skill tells your agent to use `done-done` if it is on PATH and otherwise run the npm package `done-done-axi` through `npx`, so the CLI comes along on demand:
+The skill tells your agent to use `done-done` if it is on PATH and otherwise run the GitHub package through `npx`, so the CLI comes along on demand:
 
 ```sh
-npx -y done-done-axi --help
+npx -y --allow-git=all github:umeranjum17/done-done-axi --help
 ```
 
 The skill stays a short stub and sends the agent to `--help` and the bare command for current instructions, so an installed copy cannot go stale against a newer CLI.
@@ -90,7 +90,7 @@ The skill is the recommended path, but it is not the only one.
 npm install -g --prefix ~/.local --allow-git=all github:umeranjum17/done-done-axi
 ```
 
-`--prefix ~/.local` installs into your home folder, so it needs no `sudo`. `--allow-git=all` is needed on npm 12, which blocks GitHub installs by default (verified accepted on npm 10). This installs two names for the same CLI: `done-done-axi` and the short `done-done` used below. If `done-done --version` then says "command not found", add `~/.local/bin` to your `PATH`: `export PATH="$HOME/.local/bin:$PATH"`.
+`--prefix ~/.local` installs into your home folder, so it needs no `sudo`. `--allow-git=all` is needed on npm 12, which blocks GitHub installs by default (verified accepted on npm 10). This installs two names for the same CLI: `done-done-axi` and the short `done-done` used below. If `command -v done-done` prints nothing, add `~/.local/bin` to your `PATH`: `export PATH="$HOME/.local/bin:$PATH"`.
 
 To skip the install, run `npx -y --allow-git=all github:umeranjum17/done-done-axi` wherever this README says `done-done`.
 

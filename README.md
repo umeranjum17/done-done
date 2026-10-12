@@ -86,6 +86,13 @@ done-done check --outcome "it starts" .proof/*.log
 
 Each command prints one machine-readable result. By default it is [TOON](https://github.com/toon-format/spec) (the compact AXI convention), and a passing check shows `result: pass`. Add `--json` for JSON, or `--full` to list every evidence file or finding instead of the first few. After later runs, use the `run_id` the result prints in place of `*`.
 
+When a check passes, save a receipt and re-verify it later:
+
+```sh
+done-done receipt --outcome "it starts" .proof/*.log
+done-done receipt --verify "$(git rev-parse HEAD)"
+```
+
 Run `done-done` with no arguments to see the current config and the next step.
 
 ## What it checks
@@ -94,19 +101,20 @@ Run `done-done` with no arguments to see the current config and the next step.
 - 🖼️ **Real media**: Empty, cut-off, blank or tiny screenshots fail. Videos must hold real frames (needs `ffprobe`).
 - ⏱️ **Fresh**: Proof from an older commit fails. Commits that only touch docs can be set to keep it fresh.
 - ♻️ **Not reused**: Proof made only of files already used for a different claim fails, and so does citing the same file twice.
-- 🧾 **Honest claims**: Reads a pull request's `## Checks` block and makes sure every line is filled in.
+- 🧾 **Honest claims**: Reads a pull request's `## Checks` block — from a file, a URL, or stdin — and makes sure every line is filled in.
+- 📌 **Verifiable later**: `receipt` records a passing check against the exact commit and the sha256 of every file it cited; `receipt --verify` re-checks it in CI or at merge.
 - 🔒 **Safe in CI**: `--trusted-ref origin/main` reads the rules from your main branch, so a pull request can't loosen them.
 
 Every answer is an exit code: **0** pass, **1** fail, **2** usage or config error, **3** can't tell either way.
 
 ## Learn more
 
-- [Full reference](docs/reference.md): every `init`, `run` and `check` option, the Checks block rules, each file check, and both config files.
+- [Full reference](docs/reference.md): every `init`, `run`, `check` and `receipt` option, the Checks block rules, each file check, and both config files.
 - [Report a problem or ask a question](https://github.com/umeranjum17/done-done/issues)
 
 ## What's next
 
-This is the first slice: `init`, `run` and `check`. Coming next: a saved receipt for each passing check, an AI check that a screenshot really shows what it claims, and help writing the proof steps for your app.
+So far: `init`, `run`, `check` and `receipt`. Coming next: an AI check that a screenshot really shows what it claims, and help writing the proof steps for your app.
 
 ## Develop
 

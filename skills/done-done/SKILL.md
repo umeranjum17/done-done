@@ -76,7 +76,7 @@ A one-off command without a journey: `done-done run -- <command>`.
 
 ```sh
 done-done check --outcome "notes sync between two devices" .proof/<run-id>/after.png
-done-done check --from pr-body.md            # newest "## Checks" block; or a GitHub PR URL
+done-done check --from pr-body.md            # newest "## Checks" block; a file, `-` for stdin, or a GitHub PR URL
 ```
 
 `check` looks only at the files the claim names. Each must exist and be non-empty; be valid real
@@ -84,6 +84,16 @@ media (magic bytes match the extension, complete, not blank or tiny; video is de
 `ffprobe`); be fresh (in a run record whose commit is HEAD — a diff of only `ignore_paths` keeps it
 fresh); be clean (the run was not dirty and exited 0); and not reused (not byte-identical within the
 claim, and not already used to prove a different claim in this repo).
+
+## Record and re-verify a receipt
+
+```sh
+done-done receipt --from pr-body.md            # same claim inputs as check (also `--from -`); writes only on a clean-tree pass that cited evidence
+done-done receipt --verify <head>              # read-only re-check for CI or merge
+```
+
+A receipt binds one passing check to one commit and the sha256 of every file it cited. See
+`docs/reference.md` ("Record a receipt") for the exact write and verify rules.
 
 ## Exit codes
 

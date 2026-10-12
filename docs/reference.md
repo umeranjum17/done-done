@@ -1,6 +1,6 @@
 # done-done reference
 
-Everything `init`, `run`, `check` and the config files do. For the overview and quick start, see the [README](../README.md).
+Everything `init`, `run`, `check`, `receipt` and the config files do. For the overview and quick start, see the [README](../README.md).
 
 ## Install
 
@@ -59,7 +59,7 @@ Run `done-done` outside wrappers that expand `${...}` themselves (`systemd-run` 
 
 ```sh
 done-done check --outcome "notes sync between two devices" .verify-artifacts/<run-id>/after.png
-done-done check --from pr-body.md                 # or a GitHub PR URL (needs gh)
+done-done check --from pr-body.md                 # a file, `-` for stdin, or a GitHub PR URL (needs gh)
 ```
 
 `check` looks only at the files the claim names. It never scans the whole folder.
@@ -94,9 +94,22 @@ Files that are in no run record give an inconclusive result: nothing ties them t
 
 `evidence: not proven: <cause>` is inconclusive too. A repo can set `checks.not_proven: allow`, but that setting is honoured only when the config is read from a trusted ref (`--trusted-ref`).
 
+### Record a receipt
+
+A receipt ties one passing check to one commit and to the exact bytes it cited, so a merge step or CI can re-verify the same proof later.
+
+```sh
+done-done receipt --from pr-body.md       # or --outcome "<claim>" <files...>, or --from -
+done-done receipt --verify <head>         # read-only: check a recorded receipt
+```
+
+`receipt` takes the same claim inputs as `check` and runs that check. It writes `<root>/.done-done/receipts/<head>.json` only when the check passes on the current HEAD, the tracked tree is clean, and the check cited at least one evidence file; a dirty tracked tree, a failed or inconclusive check, a pass that cited no evidence (for example `not proven:` allowed by trusted config), or a moved HEAD writes nothing and exits non-zero. The record holds the repo, the head and tree sha, the claim outcome, and every cited file with its sha256 and a timestamp.
+
+`receipt --verify <head>` changes nothing. It succeeds only when the receipt exists, is PASS, the current HEAD is still that head, and every cited file still hashes to the recorded sha256. A missing or malformed receipt and a hash mismatch are failures (exit 1), not usage errors.
+
 ### Output
 
-`run` and `check` print one machine-readable result on stdout. By default it is [TOON](https://github.com/toon-format/spec) in the AXI convention (the shape `no-mistakes axi status` uses): scalar `key: value` lines, tabular arrays, and a `help` list that names the exact next command. `--json` prints the same result as JSON. `--full` lists every evidence file or finding; without it, lists longer than five rows are truncated and the count of dropped rows is reported (`evidence_omitted` or `findings_omitted`).
+`run`, `check` and `receipt` print one machine-readable result on stdout. By default it is [TOON](https://github.com/toon-format/spec) in the AXI convention (the shape `no-mistakes axi status` uses): scalar `key: value` lines, tabular arrays, and a `help` list that names the exact next command. `--json` prints the same result as JSON. `--full` lists every evidence file or finding; without it, lists longer than five rows are truncated and the count of dropped rows is reported (`evidence_omitted` or `findings_omitted`).
 
 Running `done-done` with no subcommand prints the repo's config state (`config: present | missing | none`), its journeys and run count, and the next step. Usage and config errors also print one result: an `error` field and a `help` line with the recovery command (for example `done-done init` when no config exists).
 
@@ -115,9 +128,11 @@ Running `done-done` with no subcommand prints the repo's config state (`config: 
 
 ```sh
 done-done check --from "$PR_URL" --trusted-ref origin/main
+done-done receipt --from - --trusted-ref origin/main < pr-body.md   # record the pass
+done-done receipt --verify "$HEAD"                                   # re-verify later
 ```
 
-`--trusted-ref` reads `.done-done.yaml` from that ref instead of the PR branch. This matters because repo keys can loosen the bar and journeys run commands.
+`--trusted-ref` reads `.done-done.yaml` from that ref instead of the PR branch. This matters because repo keys can loosen the bar and journeys run commands. `check --from -` and `receipt --from -` read the `## Checks` block from stdin, so a CI job can pipe the pull request body straight in.
 
 ## Config
 

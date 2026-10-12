@@ -14,16 +14,16 @@ text{font:16px ui-monospace,SFMono-Regular,'SF Mono',Menlo,Consolas,'Liberation 
 <text xml:space="preserve" x="22" y="96" textLength="451.2" lengthAdjust="spacing">  synced a note on two devices, saved after.png</text>
 <text xml:space="preserve" x="22" y="120" textLength="115.2" lengthAdjust="spacing"><tspan class="d">command: </tspan>run</text>
 <text xml:space="preserve" x="22" y="144" textLength="115.2" lengthAdjust="spacing"><tspan class="d">result: </tspan><tspan class="p b">pass</tspan></text>
-<text xml:space="preserve" x="22" y="168" textLength="316.8" lengthAdjust="spacing"><tspan class="d">run_id: </tspan>20261012T005507Z-7083df3e</text>
-<text xml:space="preserve" x="22" y="192" textLength="460.8" lengthAdjust="spacing"><tspan class="d">commit: </tspan>7083df3e139534b85728896dcea6ea4ef2a4fc88</text>
+<text xml:space="preserve" x="22" y="168" textLength="316.8" lengthAdjust="spacing"><tspan class="d">run_id: </tspan>20261012T061715Z-779d1df4</text>
+<text xml:space="preserve" x="22" y="192" textLength="460.8" lengthAdjust="spacing"><tspan class="d">commit: </tspan>779d1df46e8bfd426ecd79e128da1a06b7a60ce2</text>
 <text xml:space="preserve" x="22" y="216" textLength="115.2" lengthAdjust="spacing"><tspan class="d">dirty: </tspan>false</text>
 <text xml:space="preserve" x="22" y="240" textLength="76.8" lengthAdjust="spacing"><tspan class="d">files: </tspan>1</text>
 <text xml:space="preserve" x="22" y="264" textLength="297.6" lengthAdjust="spacing"><tspan class="d">record: </tspan>.proof/.done-done/runs/</text>
-<text xml:space="preserve" x="22" y="288" textLength="326.4" lengthAdjust="spacing">    20261012T005507Z-7083df3e.json</text>
-<text xml:space="preserve" x="22" y="312" textLength="441.6" lengthAdjust="spacing"><tspan class="d">evidence[1]: </tspan>.proof/20261012T005507Z-7083df3e/</text>
+<text xml:space="preserve" x="22" y="288" textLength="326.4" lengthAdjust="spacing">    20261012T061715Z-779d1df4.json</text>
+<text xml:space="preserve" x="22" y="312" textLength="441.6" lengthAdjust="spacing"><tspan class="d">evidence[1]: </tspan>.proof/20261012T061715Z-779d1df4/</text>
 <text xml:space="preserve" x="22" y="336" textLength="124.8" lengthAdjust="spacing">    after.png</text>
 <text xml:space="preserve" x="22" y="360" textLength="412.8" lengthAdjust="spacing"><tspan class="d">help[1]: </tspan>"Check this proof: done-done check</text>
 <text xml:space="preserve" x="22" y="384" textLength="412.8" lengthAdjust="spacing">    --outcome \"&lt;what you proved&gt;\" .proof/</text>
-<text xml:space="preserve" x="22" y="408" textLength="384.0" lengthAdjust="spacing">    20261012T005507Z-7083df3e/after.png"</text>
+<text xml:space="preserve" x="22" y="408" textLength="384.0" lengthAdjust="spacing">    20261012T061715Z-779d1df4/after.png"</text>
 <text xml:space="preserve" x="22" y="432" textLength="57.6" lengthAdjust="spacing"><tspan class="d">exit 0</tspan></text></g>
 </svg>

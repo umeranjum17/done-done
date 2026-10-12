@@ -45,8 +45,9 @@ run builds it, about 20 seconds).
 
 - \`done-done\` (no arguments, inside the repo) for this repo's proof setup and the next step
 - \`done-done --help\` for every command and flag, the journey format and the exact \`## Checks\` block
+- \`done-done <command> --help\` for one command's usage and flags
 
-Results are TOON (\`init\` prints plain text): read \`result\` and follow the \`help\` lines through
+Results are TOON: read \`result\` and follow the \`help\` lines through
 \`init\`, \`run\`, \`check\` and \`receipt\`. Proof comes from driving the real product, not from a unit test run, and counts only from a committed
 tree: commit the done-done setup (config, .gitignore, capture script) before you capture. \`fail\` or
 \`inconclusive\` is not done: fix the cause and re-run, or tell the user exactly what is still unproven.

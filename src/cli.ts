@@ -2,7 +2,8 @@
 import { execFileSync, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
-import { basename, dirname, join, matchesGlob, relative, resolve } from 'node:path';
+import { homedir } from 'node:os';
+import { dirname, isAbsolute, join, matchesGlob, relative, resolve, sep } from 'node:path';
 import { parseArgs } from 'node:util';
 import { encode } from '@toon-format/toon';
 import { type Config, home, loadConfig, UsageError } from './config.js';
@@ -11,32 +12,82 @@ import { checkMedia } from './media.js';
 
 const PASS = 0, FAIL = 1, USAGE = 2, INCONCLUSIVE = 3;
 
-const USAGE_TEXT = `usage:
-  done-done                                     show this repo's config state and the next step
-  done-done init                                write a minimal .done-done.yaml and ignore the evidence root
-  done-done run [<journey>] [-- <command...>]   run a journey (or command) and record the evidence it writes
-  done-done run --open [<journey>]              open a run for a hand- or agent-driven proof; prints its id
-  done-done run --close <run-id>                seal an open run
-  done-done check --outcome "<claim>" <files...> [--trusted-ref <ref>] [--judge]
-  done-done check --from <file | - | PR URL> [--trusted-ref <ref>] [--judge]
-  done-done receipt --outcome "<claim>" <files...> [--judge]   record a passing check for HEAD
-  done-done receipt --from <file | - | PR URL> [--judge]       record from a claim's Checks block
-  done-done receipt --verify <head>                  read-only: verify a recorded receipt
-global flags: --json (JSON instead of TOON), --full (do not truncate lists)
---judge (or judge.enabled: true): a model on your Claude plan, through BYOKit, says whether each PNG/JPEG
-  capture shows the outcome; a wrong screen fails, an unsure answer is inconclusive. Off by default.
-exit codes: 0 pass, 1 fail, 2 usage or config error, 3 inconclusive
+// The shape of a journey, so a new user or agent can write one without opening the reference.
+// done-done sets DONE_DONE_EVIDENCE_ROOT and replaces ${RUN_ID}, so the example works for any evidence root.
+const journeyExample = 'journeys: { smoke: { command: "<drive the real app> > $DONE_DONE_EVIDENCE_ROOT/${RUN_ID}.log" } }';
 
-journeys (.done-done.yaml): the command runs with DONE_DONE_EVIDENCE_ROOT (the evidence root) and DONE_DONE_RUN_ID
+const JOURNEYS_TEXT = `journeys (.done-done.yaml): the command runs with DONE_DONE_EVIDENCE_ROOT (the evidence root) and DONE_DONE_RUN_ID
   set, and \${RUN_ID} in it is replaced; it must write its files under the evidence root, e.g.
-  journeys: { smoke: { command: "<drive the real app> > \$DONE_DONE_EVIDENCE_ROOT/\${RUN_ID}.log" } }
-Checks block (--from): the newest "## Checks" heading, then these four keys, each at the start of a line:
+  ${journeyExample}`;
+const CHECKS_TEXT = `Checks block (--from): the newest "## Checks" heading, then these four keys, each at the start of a line:
   outcome: <what a user can now do>
   repro: <command that failed before and passes now, or n/a; a fix PR needs one>
   proof: <the command or path that drove the real product; name the repo's verify-<app> skill, or say "no verify skill">
-  evidence: <the evidence file paths, or "not proven: <cause>">
+  evidence: <the evidence file paths, or "not proven: <cause>">`;
 
-Results are printed as one TOON document (the AXI convention); pass --json for JSON.`;
+// One table drives `--help` and every `<command> --help`: each command's usage lines and the flags it takes.
+const FLAGS: Record<string, string> = {
+  '-- <command...>': 'run this command instead of a journey; ${RUN_ID} in it becomes the run id',
+  '--open': 'open a run for a hand- or agent-driven proof; prints its id',
+  '--close <run-id>': 'seal an open run and record the files written since it opened',
+  '--outcome "<claim>"': 'the outcome the evidence files prove; the files follow as arguments',
+  '--from <file | - | PR URL>': 'read the claim from the newest "## Checks" block of a file, stdin or a PR body',
+  '--trusted-ref <ref>': 'read .done-done.yaml from this git ref instead of the working tree (use in CI)',
+  '--judge': 'a model says whether each PNG/JPEG capture shows the outcome (off by default; or judge.enabled: true)',
+  '--verify <head>': 'read-only: verify the receipt recorded for <head>',
+};
+// `more` is the reference text a command needs beyond its flags, shared with the top-level help.
+const COMMANDS: Record<string, { usage: [string, string][]; flags: string[]; more: string[] }> = {
+  init: { usage: [['done-done init', 'write a minimal .done-done.yaml and ignore the evidence root']], flags: [], more: [JOURNEYS_TEXT] },
+  run: {
+    usage: [
+      ['done-done run [<journey>] [-- <command...>]', 'run a journey (or command) and record the evidence it writes'],
+      ['done-done run --open [<journey>]', 'open a run for a hand- or agent-driven proof; prints its id'],
+      ['done-done run --close <run-id>', 'seal an open run'],
+    ],
+    flags: ['-- <command...>', '--open', '--close <run-id>'],
+    more: [JOURNEYS_TEXT],
+  },
+  check: {
+    usage: [
+      ['done-done check --outcome "<claim>" <files...> [--trusted-ref <ref>] [--judge]', 'check evidence files against a claim'],
+      ['done-done check --from <file | - | PR URL> [--trusted-ref <ref>] [--judge]', "check a claim's Checks block"],
+    ],
+    flags: ['--outcome "<claim>"', '--from <file | - | PR URL>', '--trusted-ref <ref>', '--judge'],
+    more: [CHECKS_TEXT],
+  },
+  receipt: {
+    usage: [
+      ['done-done receipt --outcome "<claim>" <files...> [--trusted-ref <ref>] [--judge]', 'record a passing check for HEAD'],
+      ['done-done receipt --from <file | - | PR URL> [--trusted-ref <ref>] [--judge]', "record from a claim's Checks block"],
+      ['done-done receipt --verify <head>', 'read-only: verify a recorded receipt'],
+    ],
+    flags: ['--outcome "<claim>"', '--from <file | - | PR URL>', '--trusted-ref <ref>', '--judge', '--verify <head>'],
+    more: [CHECKS_TEXT],
+  },
+};
+
+const rows = (pairs: [string, string][], width = Math.max(...pairs.map(([a]) => a.length)) + 3) => pairs.map(([a, b]) => `  ${a}${' '.repeat(Math.max(3, width - a.length))}${b}`).join('\n');
+const GLOBAL_TEXT = `global flags: --json (JSON instead of TOON), --full (do not truncate lists), --help (this command's usage)
+exit codes: 0 pass, 1 fail, 2 usage or config error, 3 inconclusive`;
+
+const USAGE_TEXT = `usage:
+${rows([['done-done', "show this repo's config state and the next step"], ...Object.values(COMMANDS).flatMap((c) => c.usage)], 46)}
+${GLOBAL_TEXT}
+--judge (or judge.enabled: true): a model on your Claude plan, through BYOKit, says whether each PNG/JPEG
+  capture shows the outcome; a wrong screen fails, an unsure answer is inconclusive. Off by default.
+
+${JOURNEYS_TEXT}
+${CHECKS_TEXT}
+
+Results are printed as one TOON document (the AXI convention); pass --json for JSON.
+Run \`done-done <command> --help\` for that command's flags.`;
+
+function commandHelp(cmd: string): string {
+  const c = COMMANDS[cmd];
+  const flags = c.flags.length ? rows(c.flags.map((f) => [f, FLAGS[f]])) : '  none';
+  return [`usage:\n${rows(c.usage)}`, `flags:\n${flags}`, ...c.more, GLOBAL_TEXT].join('\n');
+}
 
 // How many list rows a compact result shows before it reports the rest as omitted.
 const COMPACT_LIST = 5;
@@ -63,9 +114,6 @@ function captureHint(cfg: Config): string {
   return 'done-done run -- <capture command>';
 }
 
-// The shape of a journey, so a new user or agent can write one without opening the reference.
-// done-done sets DONE_DONE_EVIDENCE_ROOT and replaces ${RUN_ID}, so the example works for any evidence root.
-const journeyExample = 'journeys: { smoke: { command: "<drive the real app> > $DONE_DONE_EVIDENCE_ROOT/${RUN_ID}.log" } }';
 
 type RunRecord = {
   schema: 1;
@@ -80,6 +128,16 @@ type RunRecord = {
   exit: number | null;
   files: { path: string; sha256: string; bytes: number }[];
   before?: Record<string, string>;
+};
+
+// A path as the user should see it: repo-relative inside the repo, else with the home directory as ~.
+const outside = (r: string) => r === '..' || r.startsWith(`..${sep}`) || isAbsolute(r);
+const shown = (repo: string, p: string) => {
+  const r = relative(repo, p);
+  if (r && !outside(r)) return r;
+  if (!r) return '.';
+  const rh = relative(homedir(), p);
+  return rh && !outside(rh) ? `~${sep}${rh}` : p;
 };
 
 const git = (cwd: string, ...args: string[]) => execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
@@ -154,7 +212,7 @@ function closeRun(repo: string, cfg: Config, rec: RunRecord): number {
   let reason = '';
   if (now.commit !== rec.commit) reason = `HEAD moved from ${rec.commit} to ${now.commit} during the run; evidence is not tied to one commit`;
   else if (rec.exit !== null && rec.exit !== 0) reason = `the run command exited ${rec.exit}`;
-  else if (!rec.files.length) reason = `the run wrote no files under ${cfg.evidence.root}; the command gets it as $DONE_DONE_EVIDENCE_ROOT and its run id as $DONE_DONE_RUN_ID (or \${RUN_ID} in the command)`;
+  else if (!rec.files.length) reason = `the run wrote no files under ${shown(repo, cfg.evidence.root)}; the command gets it as $DONE_DONE_EVIDENCE_ROOT and its run id as $DONE_DONE_RUN_ID (or \${RUN_ID} in the command)`;
   const evidence: unknown[] = FULL ? rec.files.map((f) => ({ path: rel(f.path), sha256: f.sha256, bytes: f.bytes })) : rec.files.map((f) => rel(f.path));
   const rows = cap(evidence);
   const result: Record<string, unknown> = {
@@ -164,7 +222,7 @@ function closeRun(repo: string, cfg: Config, rec: RunRecord): number {
     commit: rec.commit,
     dirty: rec.dirty,
     files: rec.files.length,
-    record: relative(repo, record) || record,
+    record: shown(repo, record),
   };
   if (reason) result.reason = reason;
   result.evidence = rows.items;
@@ -187,7 +245,7 @@ function cmdRun(argv: string[]): number {
   const cfg = loadConfig(repo);
   if (values.close) {
     const path = join(recordsDir(cfg), `${values.close}.json`);
-    if (!existsSync(path)) throw new UsageError(`no open run ${values.close} (looked for ${path})`);
+    if (!existsSync(path)) throw new UsageError(`no open run ${values.close} (looked for ${shown(repo, path)})`);
     const rec: RunRecord = JSON.parse(readFileSync(path, 'utf8'));
     if (rec.ended_at) throw new UsageError(`run ${values.close} is already closed`);
     return closeRun(repo, cfg, rec);
@@ -209,7 +267,7 @@ function cmdRun(argv: string[]): number {
       result: 'open',
       run_id: rec.run_id,
       commit: rec.commit,
-      evidence_root: relative(repo, cfg.evidence.root) || cfg.evidence.root,
+      evidence_root: shown(repo, cfg.evidence.root),
       help: [`Capture into the evidence root, then seal the run: done-done run --close ${rec.run_id}`],
     });
     return PASS;
@@ -317,7 +375,7 @@ async function runCheck(argv: string[]): Promise<CheckOutcome> {
     const rep = report(
       findings.concat(allowed ? [] : [{ level: 'inconclusive', why: `not proven: ${claim.notProven}` }]),
       [],
-      { cfg, claim: claim.outcome, source: values.from, notProven: true },
+      { cfg, repo, claim: claim.outcome, source: values.from, notProven: true },
       allowed ? 'not proven (allowed by trusted config)' : '',
     );
     return { code: rep.code, result: rep.result, claim: claim?.outcome, files: [], cited: [], head: now };
@@ -387,7 +445,7 @@ async function runCheck(argv: string[]): Promise<CheckOutcome> {
       judged.note = 'only PNG and JPEG captures are judged; text, log and video evidence are not';
     }
   }
-  const rep = report(findings, files, { cfg, claim: claim?.outcome, source: values.from, judge: judged, judgeLevel });
+  const rep = report(findings, files, { cfg, repo, claim: claim?.outcome, source: values.from, judge: judged, judgeLevel });
   if (rep.code === PASS) {
     mkdirSync(dirname(ledger), { recursive: true });
     appendFileSync(ledger, hashes.filter((h) => !used.get(h)?.has(key)).map((h) => `${h} ${key}\n`).join(''));
@@ -497,7 +555,7 @@ async function cmdReceipt(argv: string[]): Promise<number> {
     tree: r.head.tree,
     claim: rec.claim,
     files: rec.files.length,
-    receipt: relative(repo, path) || path,
+    receipt: shown(repo, path),
     ...(r.judge && { judge: r.judge }),
     help: [`Verify this receipt (CI or merge): done-done receipt --verify ${r.head.commit}`],
   });
@@ -518,16 +576,24 @@ function staleness(repo: string, cfg: Config, from: string, to: string): string 
   return `evidence is for commit ${from.slice(0, 12)}, HEAD is ${to.slice(0, 12)}${outside.length ? ` (changed: ${outside.slice(0, 3).join(', ')}${outside.length > 3 ? ', ...' : ''})` : ''}`;
 }
 
-type ReportContext = { cfg: Config; claim?: string; source?: string; notProven?: boolean; judge?: Record<string, unknown>; judgeLevel?: Finding['level'] };
+type ReportContext = { cfg: Config; repo: string; claim?: string; source?: string; notProven?: boolean; judge?: Record<string, unknown>; judgeLevel?: Finding['level'] };
 
-function checkHelp(cfg: Config, code: number, notProven = false, judgeLevel?: Finding['level']): string[] {
+// Quote an argument only when a shell would split it.
+const arg = (a: string) => (/^[\w./@:+-]+$/.test(a) ? a : `'${a.replaceAll("'", `'\\''`)}'`);
+
+function checkHelp(code: number, files: string[], { cfg, repo, claim, source, notProven, judgeLevel }: ReportContext): string[] {
   if (notProven) return ['Capture real proof and replace "not proven:", or set checks.not_proven: allow and re-check from a trusted ref'];
   if (judgeLevel === 'fail' && code === FAIL) return [`Capture the screen the outcome describes, then re-run this check: ${captureHint(cfg)}`];
   if (judgeLevel && code === INCONCLUSIVE) return ['Look at the capture yourself, or capture a clearer screen of the outcome and re-run this check'];
-  if (code === PASS) return ['Gate CI on this proof: done-done check --from <PR URL> --trusted-ref origin/main'];
+  if (code === PASS) {
+    // The CI gate needs a PR on a remote; without one, a receipt records the pass locally.
+    if (spawnSync('git', ['remote', 'get-url', 'origin'], { cwd: repo }).status === 0) return ['Gate CI on this proof: done-done check --from <PR URL> --trusted-ref origin/main'];
+    const claimArgs = source ? ['--from', source] : ['--outcome', claim ?? '', ...files];
+    return [`Record this pass for HEAD: done-done receipt ${claimArgs.map(arg).join(' ')}`];
+  }
   const capture = captureHint(cfg);
   if (code === INCONCLUSIVE) return [`Capture this proof through a run so it is tied to a commit, then re-run this check: ${capture}`];
-  return [`Capture fresh proof, commit it, then re-run this check: ${capture}`];
+  return [`Commit your change, re-capture with ${capture}, then check the new files`];
 }
 
 function report(findings: Finding[], files: string[], ctx: ReportContext, note = ''): { code: number; result: Record<string, unknown> } {
@@ -549,7 +615,7 @@ function report(findings: Finding[], files: string[], ctx: ReportContext, note =
   const rows = cap(findings.map((f) => ({ level: f.level, why: f.why })));
   if (rows.items.length) result.findings = rows.items;
   if (rows.omitted) result.findings_omitted = rows.omitted;
-  result.help = checkHelp(ctx.cfg, code, ctx.notProven, ctx.judgeLevel);
+  result.help = checkHelp(code, files, ctx);
   return { code, result };
 }
 
@@ -576,33 +642,42 @@ function cmdInit(argv: string[]): number {
   const existed = existsSync(file);
   const cfg = loadConfig(repo); // validates the existing project config; malformed -> exit 2, no writes
   let rel: string;
-  let root = INIT_EVIDENCE_ROOT;
   if (existed) {
     const r = relative(repo, cfg.evidence.root);
-    rel = r && !r.startsWith('..') ? r : '';
-    root = rel || cfg.evidence.root;
-    console.log('init: .done-done.yaml already exists; left unchanged');
+    rel = r && !outside(r) ? r : '';
   } else {
-    const app = basename(repo);
-    const body = `# done-done project config. \`done-done init\` never overwrites this file.\napp: ${JSON.stringify(app)}\nevidence:\n  root: ${INIT_EVIDENCE_ROOT}\n`;
+    const body = `# done-done project config. \`done-done init\` never overwrites this file.\napp: ${JSON.stringify(cfg.app)}\nevidence:\n  root: ${INIT_EVIDENCE_ROOT}\n`;
     writeFileSync(`${file}.tmp`, body);
     renameSync(`${file}.tmp`, file);
     rel = INIT_EVIDENCE_ROOT;
-    console.log(`init: wrote .done-done.yaml (app: ${app})`);
   }
-  if (rel && ensureIgnored(repo, rel)) console.log(`init: added ${rel.replace(/\/+$/, '')}/ to .gitignore`);
-  console.log(`next: add a journey that drives the real app and saves proof under ${root}, e.g. ${journeyExample}`);
-  console.log('then: commit, `done-done run smoke`, and `done-done check --outcome "<what you proved>" <files it recorded>`');
+  const added = !!rel && ensureIgnored(repo, rel);
+  const root = rel || shown(repo, cfg.evidence.root);
+  const check = 'done-done check --outcome "<what you proved>" <files it recorded>';
+  emit({
+    command: 'init',
+    result: 'pass',
+    config: existed ? 'unchanged' : 'written',
+    app: cfg.app,
+    evidence_root: root,
+    gitignore: added ? `added ${rel.replace(/\/+$/, '')}/` : 'unchanged',
+    help: Object.keys(cfg.journeys).length
+      ? [`Capture proof: ${captureHint(cfg)}, then: ${check}`]
+      : [`Add a journey that drives the real app and saves proof under ${root}, e.g. ${journeyExample}`, `Then commit, run \`done-done run smoke\`, and: ${check}`],
+  });
   return PASS;
 }
 
 // The exact next command for a usage or config error, so an agent can recover without reading --help.
-function errorHelp(msg: string): string[] {
+function errorHelp(msg: string, cmd?: string): string[] {
   if (/not inside a git repository/.test(msg)) return ['Run done-done from inside a git repository'];
   if (/unknown journey|run needs a journey/.test(msg)) return ['Run `done-done` to list journeys, or capture a one-off proof: done-done run -- <command>'];
-  if (/\.yaml|unknown key|must be|may only be set in the global config|in the project .done-done.yaml/.test(msg))
-    return ['Fix the config above, or run `done-done init` to write a minimal .done-done.yaml'];
-  return ['Run `done-done --help` for every command and flag'];
+  if (cmd && /Unknown option|Unexpected argument|argument missing/.test(msg))
+    return [`Valid flags for ${cmd}: ${COMMANDS[cmd].flags.join(', ') || 'none'}. Run \`done-done ${cmd} --help\` for its usage`];
+  // Config errors name their file (.done-done.yaml or the global config.yaml); init never rewrites one, so fixing it is the way out.
+  if (/\.done-done\.yaml|config\.yaml:/.test(msg)) return [`Fix the config file named above, then re-run: done-done${cmd ? ` ${cmd}` : ''}`];
+  if (!cmd) return ['Run `done-done --help` for every command and flag'];
+  return [`Run \`done-done ${cmd} --help\` for its usage and flags`];
 }
 
 // Bare `done-done`: orient a new user or agent with the config state and the next step.
@@ -620,12 +695,11 @@ function cmdBare(): number {
   }
   const cfg = loadConfig(repo);
   const journeys = Object.keys(cfg.journeys);
-  const root = relative(repo, cfg.evidence.root) || cfg.evidence.root;
   const result: Record<string, unknown> = {
     command: 'done-done',
     config: 'present',
     app: cfg.app,
-    evidence_root: root,
+    evidence_root: shown(repo, cfg.evidence.root),
     journeys,
     runs: loadRecords(cfg).length,
   };
@@ -647,6 +721,11 @@ async function main(argv: string[]): Promise<number> {
     else kept.push(a);
   }
   const [cmd, ...rest] = [...kept, ...(dash < 0 ? [] : argv.slice(dash))];
+  const sub = Object.hasOwn(COMMANDS, cmd) ? cmd : undefined;
+  if (sub && (kept.includes('--help') || kept.includes('-h'))) {
+    console.log(commandHelp(sub));
+    return PASS;
+  }
   try {
     if (cmd === 'init') return cmdInit(rest);
     if (cmd === 'run') return cmdRun(rest);
@@ -660,7 +739,7 @@ async function main(argv: string[]): Promise<number> {
     throw new UsageError(`unknown command ${cmd}`);
   } catch (e) {
     const msg = ((e as { stderr?: string }).stderr || (e as Error).message || String(e)).trim();
-    emit({ command: 'done-done', error: msg, help: e instanceof UsageError && e.help ? [e.help] : errorHelp(msg) });
+    emit({ command: sub ?? 'done-done', error: msg, help: e instanceof UsageError && e.help ? [e.help] : errorHelp(msg, sub) });
     return USAGE;
   }
 }

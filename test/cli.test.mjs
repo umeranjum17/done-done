@@ -2787,6 +2787,31 @@ test('maintain reports a citation under an unreadable folder as a citation findi
   }
 });
 
+test('maintain does not follow a committed symlink folder out of the repo to count a cited file', () => {
+  const { repo, env, sh } = setup();
+  const s = stubAgents(env, JSON.stringify({ drift: [], recipe: 'open it', recipes: [], missing: [] }));
+  const outside = mkdtempSync(join(tmpdir(), 'dd-notes-'));
+  try {
+    writeFileSync(join(outside, 'secrets.txt'), 'token\n');
+    symlinkSync(outside, join(repo, 'notes'));
+    const skill = join(repo, '.agents', 'skills', 'verify-notes');
+    mkdirSync(join(skill, 'features'), { recursive: true });
+    writeFileSync(join(skill, 'SKILL.md'), '# verify-notes\n\nSee notes/secrets.txt:99.\n');
+    writeFileSync(join(skill, 'features', 'README.md'), '# features\n\n- [Home](home.md)\n');
+    writeFileSync(join(skill, 'features', 'home.md'), '# Home\n');
+    sh('add', '-A');
+    sh('commit', '-qm', 'skill');
+    const r = doctorIn(repo, s.env, 'maintain', '--foreground');
+    const m = toon(r);
+    assert.deepEqual([r.code, m.result], [1, 'drift'], r.out);
+    const cite = m.findings.find((f) => f.kind === 'citation');
+    assert.match(cite.what, /notes\/secrets\.txt is outside the repository/, r.out);
+    assert.doesNotMatch(cite.what, /has \d+ lines/);
+  } finally {
+    rmSync(outside, { recursive: true, force: true });
+  }
+});
+
 test('maintain fingerprints an untracked file whose name has a newline', () => {
   const { repo, env, sh } = setup();
   const s = stubAgents(env, JSON.stringify({ drift: [], recipe: 'open it', recipes: [], missing: [] }));

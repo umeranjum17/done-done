@@ -1,7 +1,7 @@
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { accessSync, closeSync, constants, existsSync, lstatSync, openSync, readdirSync, readFileSync, readlinkSync, readSync, realpathSync, statSync } from 'node:fs';
-import { dirname, extname, isAbsolute, join, relative, resolve } from 'node:path';
+import { dirname, extname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { askAgent, selectAgent, supported } from './agents.js';
 import type { Config } from './config.js';
 
@@ -86,6 +86,9 @@ const localTarget = (t: string) => (/^[a-z][\w+.-]*:/i.test(t) ? '' : t.split('#
 // of the tracked files', so host:port text is never read as a citation.
 const CITE = /(?<![\w/.-])((?:[\w.-]+\/)*[\w-][\w.-]*\.[A-Za-z]\w*):(\d+)(?:-(\d+))?\b/g;
 
+// Whether the file at `p` really lies under the repo: a symlinked folder on the way to it is followed, so it counts by where it points.
+const realInside = (repo: string, p: string) => realpathSync(p).startsWith(`${realpathSync(repo)}${sep}`);
+
 // Why repo-relative `file` has no line `line` (through `end`), or '' when it has.
 function citeProblem(repo: string, file: string, line: number, end = line): string {
   const p = resolve(repo, file);
@@ -94,6 +97,7 @@ function citeProblem(repo: string, file: string, line: number, end = line): stri
   let n: number;
   try {
     if (!lstatSync(p, { throwIfNoEntry: false })?.isFile()) return `${file} is not a file in the repository`;
+    if (!realInside(repo, p)) return `${file} is outside the repository`;
     const text = readFileSync(p, 'utf8');
     n = text.split('\n').length - (text.endsWith('\n') ? 1 : 0);
   } catch {
@@ -235,7 +239,7 @@ export async function maintainSteps<S>(run: { repo: string; findings?: Finding[]
       for (const p of m[1].includes('/') ? tracked.filter((t) => t === m[1]) : trackedNamed(tracked, m[1])) {
         if (seen.has(p) || left.has(p)) continue;
         const abs = join(repo, p);
-        const body = tryRead<string | undefined>(abs, undefined, () => (lstatSync(abs, { throwIfNoEntry: false })?.isFile() ? readFileSync(abs, 'utf8') : undefined));
+        const body = tryRead<string | undefined>(abs, undefined, () => (lstatSync(abs, { throwIfNoEntry: false })?.isFile() && realInside(repo, abs) ? readFileSync(abs, 'utf8') : undefined));
         if (body === undefined) continue;
         const kept = body.length > FEATURE_CHARS ? `${body.slice(0, FEATURE_CHARS)}\n[truncated after ${FEATURE_CHARS} characters]` : body;
         if (left.size || total + kept.length > CITED_CHARS) {

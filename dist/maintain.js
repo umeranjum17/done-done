@@ -1,7 +1,7 @@
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { accessSync, closeSync, constants, existsSync, lstatSync, openSync, readdirSync, readFileSync, readlinkSync, readSync, realpathSync, statSync } from 'node:fs';
-import { dirname, extname, isAbsolute, join, relative, resolve } from 'node:path';
+import { dirname, extname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { askAgent, selectAgent, supported } from './agents.js';
 // Plan 1.5 shared rules: a per-run call cap and a per-call timeout stop runaway cost.
 const MAX_CALLS = 30;
@@ -73,6 +73,8 @@ const localTarget = (t) => (/^[a-z][\w+.-]*:/i.test(t) ? '' : t.split('#')[0]);
 // A path:line or path:line-line. A path with a / is checked; a bare name is checked only when its extension is one
 // of the tracked files', so host:port text is never read as a citation.
 const CITE = /(?<![\w/.-])((?:[\w.-]+\/)*[\w-][\w.-]*\.[A-Za-z]\w*):(\d+)(?:-(\d+))?\b/g;
+// Whether the file at `p` really lies under the repo: a symlinked folder on the way to it is followed, so it counts by where it points.
+const realInside = (repo, p) => realpathSync(p).startsWith(`${realpathSync(repo)}${sep}`);
 // Why repo-relative `file` has no line `line` (through `end`), or '' when it has.
 function citeProblem(repo, file, line, end = line) {
     const p = resolve(repo, file);
@@ -83,6 +85,8 @@ function citeProblem(repo, file, line, end = line) {
     try {
         if (!lstatSync(p, { throwIfNoEntry: false })?.isFile())
             return `${file} is not a file in the repository`;
+        if (!realInside(repo, p))
+            return `${file} is outside the repository`;
         const text = readFileSync(p, 'utf8');
         n = text.split('\n').length - (text.endsWith('\n') ? 1 : 0);
     }
@@ -231,7 +235,7 @@ export async function maintainSteps(run, dir, cfg, h) {
                 if (seen.has(p) || left.has(p))
                     continue;
                 const abs = join(repo, p);
-                const body = tryRead(abs, undefined, () => (lstatSync(abs, { throwIfNoEntry: false })?.isFile() ? readFileSync(abs, 'utf8') : undefined));
+                const body = tryRead(abs, undefined, () => (lstatSync(abs, { throwIfNoEntry: false })?.isFile() && realInside(repo, abs) ? readFileSync(abs, 'utf8') : undefined));
                 if (body === undefined)
                     continue;
                 const kept = body.length > FEATURE_CHARS ? `${body.slice(0, FEATURE_CHARS)}\n[truncated after ${FEATURE_CHARS} characters]` : body;

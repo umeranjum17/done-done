@@ -28,15 +28,16 @@ const ASK_ATTEMPTS = 3;
 class ProviderError extends Error {}
 type Adapter = { argv: (c: AgentCall, dir: string) => string[]; answer: (stdout: string, c: AgentCall) => unknown; file?: boolean; hint?: string; env?: (c: AgentCall) => Record<string, string> };
 
-// The answer object in an agent's free text, in one pass: the first top-level '{'..'}' span that parses to an object
-// with every required key, skipping braces and quotes in narration. With no such span, the last span that parsed is
-// returned, so the caller reports the missing keys.
-export function extractJsonObject(text: string, required: string[] = []): unknown {
-  const spans: string[] = [];
+// The answer object in an agent's free text: the first top-level '{'..'}' span that parses to an object with every
+// required key, skipping braces and quotes in narration. With no such span, the last span that parsed is returned, so
+// the caller reports the missing keys. A span still open at the end of the text was a stray brace in narration, so the
+// scan restarts one character after it; restarts are capped so the worst case stays bounded.
+const MAX_SPAN_RESTARTS = 50;
+function scanSpans(text: string, from: number, spans: string[]): number {
   let depth = 0;
   let start = 0;
   let inString = false;
-  for (let i = 0; i < text.length; i++) {
+  for (let i = from; i < text.length; i++) {
     const ch = text[i];
     if (depth === 0) {
       if (ch === '{') { depth = 1; start = i; }
@@ -47,6 +48,12 @@ export function extractJsonObject(text: string, required: string[] = []): unknow
     else if (ch === '{') depth++;
     else if (ch === '}' && --depth === 0) spans.push(text.slice(start, i + 1));
   }
+  return depth > 0 ? start : -1;
+}
+export function extractJsonObject(text: string, required: string[] = []): unknown {
+  const spans: string[] = [];
+  let open = scanSpans(text, 0, spans);
+  for (let restarts = 0; open >= 0 && restarts < MAX_SPAN_RESTARTS; restarts++) open = scanSpans(text, open + 1, spans);
   const parsed = spans.flatMap((span) => { try { return [JSON.parse(span) as Record<string, unknown>]; } catch { return []; } });
   const answer = parsed.find((v) => required.every((k) => k in v)) ?? parsed[parsed.length - 1];
   if (!answer) throw new Error(`no JSON object in the answer: ${text.slice(0, 200)}`);

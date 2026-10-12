@@ -121,12 +121,15 @@ The command runs from the repo root with `DONE_DONE_EVIDENCE_ROOT` (a new folder
 
 Optional: `done-done init --agent claude` adds a Claude Code SessionStart hook to the repo's `.claude/settings.json` that shows each session the bare `done-done` state, and `done-done init --agent codex` adds the same SessionStart hook to the repo's `.codex/hooks.json` for Codex. See the [reference](docs/reference.md#set-up-a-repo). Opencode is not supported yet.
 
-Commit the config (and `.claude/settings.json` or `.codex/hooks.json` if you added a hook), because proof only counts from a clean tree:
+Record the recipe in the repo so anyone can re-run the proof, then commit it (and `.claude/settings.json` or `.codex/hooks.json` if you added a hook):
 
 ```sh
+done-done init --journey smoke -- 'npm test > $DONE_DONE_EVIDENCE_ROOT/${RUN_ID}.log'
 git add .done-done.yaml
 git commit -m "Add done-done"
 ```
+
+A `run -- <command>` whose command matches no recorded journey still runs, but its result hints that the recipe is not in the repo.
 
 **3. Run it, then check it**
 

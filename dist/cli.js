@@ -9,7 +9,7 @@ import { parseArgs } from 'node:util';
 import { encode } from '@toon-format/toon';
 import { Document, parseDocument } from 'yaml';
 import { home, loadConfig, parseDuration, UsageError } from './config.js';
-import { judge, onPath } from './judge.js';
+import { backend, judge, onPath } from './judge.js';
 import { checkMedia } from './media.js';
 const PASS = 0, FAIL = 1, USAGE = 2, INCONCLUSIVE = 3, WAITING = 4;
 // The shape of a journey, so a new user or agent can write one without opening the reference.
@@ -26,10 +26,11 @@ const CHECKS_TEXT = `Checks block (--from): the newest "## Checks" heading, then
   evidence: <the evidence file paths, or "not proven: <cause>">`;
 const RUNS_TEXT = `runs: each verify run lives in $DONE_DONE_HOME/runs/<app>/<run-id> (run.json, events.jsonl, logs/<step>.log)
   and goes on when the command that started it ends; its steps are resolve, drive (the journey), check, receipt, report`;
+const AGENTS = ['claude', 'codex', 'opencode'];
 const DOCTOR_TEXT = `doctor is read-only and exits 0 when every required item is ok, 2 otherwise.
   required: git (inside a repository), config (a valid .done-done.yaml), evidence_root (writable).
   optional: verify_skill (.agents/skills/verify-<app>/), agent (claude, codex or opencode on PATH),
-  judge (a claude binary is present; the model is never called), ffprobe (video evidence only).
+  judge (a claude binary, a Claude sign-in and the judge kit; the model is never called), ffprobe (video evidence only).
   doctor lists every check; --full changes nothing. Missing optionals never fail the run.`;
 // One table drives `--help` and every `<command> --help`: each command's usage lines and the flags it takes.
 const FLAGS = {
@@ -1286,7 +1287,7 @@ function cmdInit(argv) {
     });
     const parts = dash < 0 ? [] : argv.slice(dash + 1);
     const journey = values.journey ?? null;
-    if (values.agent !== undefined && values.agent !== 'claude' && values.agent !== 'codex' && values.agent !== 'opencode')
+    if (values.agent !== undefined && !AGENTS.includes(values.agent))
         throw new UsageError(`--agent ${values.agent} is not supported; the supported values are claude, codex, opencode`, 'Run: done-done init --agent <claude|codex|opencode>');
     if (journey === null && parts.length)
         throw new UsageError('init needs --journey <name> to record a command after --');
@@ -1422,7 +1423,7 @@ function writableDir(p) {
 // Is this repo worth driving: git, a valid config and a writable evidence root are
 // required; the verify skill, an agent CLI, the judge binary and ffprobe are optional.
 // Read-only: a missing repo or config is a finding, never a crash, and nothing is created.
-function cmdDoctor(argv) {
+async function cmdDoctor(argv) {
     if (argv.length)
         throw new UsageError('doctor takes no arguments', 'Run `done-done doctor` with no arguments');
     let repo = null;
@@ -1453,16 +1454,16 @@ function cmdDoctor(argv) {
         }
     }
     if (!cfg || !repo) {
-        checks.push({ check: 'evidence_root', status: 'missing', detail: 'unknown without a valid config', fix: 'Run `done-done init` to write a minimal .done-done.yaml' });
+        checks.push({ check: 'evidence_root', status: 'missing', detail: 'unknown without a valid config', fix: '' });
     }
     else if (writableDir(cfg.evidence.root)) {
         checks.push({ check: 'evidence_root', status: 'ok', detail: `writable: ${shown(repo, cfg.evidence.root)}`, fix: '' });
     }
     else {
-        checks.push({ check: 'evidence_root', status: 'missing', detail: `not writable: ${shown(repo, cfg.evidence.root)}`, fix: `Make it writable, or point evidence.root elsewhere: mkdir -p ${cfg.evidence.root}` });
+        checks.push({ check: 'evidence_root', status: 'missing', detail: `not writable: ${shown(repo, cfg.evidence.root)}`, fix: `Make ${cfg.evidence.root} writable, or set evidence.root to a writable folder in .done-done.yaml` });
     }
     if (!cfg || !repo) {
-        checks.push({ check: 'verify_skill', status: 'missing', detail: 'unknown without a valid config', fix: 'Run `done-done init` to write a minimal .done-done.yaml' });
+        checks.push({ check: 'verify_skill', status: 'missing', detail: 'unknown without a valid config', fix: '' });
     }
     else {
         const dir = join(repo, cfg.skill);
@@ -1477,26 +1478,21 @@ function cmdDoctor(argv) {
                 fix: `Write ${shown(repo, skillFile)} describing how to drive this app (a later done-done init will scaffold it)`,
             });
     }
-    const agent = ['claude', 'codex', 'opencode'].map((n) => ({ name: n, path: onPath(n) })).find((a) => a.path);
+    const agent = AGENTS.map((n) => ({ name: n, path: onPath(n) })).find((a) => a.path);
     checks.push(agent
         ? { check: 'agent', status: 'ok', detail: `found ${agent.name} at ${agent.path}`, fix: '' }
         : { check: 'agent', status: 'missing', detail: 'no claude, codex or opencode binary on PATH', fix: 'Install an agent CLI (claude, codex or opencode); without one, init stays scaffold-only' });
-    const bin = cfg?.judge.bin || onPath('claude');
     if (!cfg) {
-        checks.push({ check: 'judge', status: 'missing', detail: 'unknown without a valid config', fix: 'Run `done-done init` to write a minimal .done-done.yaml' });
-    }
-    else if (!bin) {
-        checks.push({ check: 'judge', status: 'missing', detail: 'no claude binary on PATH and no judge.bin set', fix: 'Install Claude Code, or set judge.bin to its absolute path in ~/.done-done/config.yaml' });
-    }
-    else if (!isAbsolute(bin) || !isAbsolute(cfg.judge.config_dir)) {
-        checks.push({ check: 'judge', status: 'missing', detail: `judge.bin and judge.config_dir must be absolute paths (got ${bin}, ${cfg.judge.config_dir})`, fix: 'Fix judge.bin or judge.config_dir in ~/.done-done/config.yaml' });
-    }
-    else if (!existsSync(cfg.judge.config_dir)) {
-        const dir = cfg.judge.config_dir;
-        checks.push({ check: 'judge', status: 'missing', detail: `no Claude sign-in at ${dir}`, fix: `Sign in once with your Claude plan: mkdir -p ${dir} && CLAUDE_CONFIG_DIR=${dir} ${bin} auth login` });
+        checks.push({ check: 'judge', status: 'missing', detail: 'unknown without a valid config', fix: '' });
     }
     else {
-        checks.push({ check: 'judge', status: 'ok', detail: `claude binary at ${bin} with a Claude sign-in; the model is never called`, fix: '' });
+        try {
+            const { bin } = await backend(cfg);
+            checks.push({ check: 'judge', status: 'ok', detail: `claude binary at ${bin} with a Claude sign-in and the judge kit; the model is never called`, fix: '' });
+        }
+        catch (e) {
+            checks.push({ check: 'judge', status: 'missing', detail: e.message, fix: e.help ?? 'Re-run done-done doctor after fixing the error above' });
+        }
     }
     const ffprobe = onPath('ffprobe');
     checks.push(ffprobe
@@ -1506,7 +1502,7 @@ function cmdDoctor(argv) {
     const missingRequired = checks.filter((c) => c.status === 'missing' && required.includes(c.check));
     const result = { command: 'doctor', result: missingRequired.length ? 'fail' : 'pass', checks };
     // Several missing items can share one fix (set up the config once); name each fix only once.
-    const fixes = [...new Set(missingRequired.map((c) => c.fix))];
+    const fixes = [...new Set(missingRequired.map((c) => c.fix).filter(Boolean))];
     if (cfg && repo) {
         const names = Object.keys(cfg.journeys);
         const check = '`done-done check --outcome "<what you proved>" <files it recorded>`';
@@ -1575,7 +1571,7 @@ async function main(argv) {
         if (cmd === 'init')
             return cmdInit(rest);
         if (cmd === 'doctor')
-            return cmdDoctor(rest);
+            return await cmdDoctor(rest);
         if (cmd === 'run')
             return cmdRun(rest);
         if (cmd === 'check')

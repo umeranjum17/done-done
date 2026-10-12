@@ -58,7 +58,7 @@ async function kit() {
   }
 }
 
-async function backend(cfg: Config): Promise<{ ask: Backend['ask']; resolve: typeof import('@byokit/decide').resolve; signIn: string; signedIn: () => boolean }> {
+export async function backend(cfg: Config): Promise<{ bin: string; ask: Backend['ask']; resolve: typeof import('@byokit/decide').resolve; signIn: string; signedIn: () => boolean }> {
   const bin = cfg.judge.bin || onPath('claude');
   const dir = cfg.judge.config_dir;
   const signIn = `CLAUDE_CONFIG_DIR=${dir} ${bin || 'claude'} auth login`;
@@ -81,7 +81,7 @@ async function backend(cfg: Config): Promise<{ ask: Backend['ask']; resolve: typ
     }
   };
   try {
-    return { ask: claudeCode({ bin, configDir: real, model: cfg.judge.model, timeoutMs: TIMEOUT_MS }).ask, resolve, signIn, signedIn };
+    return { bin, ask: claudeCode({ bin, configDir: real, model: cfg.judge.model, timeoutMs: TIMEOUT_MS }).ask, resolve, signIn, signedIn };
   } catch (e) {
     throw new UsageError(`judge: ${(e as Error).message} (judge.bin ${bin}, judge.config_dir ${dir})`, 'Set judge.config_dir to a folder of its own, not your ~/.claude');
   }

@@ -96,7 +96,9 @@ claim, and not already used to prove a different claim in this repo).
   cannot be proven. Install ffmpeg/ffprobe to verify it.
 - `evidence: not proven: <cause>` is inconclusive (3). A repo may allow it only through a trusted
   ref (`--trusted-ref`), never from the working copy.
-- Report only what you saw. The only pass is `result: PASS` on stdout with exit 0.
+- Report only what you saw. Results print as one TOON document (`--json` for JSON): a pass is
+  `result: pass` with exit 0, a failure is `result: fail` with exit 1, and an inconclusive result is
+  `result: inconclusive` with exit 3.
 
 ## In CI or a merge gate
 

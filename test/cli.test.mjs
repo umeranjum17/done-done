@@ -463,13 +463,21 @@ function bareRepo(dirName = 'repo') {
   return { dir, repo, env, sh, dd };
 }
 
-test('the Firstmate merge gate passes fresh proof with a receipt, and refuses a missing receipt or stale proof', () => {
+test('the Firstmate merge gate passes fresh proof with a receipt, and refuses a missing receipt, stale proof or another PR head', () => {
   const { dir, repo, env, sh, dd, head, shots } = setup();
+  // The default branch's rules are stricter than the branch's: a "feat" title needs a repro there.
+  const yaml = readFileSync(join(repo, '.done-done.yaml'), 'utf8');
+  writeFileSync(join(repo, '.done-done.yaml'), `${yaml}checks:\n  fix_title: "^feat"\n`);
+  sh('commit', '-qam', 'strict rules');
+  sh('update-ref', 'refs/remotes/origin/main', 'HEAD');
+  sh('symbolic-ref', 'refs/remotes/origin/HEAD', 'refs/remotes/origin/main');
+  writeFileSync(join(repo, '.done-done.yaml'), yaml);
+  sh('commit', '-qam', 'branch rules');
   const bin = join(dir, 'bin');
   mkdirSync(bin);
   writeFileSync(join(bin, 'done-done'), `#!/bin/sh\nexec ${JSON.stringify(process.execPath)} ${JSON.stringify(CLI)} "$@"\n`, { mode: 0o755 });
-  // A stand-in `gh` that answers `gh pr view <url> --json body,title` with the PR body.
-  writeFileSync(join(bin, 'gh'), `#!/bin/sh\ncat ${JSON.stringify(join(dir, 'pr.json'))}\n`, { mode: 0o755 });
+  // A stand-in `gh` that answers `gh pr view <url>` with the PR's head commit or its title and body.
+  writeFileSync(join(bin, 'gh'), `#!/bin/sh\ncase "$*" in *headRefOid*) cat ${JSON.stringify(join(dir, 'pr-head'))} ;; *) cat ${JSON.stringify(join(dir, 'pr.json'))} ;; esac\n`, { mode: 0o755 });
   const fm = join(dir, 'fm');
   const gate = (pr) => {
     const r = spawnSync(join(dirname(CLI), '..', 'integrations', 'firstmate', 'merge-gate'), ['t1', repo, head(), pr], {
@@ -488,11 +496,19 @@ test('the Firstmate merge gate passes fresh proof with a receipt, and refuses a 
   const pass = gate('-');
   assert.equal(pass.code, 0, pass.out);
   assert.match(pass.out, /This receipt is valid for this head/);
-  sh('update-ref', 'refs/remotes/origin/main', 'HEAD');
-  sh('symbolic-ref', 'refs/remotes/origin/HEAD', 'refs/remotes/origin/main');
-  writeFileSync(join(dir, 'pr.json'), JSON.stringify({ title: 'feat: settings', body: checks }));
-  const pr = gate('https://github.com/example/notes/pull/1');
-  assert.equal(pr.code, 0, pr.out);
+  const pr = (title, prHead) => {
+    writeFileSync(join(dir, 'pr.json'), JSON.stringify({ title, body: checks }));
+    writeFileSync(join(dir, 'pr-head'), `${prHead}\n`);
+    return gate('https://github.com/example/notes/pull/1');
+  };
+  const prPass = pr('docs: settings', head());
+  assert.equal(prPass.code, 0, prPass.out);
+  const strict = pr('feat: settings', head());
+  assert.equal(strict.code, 1, strict.out);
+  assert.match(strict.out, /a fix needs a repro/, 'the rules come from the default branch, not the PR');
+  const moved = pr('docs: settings', 'f'.repeat(40));
+  assert.equal(moved.code, 1, moved.out);
+  assert.match(moved.out, /is at f{40}, not /);
   writeFileSync(join(repo, 'src', 'app.js'), 'export const app = 2;\n');
   sh('commit', '-qam', 'change the app');
   const stale = gate('-');

@@ -13,7 +13,7 @@ if that fails, report that the CLI is missing instead of writing proof by hand.
    ```
    ## Checks
    outcome: <what a user can now do>
-   repro: <command that failed before and passes now, or n/a>
+   repro: <command that failed before and passes now; n/a only when the PR title is not a fix>
    proof: <the repo's verify-<app> skill, or "no verify skill - done-done run <journey>">
    evidence: <the run's files, for example .proof/<run-id>/after.png>
    ```
@@ -25,5 +25,5 @@ if that fails, report that the CLI is missing instead of writing proof by hand.
    and every cited file to `proof/` in your task's data folder.
 
 Exit 1 (fail) or 3 (inconclusive) is never done: fix the proof and re-run, or report what done-done found.
-`evidence: not proven: <cause>` is inconclusive unless the repo's default branch allows it.
+`evidence: not proven: <cause>` is inconclusive (3) and gets no receipt: report the task as not proven, never as done.
 Any commit after the receipt makes the proof stale: run, check and receipt again on the new head.

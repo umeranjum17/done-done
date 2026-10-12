@@ -28,6 +28,9 @@ First run `command -v done-done`. If it prints a path, run `done-done` as shown 
 - `done-done --help` for every command and flag, the journey format and the exact `## Checks` block
 - `done-done <command> --help` for one command's usage and flags
 
+If the user wants each Claude Code session in this repo to start with that state, `done-done init --agent claude`
+adds an opt-in SessionStart hook to the repo's `.claude/settings.json`.
+
 Results are TOON: read `result` and follow the `help` lines through
 `init`, `run`, `check` and `receipt`. Proof comes from driving the real product, not from a unit test run, and counts only from a committed
 tree: commit the done-done setup (config, capture script) before you capture. `fail` or

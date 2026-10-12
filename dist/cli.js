@@ -32,10 +32,18 @@ const FLAGS = {
     '--claim-id <id>': 'the claim the evidence proves; evidence already used for another claim id is reuse (default: the current branch, or the PR branch with --from <PR URL>; required on a detached HEAD)',
     '--judge': 'a model says whether each PNG/JPEG capture shows the outcome (off by default; or judge.enabled: true)',
     '--verify <head>': 'read-only: verify the receipt recorded for <head>',
+    '--agent claude': 'also add a SessionStart hook to .claude/settings.json that shows `done-done` to each session (opt-in)',
 };
 // `more` is the reference text a command needs beyond its flags, shared with the top-level help.
 const COMMANDS = {
-    init: { usage: [['done-done init', 'write a minimal .done-done.yaml (evidence lives outside the repo)']], flags: [], more: [JOURNEYS_TEXT] },
+    init: {
+        usage: [
+            ['done-done init', 'write a minimal .done-done.yaml (evidence lives outside the repo)'],
+            ['done-done init --agent claude', 'also show this repo\'s done-done state at each Claude Code session start'],
+        ],
+        flags: ['--agent claude'],
+        more: [JOURNEYS_TEXT],
+    },
     run: {
         usage: [
             ['done-done run [<journey>] [-- <command...>]', 'run a journey (or command) and record the evidence it writes'],
@@ -681,12 +689,44 @@ function ensureIgnored(repo, rel) {
     appendFileSync(file, `${text && !text.endsWith('\n') ? '\n' : ''}${entry}\n`);
     return true;
 }
+// The Claude Code SessionStart hook `init --agent claude` adds; Claude Code shows its stdout to the session.
+// Without done-done on PATH it prints nothing and exits 0, so it never breaks a session.
+const CLAUDE_HOOK = 'command -v done-done >/dev/null && done-done || true';
+// The repo's .claude/settings.json with the hook merged in, keeping every other key and hook; no text when it is already there.
+function claudeSettings(repo) {
+    const file = join(repo, '.claude', 'settings.json');
+    const bad = (why) => new UsageError(`.claude/settings.json ${why}`, 'Fix .claude/settings.json, then re-run: done-done init --agent claude');
+    const isObject = (v) => !!v && typeof v === 'object' && !Array.isArray(v);
+    let settings = {};
+    if (existsSync(file)) {
+        try {
+            settings = JSON.parse(readFileSync(file, 'utf8'));
+        }
+        catch (e) {
+            throw bad(`is not valid JSON (${e.message})`);
+        }
+    }
+    if (!isObject(settings))
+        throw bad('is not a JSON object');
+    if (settings.hooks !== undefined && !isObject(settings.hooks))
+        throw bad('has "hooks" that is not an object');
+    const start = settings.hooks?.SessionStart ?? [];
+    if (!Array.isArray(start))
+        throw bad('has "hooks.SessionStart" that is not a list');
+    if (start.some((m) => Array.isArray(m?.hooks) && m.hooks.some((h) => h?.command === CLAUDE_HOOK)))
+        return { file };
+    settings.hooks = { ...settings.hooks, SessionStart: [...start, { hooks: [{ type: 'command', command: CLAUDE_HOOK }] }] };
+    return { file, text: `${JSON.stringify(settings, null, 2)}\n` };
+}
 function cmdInit(argv) {
-    parseArgs({ args: argv, options: {}, allowPositionals: false });
+    const { values } = parseArgs({ args: argv, options: { agent: { type: 'string' } }, allowPositionals: false });
+    if (values.agent !== undefined && values.agent !== 'claude')
+        throw new UsageError(`--agent ${values.agent} is not supported; the supported value is claude`, 'Run: done-done init --agent claude');
     const repo = repoRoot();
     const file = join(repo, '.done-done.yaml');
     const existed = existsSync(file);
     const cfg = loadConfig(repo); // validates the existing project config; malformed -> exit 2, no writes
+    const hook = values.agent ? claudeSettings(repo) : undefined; // likewise validated before any write
     if (!existed) {
         // No evidence.root: proof goes to <local_root>/<app>, outside the repo, so it outlives this checkout.
         // The pinned app name is what lets every checkout of the repo find the same evidence and receipts.
@@ -697,6 +737,11 @@ function cmdInit(argv) {
     // An evidence root inside the repo (an older config's `root: .proof`) stays out of git.
     const rel = under(repo, cfg.evidence.root);
     const added = !!rel && ensureIgnored(repo, rel);
+    if (hook?.text) {
+        mkdirSync(dirname(hook.file), { recursive: true });
+        writeFileSync(`${hook.file}.tmp`, hook.text);
+        renameSync(`${hook.file}.tmp`, hook.file);
+    }
     const root = shown(repo, cfg.evidence.root);
     const check = 'done-done check --outcome "<what you proved>" <files it recorded>';
     emit({
@@ -706,9 +751,13 @@ function cmdInit(argv) {
         app: cfg.app,
         evidence_root: root,
         gitignore: added ? `added ${rel.replace(/\/+$/, '')}/` : 'unchanged',
-        help: Object.keys(cfg.journeys).length
-            ? [`Capture proof: ${captureHint(cfg)}, then: ${check}`]
-            : [`Add a journey that drives the real app and saves proof under $DONE_DONE_EVIDENCE_ROOT (each run's own folder in ${root}), e.g. ${journeyExample}`, `Then commit, run \`done-done run smoke\`, and: ${check}`],
+        ...(hook && { claude_hook: hook.text ? 'added to .claude/settings.json' : 'unchanged' }),
+        help: [
+            ...(Object.keys(cfg.journeys).length
+                ? [`Capture proof: ${captureHint(cfg)}, then: ${check}`]
+                : [`Add a journey that drives the real app and saves proof under $DONE_DONE_EVIDENCE_ROOT (each run's own folder in ${root}), e.g. ${journeyExample}`, `Then commit, run \`done-done run smoke\`, and: ${check}`]),
+            ...(hook?.text ? ['Commit .claude/settings.json: each Claude Code session in this repo then starts with `done-done` output (it needs done-done on PATH)'] : []),
+        ],
     });
     return PASS;
 }

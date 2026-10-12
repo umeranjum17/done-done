@@ -119,7 +119,9 @@ journeys:
 
 The command runs from the repo root with `DONE_DONE_EVIDENCE_ROOT` (a new folder for this run in the evidence root) and `DONE_DONE_RUN_ID` set, and `${RUN_ID}` in it is replaced. A run that writes nothing into its folder fails.
 
-Commit the config, because proof only counts from a clean tree:
+Optional: run `done-done init --agent claude` so every Claude Code session in this repo starts knowing its proof state. It adds a SessionStart hook to the repo's `.claude/settings.json` (merged into an existing file, never twice) that prints the bare `done-done` output at session start, and prints nothing when done-done is not on PATH. Codex and opencode are not supported yet.
+
+Commit the config (and `.claude/settings.json` if you added the hook), because proof only counts from a clean tree:
 
 ```sh
 git add .done-done.yaml
@@ -182,7 +184,7 @@ Another fleet works the same way: add the include text to whatever your workers 
 
 ## What's next
 
-So far: `init`, `run`, `check`, `receipt` and the opt-in screenshot judge. Coming next: help writing the proof steps for your app.
+So far: `init`, `run`, `check`, `receipt`, the opt-in screenshot judge and the opt-in Claude Code session hook. Coming next: help writing the proof steps for your app.
 
 ## Develop
 

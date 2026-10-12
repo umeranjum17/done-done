@@ -65,7 +65,7 @@ const COMMANDS = {
 const rows = (pairs, width = Math.max(...pairs.map(([a]) => a.length)) + 3) => pairs.map(([a, b]) => `  ${a}${' '.repeat(Math.max(3, width - a.length))}${b}`).join('\n');
 const GLOBAL_TEXT = `global flags: --json (JSON instead of TOON), --full (do not truncate lists), --version, --help (this command's usage)
 exit codes: 0 pass, 1 fail, 2 usage or config error, 3 inconclusive`;
-const USAGE_TEXT = `install: npm install -g --prefix ~/.local done-done-axi (installs done-done-axi and done-done), or run npx -y done-done-axi <command>
+const USAGE_TEXT = `install: npm install -g --prefix ~/.local --allow-git=all github:umeranjum17/done-done-axi (installs done-done-axi and done-done), or run npx -y --allow-git=all github:umeranjum17/done-done-axi <command>
 usage:
 ${rows([['done-done', "show this repo's config state and the next step"], ...Object.values(COMMANDS).flatMap((c) => c.usage)], 46)}
 ${GLOBAL_TEXT}
@@ -386,11 +386,18 @@ async function runCheck(argv) {
         if (seen.has(hash))
             findings.push({ level: 'fail', why: `${name}: byte-identical to ${seen.get(hash)}` });
         seen.set(hash, name);
-        if (v.status === 'fail')
-            continue;
         // A file in the evidence root is claimed by the record that lists its path; a copy elsewhere, by its bytes.
         const inRoot = under(cfg.evidence.root, path);
         const claims = records.filter((r) => r.files.some((f) => f.sha256 === hash && (inRoot === null || f.path === inRoot)));
+        if (!claims.length && inRoot !== null) {
+            const edited = records.filter((r) => r.files.some((f) => f.path === inRoot));
+            if (edited.length) {
+                findings.push({ level: 'fail', why: `${name}: changed after run ${edited.map((r) => r.run_id).join(', ')}` });
+                continue;
+            }
+        }
+        if (v.status === 'fail')
+            continue;
         if (!claims.length) {
             findings.push({ level: 'inconclusive', why: `${name}: not in any done-done run record, so it is not tied to a commit` });
             continue;
@@ -478,12 +485,20 @@ function writeReceipt(cfg, rec) {
     renameSync(`${path}.tmp`, path);
     return path;
 }
-// Verify a recorded receipt for `head`; read-only, so a missing or changed record is a failure, not a usage error.
+// Verify a recorded receipt for `headArg`, which may be a full sha or a ref (HEAD, a branch or a tag).
+// Read-only, so a missing or changed record is a failure, not a usage error.
 function verifyReceipt(repo, cfg, headArg) {
-    const short = headArg.slice(0, 12);
-    const path = join(receiptsDir(cfg), `${headArg}.json`);
+    let commit = headArg;
+    try {
+        commit = git(repo, 'rev-parse', '--verify', `${headArg}^{commit}`);
+    }
+    catch {
+        // Unresolvable: keep the argument so the lookup below fails with the current "no receipt" shape.
+    }
+    const short = commit.slice(0, 12);
+    const path = join(receiptsDir(cfg), `${commit}.json`);
     const fail = (reason) => {
-        emit({ command: 'receipt', result: 'fail', head: headArg, reason, help: ['Record a passing check for this head: done-done receipt --from <file|->'] });
+        emit({ command: 'receipt', result: 'fail', head: commit, reason, help: ['Record a passing check for this head: done-done receipt --from <file|->'] });
         return FAIL;
     };
     if (!existsSync(path))
@@ -499,11 +514,12 @@ function verifyReceipt(repo, cfg, headArg) {
         return fail(`receipt for ${short} is malformed`);
     if (!rec.files.every((f) => f && typeof f === 'object' && typeof f.path === 'string' && typeof f.sha256 === 'string'))
         return fail(`receipt for ${short} is malformed`);
-    if (rec.head !== headArg)
+    if (rec.head !== commit)
         return fail(`receipt records head ${String(rec.head).slice(0, 12)}, not ${short}`);
     const now = head(repo);
-    if (now.commit !== headArg)
+    if (now.commit !== commit)
         return fail(`HEAD is ${now.commit.slice(0, 12)}, not ${short}`);
+    const records = loadRecords(cfg);
     const bad = [];
     for (const f of rec.files) {
         let bytes;
@@ -514,12 +530,16 @@ function verifyReceipt(repo, cfg, headArg) {
             bad.push(`${f.path}: missing`);
             continue;
         }
-        if (sha256(bytes) !== f.sha256)
-            bad.push(`${f.path}: hash changed`);
+        if (sha256(bytes) !== f.sha256) {
+            // The receipt names a path a run recorded: the file was edited after its run.
+            const inRoot = f.path.startsWith(IN_EVIDENCE) ? f.path.slice(IN_EVIDENCE.length) : under(cfg.evidence.root, resolve(repo, f.path));
+            const edited = inRoot !== null ? records.filter((r) => r.files.some((rf) => rf.path === inRoot)) : [];
+            bad.push(edited.length ? `${f.path}: changed after run ${edited.map((r) => r.run_id).join(', ')} (hash changed)` : `${f.path}: hash changed`);
+        }
     }
     if (bad.length)
         return fail(`cited evidence no longer matches the receipt: ${bad.join('; ')}`);
-    emit({ command: 'receipt', result: 'pass', head: headArg, tree: rec.tree, claim: rec.claim, files: rec.files.length, at: rec.at, help: ['This receipt is valid for this head.'] });
+    emit({ command: 'receipt', result: 'pass', head: commit, tree: rec.tree, claim: rec.claim, files: rec.files.length, at: rec.at, help: ['This receipt is valid for this head.'] });
     return PASS;
 }
 async function cmdReceipt(argv) {
@@ -529,7 +549,7 @@ async function cmdReceipt(argv) {
     if (vi >= 0) {
         verifyHead = argv[vi + 1] ?? null;
         if (!verifyHead || verifyHead.startsWith('--'))
-            throw new UsageError('receipt --verify needs a head sha');
+            throw new UsageError('receipt --verify needs a head sha or ref');
         rest = [...argv.slice(0, vi), ...argv.slice(vi + 2)];
     }
     const repo = repoRoot();

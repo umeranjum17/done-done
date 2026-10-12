@@ -87,10 +87,20 @@ The skill is the recommended path, but it is not the only one.
 **1. Install**
 
 ```sh
+npm install -g --prefix ~/.local --allow-git=all github:umeranjum17/done-done-axi
+```
+
+`--prefix ~/.local` installs into your home folder, so it needs no `sudo`. `--allow-git=all` is needed on npm 12, which blocks GitHub installs by default (verified accepted on npm 10). This installs two names for the same CLI: `done-done-axi` and the short `done-done` used below. If `done-done --version` then says "command not found", add `~/.local/bin` to your `PATH`: `export PATH="$HOME/.local/bin:$PATH"`.
+
+To skip the install, run `npx -y --allow-git=all github:umeranjum17/done-done-axi` wherever this README says `done-done`.
+
+Once 0.1.0 is published, the registry line takes over as the install:
+
+```sh
 npm install -g --prefix ~/.local done-done-axi
 ```
 
-This installs two names for the same CLI: `done-done-axi` and the short `done-done` used below. `--prefix ~/.local` installs into your home folder, so it needs no `sudo`. To skip the install, run `npx -y done-done-axi` wherever this README says `done-done`. If `done-done --version` then says "command not found", add `~/.local/bin` to your `PATH`: `export PATH="$HOME/.local/bin:$PATH"`.
+<!-- TODO(dd-npm-name): when done-done-axi 0.1.0 is published, flip the primary back to the registry line above and make `npx -y done-done-axi` the skip-the-install path. -->
 
 **2. Set it up in your app's repo**
 

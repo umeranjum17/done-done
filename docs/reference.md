@@ -211,6 +211,21 @@ done-done history [--limit <n>]                                     # this check
 
 `abort` signals the runner, then its journey's process group, and marks the run `cancelled`; `status` shows a cancelled run as failed (exit 1), with the step that was running marked `cancelled`. It exits 0 when it cancelled the run. A run that had already ended, or whose runner pid cannot be confirmed as this run's, is left alone and exits 1.
 
+### Keep the verify skill true
+
+```sh
+done-done maintain        # --no-wait, --wait (the default), or --foreground (CI)
+```
+
+`maintain` checks the repo's verify skill against the source in a run of kind `maintain`, in the same store as `verify`, so `status`, `attach`, `logs`, `abort` and `history` work on it. It reads only: it never edits the skill, the product code or git, and it records HEAD and `git status --porcelain --untracked-files=all` before and after; if they differ, the run is `blocked` with a `repo-changed` finding. Its steps:
+
+- `locate`: the verify skill (`skill`, default `.agents/skills/verify-<app>`) must have a `SKILL.md`; with none, the run ends `blocked` and points at `done-done init`.
+- `hygiene` (plain code): every local markdown link in the skill must resolve (`dead-link`); `features/README.md` must exist (`index`), list each `features/*.md` file (`unlisted`) and list it only once (`duplicate`).
+- `source-wave`: one fresh reader per feature file, at the configured agent (`agent`, `agent_config`), with read-only tools (claude `--tools Read,Grep,Glob`; opencode with every tool but read, grep, glob and list denied), in the repo. Each reader explains the feature from source and returns its entry points, its drift (each statement the source contradicts, with the source file:line) and one live recipe. Readers run one after another; a run makes at most 30 agent calls, each with a 20 minute limit.
+- `reconcile`: plain code checks each `path:line` the skill cites (`citation`) and each file:line a reader cites; a reader's drift becomes a `drift` finding only when its citation exists, and unverified citations are listed in the step log. One tool-less call merges the recipes into as few app states as it can and names source files changed in the last 30 days (`git log`) that no feature covers; each one that is in that list becomes an `unmapped` finding.
+
+The result is `clean` (no findings, exit 0), `drift` (findings to fix by hand, exit 1), or `blocked` (no skill, no agent, a reader that did not answer, more feature files than the call cap, or a repo that changed; exit 3). `status` lists the findings (`--full` for all of them), each with an id, kind, file, line and what is wrong. Each agent call is recorded in `agents/<n>-<name>.json` in the run folder, without the prompt text; the readers' answers are in `logs/source-wave.log` and the merged recipes in `logs/reconcile.log`.
+
 ### Output
 
 Every command prints one machine-readable result on stdout. By default it is [TOON](https://github.com/toon-format/spec) in the AXI convention (the shape `no-mistakes axi status` uses): scalar `key: value` lines, tabular arrays, and a `help` list that names the exact next command. `--json` prints the same result as JSON. `--full` lists every evidence file or finding; without it, lists longer than five rows are truncated and the count of dropped rows is reported (`evidence_omitted`, `findings_omitted`, `history_omitted` or `log_omitted`). `doctor` always lists every check: its rows (eight checks, nine with --probe) never truncate.
@@ -227,7 +242,7 @@ Running `done-done` with no subcommand prints the repo's config state (`config: 
 | 1 | fail |
 | 2 | usage or config error |
 | 3 | inconclusive (could not be proven either way) |
-| 4 | the run is still running (`verify --no-wait`, `rerun --no-wait`, `status`) |
+| 4 | the run is still running (`verify --no-wait`, `maintain --no-wait`, `rerun --no-wait`, `status`) |
 
 `doctor` exits 2 when a required item (`git`, `config`, `evidence_root`, and `probe` with `--probe`) is missing.
 

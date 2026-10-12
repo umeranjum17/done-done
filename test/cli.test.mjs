@@ -2218,3 +2218,52 @@ test('attach streams a running run to its end', async () => {
   assert.match(err, /running/, 'events streamed to stderr');
   assert.equal(toon({ out }).result, 'pass');
 });
+
+test('maintain reports a dead link, a wrong file:line and drift from read-only readers, and changes nothing', () => {
+  const { repo, env, sh } = setup();
+  const answer = JSON.stringify({
+    summary: 'app.js exports the app', entry_points: [{ file: 'src/app.js', line: 1 }], recipe: 'import src/app.js',
+    drift: [{ claim: 'app is 2', why: 'it is 1', file: 'src/app.js', line: 1 }, { claim: 'made up', why: 'no such line', file: 'src/app.js', line: 50 }],
+    recipes: [{ state: 'fresh', features: ['home.md'], steps: ['open it'] }], missing: [{ file: 'src/app.js', why: 'new surface' }, { file: 'src/gone.js', why: 'not in the churn list' }],
+  });
+  const s = stubAgents(env, answer);
+  const dd = (...args) => doctorIn(repo, s.env, ...args);
+  const none = dd('maintain', '--foreground');
+  assert.equal(none.code, 3, none.out);
+  assert.deepEqual([toon(none).result, toon(none).help[0]], ['blocked', 'Create the verify skill: done-done init']);
+  const skill = join(repo, '.agents', 'skills', 'verify-notes');
+  mkdirSync(join(skill, 'features'), { recursive: true });
+  writeFileSync(join(skill, 'SKILL.md'), '# verify-notes\n\nThe map: [features](features/README.md). See https://example.com:443/x and localhost:3000.\n');
+  writeFileSync(join(skill, 'features', 'README.md'), '# features\n\n- [Home](home.md)\n- [Search](search.md)\n- [Home again](home.md#top)\n');
+  writeFileSync(join(skill, 'features', 'home.md'), '# Home\n\nSource: src/app.js:1, and the old src/app.js:40.\n');
+  writeFileSync(join(skill, 'features', 'extra.md'), '# Extra\n');
+  sh('add', '-A');
+  sh('commit', '-qm', 'skill');
+  const status = () => sh('status', '--porcelain', '--untracked-files=all').toString() + sh('rev-parse', 'HEAD');
+  const before = status();
+  const r = dd('maintain', '--foreground', '--full');
+  assert.equal(r.code, 1, r.out);
+  const m = toon(r);
+  assert.deepEqual([m.kind, m.result, m.git_status], ['maintain', 'drift', 'same']);
+  const at = (f) => `${f.kind} ${f.file.replace('.agents/skills/verify-notes/', '')}${f.line ? `:${f.line}` : ''}`;
+  assert.deepEqual(m.findings.map(at), [
+    'dead-link features/README.md:4', 'duplicate features/README.md:5', 'unlisted features/README.md',
+    'citation features/home.md:3', 'drift features/extra.md', 'drift features/home.md', 'unmapped src/app.js',
+  ], 'a reader citation that does not exist and a missing file outside the churn list are not findings');
+  assert.match(m.findings[3].what, /cites src\/app\.js:40, but src\/app\.js has 1 lines/);
+  assert.equal(status(), before, 'maintain changed nothing');
+  // One fresh read-only reader per feature file runs in the repo; the reconcile call has no tools and runs elsewhere.
+  const calls = s.calls();
+  assert.deepEqual(calls.map((c) => c.argv[c.argv.indexOf('--tools') + 1]), ['Read,Grep,Glob', 'Read,Grep,Glob', '']);
+  assert.deepEqual(calls.map((c) => c.cwd === repo), [true, true, false]);
+  assert.match(calls[0].stdin, /extra\.md/);
+  const run = join(env.DONE_DONE_HOME, 'runs', 'notes', m.run_id);
+  assert.deepEqual(readdirSync(join(run, 'agents')).sort(), ['1-reader-extra.json', '2-reader-home.json', '3-reconcile.json']);
+  assert.equal(toon(dd('history')).history[0].kind, 'maintain');
+  assert.match(toon(dd('logs', '--step', 'reconcile')).log.join('\n'), /src\/app\.js:50: src\/app\.js has 1 lines/);
+  // A reader that writes into the repo makes the run blocked.
+  writeFileSync(join(s.bin, 'claude'), `#!${process.execPath}\nrequire('node:fs').writeFileSync('stray.txt', '');\nprocess.stdout.write(JSON.stringify({ structured_output: ${answer} }));\n`, { mode: 0o755 });
+  const changed = toon(dd('maintain', '--foreground'));
+  assert.deepEqual([changed.result, changed.git_status], ['blocked', 'changed']);
+  assert.match(changed.reason, /^repo-changed: /);
+});

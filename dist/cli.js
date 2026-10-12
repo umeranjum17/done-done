@@ -846,14 +846,14 @@ async function runVerify(dir) {
         const command = journey?.command;
         const timeout = journey?.timeout ?? '30m';
         const limit = parseDuration(timeout);
+        if (!command)
+            throw new Error(`journey ${run.journey} is not in .done-done.yaml`);
+        if (limit === null)
+            throw new Error(`journeys.${run.journey}.timeout must be a duration such as 30m or 90s, not ${timeout}`);
         if (done('resolve'))
             logEvent(dir, { step: 'resolve', status: 'completed', reused: true });
         else {
             begin('resolve');
-            if (!command)
-                throw new Error(`journey ${run.journey} is not in .done-done.yaml`);
-            if (limit === null)
-                throw new Error(`journeys.${run.journey}.timeout must be a duration such as 30m or 90s, not ${timeout}`);
             set(step, 'completed');
         }
         let rec;
@@ -930,6 +930,7 @@ const alive = (pid) => {
     }
 };
 const runnerGone = (run) => (run.runner ? !alive(run.runner.pid) : Date.now() - Date.parse(run.created) > STALE_MS);
+const shownStatus = (run) => ((run.status === 'pending' || run.status === 'running') && runnerGone(run) ? 'failed' : run.status);
 // One run as status shows it. A run still marked running whose runner is gone is shown as failed at its step.
 // `gone`: the caller saw its runner child exit, which also covers a runner that died before it wrote its pid.
 function showRun(dir, cfg, command, gone = false) {
@@ -1039,12 +1040,13 @@ async function cmdAttach(argv) {
     let shown = 0;
     for (;;) {
         const run = loadRun(dir);
+        const gone = runnerGone(run);
         const lines = existsSync(join(dir, 'events.jsonl')) ? readFileSync(join(dir, 'events.jsonl'), 'utf8').split('\n').filter(Boolean) : [];
         for (; shown < lines.length; shown++)
             process.stderr.write(`${lines[shown]}\n`);
         if (run.status === 'completed' || run.status === 'failed' || run.status === 'cancelled')
             break;
-        if (runnerGone(run))
+        if (gone)
             break;
         await new Promise((r) => setTimeout(r, 200));
     }
@@ -1106,8 +1108,9 @@ function cmdAbort(argv) {
     const id = pickId(runsRoot(cfg.app), repo, 'abort', cfg, values.run);
     const dir = join(runsRoot(cfg.app), id);
     const run = loadRun(dir);
-    if (run.status !== 'pending' && run.status !== 'running') {
-        emit({ command: 'abort', run_id: id, status: run.status, reason: `run ${id} is already ${run.status}`, help: [`List past runs: done-done history`, `Start again: done-done rerun --run ${id}`] });
+    const status = shownStatus(run);
+    if (status !== 'pending' && status !== 'running') {
+        emit({ command: 'abort', run_id: id, status, reason: `run ${id} is already ${status}`, help: [`List past runs: done-done history`, `Start again: done-done rerun --run ${id}`] });
         return FAIL;
     }
     if (run.runner?.pid)
@@ -1133,7 +1136,7 @@ function cmdHistory(argv) {
     const cfg = loadConfig(repo);
     const root = runsRoot(cfg.app);
     const mine = existsSync(root) ? readdirSync(root).filter((x) => existsSync(join(root, x, 'run.json'))).map((x) => loadRun(join(root, x))).filter((r) => r.repo === repo).sort((a, b) => b.created.localeCompare(a.created)) : [];
-    const rows = cap(mine.slice(0, n).map((r) => ({ run_id: r.run_id, kind: r.kind, status: (r.status === 'pending' || r.status === 'running') && runnerGone(r) ? 'failed' : r.status, ...(r.result && { result: r.result }), claim: r.claim, journey: r.journey, created: r.created })));
+    const rows = cap(mine.slice(0, n).map((r) => ({ run_id: r.run_id, kind: r.kind, status: shownStatus(r), ...(r.result && { result: r.result }), claim: r.claim, journey: r.journey, created: r.created })));
     emit({ command: 'history', runs: rows.items.length, history: rows.items, ...(rows.omitted && { history_omitted: rows.omitted }), help: rows.items.length ? [`Read the newest run: done-done status --run ${rows.items[0].run_id}`] : ['Start one: done-done verify --outcome "<what a user can now do>"'] });
     return PASS;
 }

@@ -1385,6 +1385,9 @@ test('a runner killed mid-step shows as failed at that step, and status stops th
   const s = toon(r);
   assert.equal(s.status, 'failed');
   assert.equal(toon(dd('history')).history.find((x) => x.run_id === run.run_id).status, 'failed', 'history agrees with status');
+  const a = dd('abort', '--run', run.run_id);
+  assert.equal(a.code, 1, a.out);
+  assert.equal(toon(a).status, 'failed', 'abort does not cancel a run whose runner is gone');
   assert.equal(s.steps[1].status, 'failed');
   assert.match(s.reason, new RegExp(`^the runner died at step drive \\(pid ${run.runner.pid},`));
   assert.equal(JSON.parse(readFileSync(join(runs, run.run_id, 'run.json'), 'utf8')).status, 'running', 'status only reads the store');

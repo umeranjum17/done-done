@@ -855,6 +855,7 @@ test('init --agent opencode adds a session plugin that shows the bare state, mer
   const prevHome = process.env.DONE_DONE_HOME;
   process.env.PATH = `${bin}:${prevPath}`;
   process.env.DONE_DONE_HOME = env.DONE_DONE_HOME;
+  const prevTmp = process.env.TMPDIR;
   try {
     const { DoneDonePlugin } = await import(pathToFileURL(plugin).href);
     const id = () => `ses_${randomUUID()}`;
@@ -887,8 +888,17 @@ test('init --agent opencode adds a session plugin that shows the bare state, mer
     const silent = [];
     await hooks['chat.message']({ sessionID: ses3 }, { message: { id: 'msg_4' }, parts: silent });
     assert.deepEqual(silent, [], 'without done-done on PATH the hook appends nothing and never throws');
+    process.env.PATH = `${bin}:${prevPath}`;
+    const notADir = join(dir, 'not-a-dir');
+    writeFileSync(notADir, '');
+    process.env.TMPDIR = notADir;
+    const unrecorded = [];
+    await hooks['chat.message']({ sessionID: id() }, { message: { id: 'msg_7' }, parts: unrecorded });
+    assert.deepEqual(unrecorded, [], 'when the session marker cannot be written the hook appends nothing, so the state is never repeated');
   } finally {
     process.env.PATH = prevPath;
+    if (prevTmp === undefined) delete process.env.TMPDIR;
+    else process.env.TMPDIR = prevTmp;
     if (prevHome === undefined) delete process.env.DONE_DONE_HOME;
     else process.env.DONE_DONE_HOME = prevHome;
   }

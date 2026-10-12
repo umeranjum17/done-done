@@ -789,8 +789,7 @@ const firstMessage = (sessionID) => {
   const dir = join(tmpdir(), "done-done-opencode");
   const marker = join(dir, sessionID);
   if (existsSync(marker)) return false;
-  try { mkdirSync(dir, { recursive: true }); writeFileSync(marker, ""); } catch {}
-  return true;
+  try { mkdirSync(dir, { recursive: true }); writeFileSync(marker, ""); return true; } catch { return false; }
 };
 
 const run = (cwd) => new Promise((resolve) => {

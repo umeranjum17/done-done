@@ -4,28 +4,45 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { AGENTS, CHEAP_MODELS } from './config.js';
 import { onPath } from './judge.js';
-// The JSON object in an agent's free text: the last top-level '{'..'}' span that parses, since the answer comes after
-// narration; braces in narration are skipped, and a span nested inside an accepted object is not a candidate.
-// ponytail: tries every brace pair (quadratic in the braces), fine for one answer's text.
-function jsonIn(text) {
-    const ends = [...text.matchAll(/\}/g)].map((m) => m.index + 1).reverse();
-    let answer;
-    for (let start = text.indexOf('{'); start >= 0; start = text.indexOf('{', start + 1)) {
-        if (answer && start < answer.end)
-            continue;
-        for (const end of ends) {
-            if (end <= start)
-                break;
-            try {
-                answer = { end, value: JSON.parse(text.slice(start, end)) };
-                break;
+// The answer object in an agent's free text, in one pass: the first top-level '{'..'}' span that parses to an object
+// with every required key, skipping braces and quotes in narration. With no such span, the last span that parsed is
+// returned, so the caller reports the missing keys.
+export function extractJsonObject(text, required = []) {
+    const spans = [];
+    let depth = 0;
+    let start = 0;
+    let inString = false;
+    for (let i = 0; i < text.length; i++) {
+        const ch = text[i];
+        if (depth === 0) {
+            if (ch === '{') {
+                depth = 1;
+                start = i;
             }
-            catch { /* not this span */ }
         }
+        else if (inString) {
+            if (ch === '\\')
+                i++;
+            else if (ch === '"')
+                inString = false;
+        }
+        else if (ch === '"')
+            inString = true;
+        else if (ch === '{')
+            depth++;
+        else if (ch === '}' && --depth === 0)
+            spans.push(text.slice(start, i + 1));
     }
+    const parsed = spans.flatMap((span) => { try {
+        return [JSON.parse(span)];
+    }
+    catch {
+        return [];
+    } });
+    const answer = parsed.find((v) => required.every((k) => k in v)) ?? parsed[parsed.length - 1];
     if (!answer)
         throw new Error(`no JSON object in the answer: ${text.slice(0, 200)}`);
-    return answer.value;
+    return answer;
 }
 // acp:<target> runs any Agent Client Protocol agent through the user's acpx bridge (acpx's own registry names
 // the targets): the prompt and the schema on stdin (exec --file -), and the answer is the JSON object in the agent's
@@ -34,7 +51,7 @@ function jsonIn(text) {
 const ACP = {
     argv: (c, dir) => ['--cwd', c.tools === 'none' ? dir : c.cwd, '--format', 'json', '--json-strict', '--deny-all',
         '--non-interactive-permissions', 'deny', ...(c.model ? ['--model', c.model] : []), c.agent.slice('acp:'.length), 'exec', '--file', '-'],
-    answer: (out) => {
+    answer: (out, c) => {
         const events = out.split('\n').filter((l) => l.startsWith('{')).map((l) => JSON.parse(l));
         const text = events.filter((e) => e.method === 'session/update' && e.params?.update?.sessionUpdate === 'agent_message_chunk')
             .map((e) => e.params.update.content?.text ?? '').join('');
@@ -42,7 +59,7 @@ const ACP = {
         const error = events.find((e) => e.error)?.error;
         if (!text && error)
             throw new Error(String(error.message ?? JSON.stringify(error)).slice(0, 500));
-        return jsonIn(text);
+        return extractJsonObject(text, c.schema.required);
     },
 };
 export const ACPX_INSTALL = 'Install the acpx ACP bridge (npm install -g acpx, https://github.com/openclaw/acpx), then re-run: done-done doctor';
@@ -64,13 +81,13 @@ const ADAPTERS = {
     opencode: {
         file: true,
         argv: (c, dir) => ['run', 'Follow the attached instructions.', '--format', 'json', '-m', c.model, '-f', join(dir, 'prompt.md')],
-        answer: (out) => {
+        answer: (out, c) => {
             const events = out.split('\n').filter((l) => l.startsWith('{')).map((l) => JSON.parse(l));
             const error = events.find((e) => e.type === 'error');
             if (error)
                 throw new Error(JSON.stringify(error.error ?? error).slice(0, 500));
             const text = events.filter((e) => e.type === 'text').map((e) => e.part.text).join('');
-            return jsonIn(text);
+            return extractJsonObject(text, c.schema.required);
         },
         env: (c) => (c.tools === 'edit' ? {} : { OPENCODE_PERMISSION: JSON.stringify(c.tools === 'read' ? { '*': 'deny', read: 'allow', grep: 'allow', glob: 'allow', list: 'allow' } : { '*': 'deny' }) }),
     },
@@ -137,7 +154,7 @@ export function askAgent(c) {
             // An agent that exits non-zero may still say why in its own output (claude: a usage limit, a bad model).
             let why = String(res.stderr || res.stdout).trim().slice(-500);
             try {
-                adapter.answer(String(res.stdout));
+                adapter.answer(String(res.stdout), c);
             }
             catch (e) {
                 if (!(e instanceof SyntaxError))
@@ -145,7 +162,7 @@ export function askAgent(c) {
             }
             throw new Error(`${c.agent} exited ${res.status}: ${why}`);
         }
-        const answer = adapter.answer(String(res.stdout));
+        const answer = adapter.answer(String(res.stdout), c);
         if (!answer || typeof answer !== 'object' || Array.isArray(answer))
             throw new Error(`the answer is not a JSON object: ${JSON.stringify(answer)}`);
         const missing = (c.schema.required ?? []).filter((k) => !(k in answer));

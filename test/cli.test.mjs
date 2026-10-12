@@ -2078,7 +2078,7 @@ process.exitCode = ${exit};
     return { ...r, by: (n) => toon(r).checks.find((c) => c.check === n) };
   };
   // The answer arrives in message chunks after narration with braces, around a refused side request, fenced as models often do.
-  acpx(0, [{ jsonrpc: '2.0', id: 0, result: {} }, chunk('I will check {config} and answer {}.\n'), chunk('Notes 🚀 {"note": "a longer narrated object than the answer", "a": 1, "b": 2, "c": 3}. '), chunk('```json\n{"ok":'),{ jsonrpc: '2.0', id: 3, error: { code: -32601, message: 'Method not found' } }, chunk('true}\n```')]);
+  acpx(0, [{ jsonrpc: '2.0', id: 0, result: {} }, chunk('I will check {config} and answer {}.\n'), chunk('Notes 🚀 {"note": "a longer narrated object than the answer", "a": 1, "b": 2, "c": 3}. '), chunk('```json\n{"ok":'),{ jsonrpc: '2.0', id: 3, error: { code: -32601, message: 'Method not found' } }, chunk('true}\n```'), chunk(' For example {"note": "a narrated object without the required key"}.')]);
   const ok = doctor('agent: acp:gemini\n', '--probe');
   assert.equal(ok.code, 0, ok.out);
   assert.match(ok.by('agent').detail, /^acp:gemini \(model none; from config\) at .*acpx$/);

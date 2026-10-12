@@ -1052,6 +1052,28 @@ test('init does not read a README that is a symlink out of the repo', () => {
   assert.deepEqual(featureFiles(join(repo, '.agents', 'skills', 'verify-notes')), ['README.md', 'add.md', 'list.md'], 'the symlink target is not scanned');
 });
 
+test('init keeps a command in the feature map and says how many features it left out', () => {
+  const { repo, dd } = shapeRepo('cli', 'notes');
+  writeFileSync(join(repo, 'routes.js'), ['1', '2', '3', '4', '5', '6'].map((n) => `app.get('/r${n}');`).join('\n') + '\n');
+  const r = dd('init');
+  assert.equal(r.code, 0, r.out);
+  const dir = join(repo, '.agents', 'skills', 'verify-notes');
+  assert.deepEqual(featureFiles(dir), ['README.md', 'add.md', 'get-r1.md', 'get-r2.md', 'get-r3.md', 'get-r4.md']);
+  assert.match(readFileSync(join(dir, 'features', 'README.md'), 'utf8'), /3 more found and not listed/, 'six routes and two commands show five, and say three were left out');
+});
+
+test('init reads server routes only, not client calls or component files', () => {
+  const { repo, dd } = shapeRepo('cli', 'notes');
+  mkdirSync(join(repo, 'src', 'components'), { recursive: true });
+  writeFileSync(join(repo, 'src', 'components', 'Cart.js'), "app.get('/from-component');\n");
+  writeFileSync(join(repo, 'src', 'Page.jsx'), "app.get('/from-jsx');\n");
+  writeFileSync(join(repo, 'client.js'), "axios.get('/api/cart');\n");
+  writeFileSync(join(repo, 'server.js'), "app.get('/server');\n");
+  const r = dd('init');
+  assert.equal(r.code, 0, r.out);
+  assert.deepEqual(featureFiles(join(repo, '.agents', 'skills', 'verify-notes')), ['README.md', 'add.md', 'get-server.md', 'list.md']);
+});
+
 test('init takes the readiness port only from the dev script', () => {
   const { repo, dd } = shapeRepo('web', 'shop');
   writeFileSync(join(repo, 'package.json'), JSON.stringify({ name: 'shop', scripts: { dev: 'next dev' }, dependencies: { react: '^19.0.0' } }));

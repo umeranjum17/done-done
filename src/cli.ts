@@ -731,12 +731,13 @@ type Detected = {
   observe: string;
   isolate: string;
   features: { slug: string; title: string; reach: string }[];
+  omitted: number;
 };
 
 const slug = (t: string) => t.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40) || 'feature';
 
 const SKIP_DIRS = new Set(['node_modules', 'dist', 'build', 'out', 'vendor', 'coverage', 'target', 'venv', '__pycache__', 'bower_components']);
-const SOURCE_FILE = /\.(m?[jt]sx?|py|go|rb|rs|php)$/;
+const SOURCE_FILE = /\.(m?[jt]s|py|go|rb|rs|php)$/;
 
 // Source files under `dir`, skipping hidden dirs (.git, .venv, .next, ...) and dependency and build output. The cap
 // applies while walking, so a large vendored tree never fills the sample before the app's own files are reached.
@@ -746,7 +747,7 @@ function sourceFiles(dir: string, max: number, out: string[] = []): string[] {
       if (out.length >= max) break;
       const p = join(dir, e.name);
       if (e.isDirectory()) {
-        if (!e.name.startsWith('.') && !SKIP_DIRS.has(e.name)) sourceFiles(p, max, out);
+        if (!e.name.startsWith('.') && !SKIP_DIRS.has(e.name) && !(e.name === 'components' && dir.endsWith(`${sep}src`))) sourceFiles(p, max, out);
       } else if (e.isFile() && SOURCE_FILE.test(e.name)) out.push(p);
     }
   } catch {
@@ -773,14 +774,12 @@ function detectApp(repo: string): Detected {
   const make = headText(join(repo, 'Makefile'), 4000);
   let text = `${scripts.dev ?? ''}\n${scripts.start ?? ''}\n${readme}\n${make}`;
   for (const f of sourceFiles(repo, 40)) text += `\n${headText(f, 6000)}`;
-  const routes = [...text.matchAll(/\.(get|post|put|patch|delete|del|use)\(\s*['"`](\/[^'"`\s]*)/g)]
-    .map((m) => `${m[1].toUpperCase()} ${m[2]}`)
-    .filter((r, i, a) => a.indexOf(r) === i)
-    .slice(0, 5);
+  const routes = [...text.matchAll(/\b(app|router|server|api|fastify|routes|r)\.(get|post|put|patch|delete|del|use)\(\s*['"`](\/[^'"`\s]*)/g)]
+    .map((m) => `${m[2].toUpperCase()} ${m[3]}`)
+    .filter((r, i, a) => a.indexOf(r) === i);
   const commands = [...text.matchAll(/\.command\(\s*['"`]([^'"`\s\]]+)/g)]
     .map((m) => m[1])
-    .filter((c, i, a) => a.indexOf(c) === i)
-    .slice(0, 5);
+    .filter((c, i, a) => a.indexOf(c) === i);
   const web = has('react', 'next', 'vue', 'nuxt', 'svelte', 'solid', 'vite', 'webpack', 'playwright', '@playwright/test', 'cypress', 'puppeteer');
   const cliish = bins.length > 0 || commands.length > 0 || has('commander', 'yargs', 'oclif', 'cac');
   const api = routes.length > 0 || has('express', 'fastify', 'koa', 'hono');
@@ -812,21 +811,26 @@ function detectApp(repo: string): Detected {
   const isolate = web || port
     ? 'TODO(live drive): confirm two instances run side by side (ports, data dirs, profiles); until then drive one instance at a time'
     : 'each run uses its own invocation; never drive a shared session the user owns';
-  const features: Detected['features'] = [];
+  const features: (Detected['features'][number] & { command: boolean })[] = [];
   for (const f of [
-    ...routes.map((r) => ({ base: slug(r), title: r, reach: `the ${r} route` })),
-    ...commands.map((c) => ({ base: slug(c), title: `\`${c}\` command`, reach: `the CLI run with \`${c}\`` })),
+    ...routes.map((r) => ({ base: slug(r), title: r, reach: `the ${r} route`, command: false })),
+    ...commands.map((c) => ({ base: slug(c), title: `\`${c}\` command`, reach: `the CLI run with \`${c}\``, command: true })),
   ]) {
     let s = f.base;
     for (let n = 2; features.some((g) => g.slug === s); n++) s = `${f.base}-${n}`;
-    features.push({ slug: s, title: f.title, reach: f.reach });
+    features.push({ slug: s, title: f.title, reach: f.reach, command: f.command });
   }
-  return { surface, launch, ready, harness, observe, isolate, features: features.slice(0, 5) };
+  const commandsFound = features.filter((f) => f.command);
+  const shown = [...features.filter((f) => !f.command).slice(0, commandsFound.length ? 4 : 5), ...commandsFound].slice(0, 5);
+  return { surface, launch, ready, harness, observe, isolate, features: shown, omitted: features.length - shown.length };
 }
 
 function verifySkillMd(app: string, d: Detected): string {
   const name = `verify-${app}`;
-  const found = d.features.length ? d.features.map((f) => `- ${f.title}: ${f.reach}`) : ['- TODO(live drive): no routes or commands found; map the first feature on the first live drive'];
+  const found = [
+    ...(d.features.length ? d.features.map((f) => `- ${f.title}: ${f.reach}`) : ['- TODO(live drive): no routes or commands found; map the first feature on the first live drive']),
+    ...(d.omitted ? [`- ${d.omitted} more found and not listed; add them by hand or run maintain later.`] : []),
+  ];
   return `---
 name: ${name}
 description: Drive the ${app} ${d.surface} the way a user does and capture proof it works. Use when proving a ${app} change, capturing evidence, or keeping the feature map honest.
@@ -870,7 +874,8 @@ function verifyFeaturesMd(app: string, d: Detected): string {
   const index = d.features.length
     ? d.features.map((f) => `- [${f.title}](${f.slug}.md): ${f.reach}`).join('\n')
     : 'TODO(live drive): no features found in source; map the first one here.';
-  return `# ${app} features\n\nThe repo's maintained verification map; a proof that drives one entry point is incomplete when this lists others.\n\n${index}\n`;
+  const more = d.omitted ? `\n\n${d.omitted} more found and not listed; add them by hand or run maintain later.` : '';
+  return `# ${app} features\n\nThe repo's maintained verification map; a proof that drives one entry point is incomplete when this lists others.\n\n${index}${more}\n`;
 }
 
 // The first existing component on the way from the repo to `p` that is a symlink, if any: a cloned repo's symlink

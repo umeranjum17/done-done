@@ -54,7 +54,11 @@ const ADAPTERS: Record<string, Adapter> = {
       const events = out.split('\n').filter((l) => l.startsWith('{')).map((l) => JSON.parse(l));
       const error = events.find((e) => e.type === 'error');
       if (error) throw new ProviderError(JSON.stringify(error.error ?? error).slice(0, 500));
-      const text = events.filter((e) => e.type === 'text').map((e) => e.part.text).join('');
+      let text = '';
+      for (const e of events) {
+        if (e.type === 'step_start') text = '';
+        if (e.type === 'text') text += e.part.text;
+      }
       return extractJsonObject(text);
     },
     env: (c): Record<string, string> => (c.tools === 'edit' ? {} : { OPENCODE_PERMISSION: JSON.stringify(c.tools === 'read' ? { '*': 'deny', read: 'allow', grep: 'allow', glob: 'allow', list: 'allow' } : { '*': 'deny' }) }),
@@ -77,7 +81,7 @@ const ADAPTERS: Record<string, Adapter> = {
           continue;
         }
         if (e.type === 'error') failure = JSON.stringify(e.error ?? e).slice(0, 500);
-        if (e.type === 'message_end' && e.message?.role === 'assistant') text += (e.message.content ?? []).filter((p: any) => p?.type === 'text').map((p: any) => p.text).join('');
+        if (e.type === 'message_end' && e.message?.role === 'assistant') text = (e.message.content ?? []).filter((p: any) => p?.type === 'text').map((p: any) => p.text).join('');
       }
       if (!text && failure) throw new ProviderError(failure);
       return extractJsonObject(text);

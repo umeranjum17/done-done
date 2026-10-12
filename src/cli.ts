@@ -120,6 +120,8 @@ function cap<T>(items: T[]): { items: T[]; omitted: number } {
   return FULL || items.length <= COMPACT_LIST ? { items, omitted: 0 } : { items: items.slice(0, COMPACT_LIST), omitted: items.length - COMPACT_LIST };
 }
 
+const commandText = (argv: string[]) => (argv.length === 1 ? argv[0] : argv.map(quote).join(' '));
+
 // A hint that names the exact command that moves the work forward, naming the journey when there is one.
 function captureHint(cfg: Config): string {
   const names = Object.keys(cfg.journeys);
@@ -251,7 +253,7 @@ function closeRun(repo: string, cfg: Config, rec: RunRecord): number {
   // A journey run expands ${RUN_ID} to the run id, so compare with the placeholder restored.
   if (rec.command) {
     const template = rec.command.replaceAll(rec.run_id, '${RUN_ID}');
-    const recorded = Object.values(cfg.journeys).some((j) => j.command === rec.command || j.command === template);
+    const recorded = Object.values(cfg.journeys).some((j) => j.command === template);
     if (!recorded) (result.help as string[]).push(`this command's recipe is not in the repo (.done-done.yaml journeys); record it with: done-done init --journey <name> -- ${quote(template)}`);
   }
   emit(result);
@@ -276,7 +278,7 @@ function cmdRun(argv: string[]): number {
   }
   const journey = positionals[0] ?? null;
   if (positionals.length > 1) throw new UsageError('run takes at most one journey name');
-  let command = dash < 0 ? null : argv.slice(dash + 1).join(' ');
+  let command = dash < 0 ? null : commandText(argv.slice(dash + 1));
   if (journey && !command) {
     const j = cfg.journeys[journey];
     if (!j) throw new UsageError(`unknown journey ${journey}; .done-done.yaml defines: ${Object.keys(cfg.journeys).join(', ') || 'none'}`);
@@ -782,7 +784,7 @@ function cmdInit(argv: string[]): number {
   if (journey !== null) {
     // Record the capture recipe in the repo so any checkout can re-run the proof.
     // The command is stored verbatim; ${RUN_ID} in it becomes the run id, like a run -- command.
-    const command = parts.length === 1 ? parts[0] : parts.map(quote).join(' ');
+    const command = commandText(parts);
     const doc = existed ? parseDocument(readFileSync(file, 'utf8')) : new Document({ app: cfg.app });
     const top = (doc.toJS() ?? {}) as Record<string, any>;
     if (typeof top !== 'object' || Array.isArray(top)) throw new UsageError(`${file}: top level must be a mapping`);

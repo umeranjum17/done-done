@@ -779,6 +779,9 @@ test('init --journey stores an argv with spaces so the run gets the same argumen
   assert.equal(run.code, 0, run.out);
   const [file] = toon(run).evidence;
   assert.deepEqual(JSON.parse(readFileSync(file, 'utf8')), ['--grep', 'login flow']);
+  const adhoc = dd('run', '--', 'node', 'argv.mjs', '--grep', 'login flow');
+  assert.equal(adhoc.code, 0, adhoc.out);
+  assert.ok(!toon(adhoc).help.join('\n').includes('not in the repo'), 'the same command run ad hoc matches the recorded recipe');
 });
 
 test('init with an empty --journey name is a usage error, not a plain init', () => {

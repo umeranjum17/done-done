@@ -2013,6 +2013,23 @@ test('a text-only judged receipt needs no judge, so no installed agent does not 
   assert.deepEqual([toon(v).result, toon(v).schema, toon(v).judge], ['pass', 1, undefined]);
 });
 
+test('verify --judge on text-only evidence leaves the judge step skipped and writes no judge log', () => {
+  const t = setup(`app: notes
+evidence:
+  root: .proof
+judge:
+  enabled: true
+journeys:
+  shots:
+    command: node -e "require('fs').writeFileSync(process.env.DONE_DONE_EVIDENCE_ROOT + '/session.log', 'saved 3 notes')"
+`);
+  const r = t.dd('verify', 'shots', '--outcome', 'three notes are saved', '--foreground');
+  const runDir = join(t.env.DONE_DONE_HOME, 'runs', 'notes', toon(r).run_id);
+  const run = JSON.parse(readFileSync(join(runDir, 'run.json'), 'utf8'));
+  assert.equal(run.steps.find((s) => s.name === 'judge').status, 'skipped', 'no capture needed the judge');
+  assert.equal(existsSync(join(runDir, 'logs', 'judge.log')), false, 'a judge that judged nothing writes no log');
+});
+
 // Stub agent CLIs that log how they were started (argv, stdin, cwd) and answer like the real ones:
 // claude -p prints its JSON result with structured_output; opencode run reads the attached prompt file and
 // prints JSON events (after a wrapper's banner line) whose text part holds the answer, fenced as models often do.

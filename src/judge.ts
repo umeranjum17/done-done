@@ -144,6 +144,8 @@ function prepare(c: Capture): { mime: string; bytes: Buffer } | string {
   return small ? { mime: 'image/png', bytes: small } : `${c.media.type} is ${c.media.w}x${c.media.h} and cannot be downscaled (only 8-bit PNGs that are not extremely long are), so capture a PNG or an image at most ${MAX_SIDE}px on its long side`;
 }
 
+export const judgeable = (c: Capture) => c.media.type === 'png' || c.media.type === 'jpeg';
+
 // Verdicts are cached in the run store, per app, so a re-run or a later run of the same capture and claim asks no model.
 // The answerer's agent call leaves a record in `records` (judge-<stamp>-<n>.agent.json), never the prompt.
 export async function judge(cfg: Config, choose: () => JudgeChoice, outcome: string, captures: Capture[], records: string): Promise<{ judged: Judged[]; notJudged: string[]; choice?: JudgeChoice }> {
@@ -156,7 +158,7 @@ export async function judge(cfg: Config, choose: () => JudgeChoice, outcome: str
   let calls = 0;
   let call = ''; // this capture's record path, without .json
   for (const c of captures) {
-    if (c.media.type !== 'png' && c.media.type !== 'jpeg') {
+    if (!judgeable(c)) {
       notJudged.push(c.name);
       continue;
     }

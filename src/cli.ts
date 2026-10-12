@@ -10,7 +10,7 @@ import { encode } from '@toon-format/toon';
 import { Document, parseDocument } from 'yaml';
 import { askAgent, JUDGES, selectAgent, selectJudge, supported, type AgentAnswer, type JudgeChoice } from './agents.js';
 import { AGENTS, type Config, home, loadConfig, parseDuration, UsageError } from './config.js';
-import { backend, type Capture, judge, type Judged, onPath } from './judge.js';
+import { backend, type Capture, judge, judgeable, type Judged, onPath } from './judge.js';
 import { checkMedia } from './media.js';
 
 const PASS = 0, FAIL = 1, USAGE = 2, INCONCLUSIVE = 3, WAITING = 4;
@@ -561,7 +561,7 @@ async function runCheck(argv: string[], run?: { dir: string; judging: (code: num
     // A judge pass never overrides a failed deterministic check: on a fail, no capture is judged.
     if (findings.some((f) => f.level === 'fail')) judged = { skipped: 'the check already failed, so no capture was judged' };
     else {
-      run?.judging(findings.length ? INCONCLUSIVE : PASS, [...findings]);
+      if (captures.some(judgeable)) run?.judging(findings.length ? INCONCLUSIVE : PASS, [...findings]);
       const j = await judge(cfg, () => selectJudge(cfg, selectAgent(cfg)), claim.outcome, captures, run ? join(run.dir, 'agents') : join(home(), 'agents'));
       // The judge's next step leads the help when its verdict decides the result.
       if (j.judged.some((r) => r.verdict === 'fail')) judgeLevel = 'fail';

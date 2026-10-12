@@ -1391,7 +1391,8 @@ test('a runner killed mid-step shows as failed at that step, and status stops th
   assert.equal(s.steps[1].status, 'failed');
   assert.match(s.reason, new RegExp(`^the runner died at step drive \\(pid ${run.runner.pid},`));
   assert.equal(JSON.parse(readFileSync(join(runs, run.run_id, 'run.json'), 'utf8')).status, 'running', 'status only reads the store');
-  assert.match(s.help[1], /^Fix the cause, commit, then start a new run: done-done verify slow --outcome 'home and settings render'$/);
+  assert.equal(s.help[1], `Fix the cause, commit, then run again from the failed step: done-done rerun --run ${run.run_id}`);
+  assert.equal(s.help[2], "Or start a new run: done-done verify slow --outcome 'home and settings render'");
 });
 
 test('a live runner with an old heartbeat is not failed, and its journey is not killed', async () => {
@@ -2243,7 +2244,11 @@ const { appendFileSync, readFileSync } = require('node:fs');
 const argv = process.argv.slice(2);
 const stdin = readFileSync(0, 'utf8');
 appendFileSync(${JSON.stringify(log)}, JSON.stringify({ agent: 'gemini', argv, stdin, cwd: process.cwd() }) + '\\n');
-if (${JSON.stringify(mode)} === 'auth') { process.stderr.write('Opening authentication page in your browser. Do you want to continue? [Y/n]: '); process.exit(1); }
+// A signed-out gemini (seen 13 Oct): the stack of its auth error, a warning, then the one useful line in red.
+if (${JSON.stringify(mode)} === 'auth') {
+  process.stderr.write('Error authenticating: FatalCancellationError: Authentication cancelled by user.\\n    at initOauthClient (file:///gemini/bundle/chunk.js:1:1)\\n  exitCode: 130\\n}\\nSkill conflict detected: a skill overrides another\\n\\u001b[31mAuthentication cancelled by user.\\u001b[0m\\n');
+  process.exit(130);
+}
 process.stdout.write(JSON.stringify({ response: ${JSON.stringify(fenced)}, stats: {} }));
 `, { mode: 0o755 });
   const calls = () => (existsSync(log) ? readFileSync(log, 'utf8').trim().split('\n').map((l) => JSON.parse(l)) : []);
@@ -2314,7 +2319,9 @@ test('doctor --probe asks gemini with the prompt on stdin, and reports a signed-
   assert.equal(failed.code, 2, failed.out);
   const probe = toon(failed).checks.find((x) => x.check === 'probe');
   assert.equal(probe.status, 'missing');
-  assert.match(probe.detail, /gemini did not answer: gemini exited 1/);
+  const record = probe.detail.match(/; record (\S+)$/)[1];
+  assert.equal(probe.detail, `gemini did not answer: gemini exited 130: Authentication cancelled by user.; record ${record}`, 'one clean line: no stack, no colour codes');
+  assert.match(JSON.parse(readFileSync(record, 'utf8')).stderr, /at initOauthClient[\s\S]*\u001b\[31mAuthentication cancelled/, 'the call record keeps the raw stderr');
   assert.match(probe.fix, /Check that gemini is signed in and can use model flash-lite/);
 });
 

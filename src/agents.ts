@@ -2,6 +2,7 @@ import { spawnSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
+import { stripVTControlCharacters } from 'node:util';
 import { AGENTS, CHEAP_MODELS, type Config } from './config.js';
 import { onPath } from './judge.js';
 
@@ -25,7 +26,18 @@ export type AgentAnswer = { ok: boolean; answer?: Record<string, unknown>; error
 // argv never carries the prompt: it goes on stdin, or (file: true) into a 0600 prompt file the argv points at.
 // done-done parses the answer, validates it against the schema, and asks a tool-less call again, at most ASK_ATTEMPTS calls.
 const ASK_ATTEMPTS = 3;
-class ProviderError extends Error {}
+// What a user sees of an agent's error: no colour codes, only the last line that says something (not a
+// stack frame, an indented field or a lone brace), at most 200 characters. The call record keeps the raw stderr.
+function errorLine(text: string): string {
+  const lines = stripVTControlCharacters(text).split(/[\r\n]+/).filter((l) => /\w/.test(l));
+  const line = (lines.findLast((l) => !/^\s/.test(l)) ?? lines.at(-1) ?? '').trim();
+  return line.length > 200 ? `${line.slice(0, 199)}…` : line;
+}
+class ProviderError extends Error {
+  constructor(text: string) {
+    super(errorLine(text));
+  }
+}
 type Adapter = { argv: (c: AgentCall, dir: string) => string[]; answer: (stdout: string) => unknown; file?: boolean; hint?: string; env?: (c: AgentCall) => Record<string, string> };
 
 // The one JSON object inside free model text (often fenced): shared by the adapters that answer in text.
@@ -63,7 +75,7 @@ const ADAPTERS: Record<string, Adapter> = {
     answer: (out) => {
       const events = out.split('\n').filter((l) => l.startsWith('{')).map((l) => JSON.parse(l));
       const error = events.find((e) => e.type === 'error');
-      if (error) throw new ProviderError(JSON.stringify(error.error ?? error).slice(0, 500));
+      if (error) throw new ProviderError(JSON.stringify(error.error ?? error));
       let text = '';
       for (const e of events) {
         if (e.type === 'step_start') text = '';
@@ -90,7 +102,7 @@ const ADAPTERS: Record<string, Adapter> = {
         } catch {
           continue;
         }
-        if (e.type === 'error') failure = JSON.stringify(e.error ?? e).slice(0, 500);
+        if (e.type === 'error') failure = JSON.stringify(e.error ?? e);
         if (e.type === 'message_end' && e.message?.role === 'assistant') text = (e.message.content ?? []).filter((p: any) => p?.type === 'text').map((p: any) => p.text).join('');
       }
       if (!text && failure) throw new ProviderError(failure);
@@ -107,7 +119,7 @@ const ADAPTERS: Record<string, Adapter> = {
     hint: 'if gemini refused this folder as untrusted, trust it in Gemini CLI first, then retry',
     answer: (out) => {
       const r = JSON.parse(out);
-      if (!r.response && r.error) throw new ProviderError(JSON.stringify(r.error).slice(0, 500));
+      if (!r.response && r.error) throw new ProviderError(JSON.stringify(r.error));
       return extractJsonObject(String(r.response ?? ''));
     },
   },
@@ -154,7 +166,7 @@ export function askAgent(c: AgentCall): AgentAnswer {
       if (res.error) throw res.error;
       if (res.status !== 0) {
         // An agent that exits non-zero may still say why in its own output (claude: a usage limit, a bad model).
-        let why = String(res.stderr || res.stdout).trim().slice(-500);
+        let why = errorLine(String(res.stderr || res.stdout));
         try {
           adapter.answer(String(res.stdout));
         } catch (e) {

@@ -2,12 +2,23 @@ import { spawnSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
+import { stripVTControlCharacters } from 'node:util';
 import { AGENTS, CHEAP_MODELS } from './config.js';
 import { onPath } from './judge.js';
 // argv never carries the prompt: it goes on stdin, or (file: true) into a 0600 prompt file the argv points at.
 // done-done parses the answer, validates it against the schema, and asks a tool-less call again, at most ASK_ATTEMPTS calls.
 const ASK_ATTEMPTS = 3;
+// What a user sees of an agent's error: no colour codes, only the last line that says something (not a
+// stack frame, an indented field or a lone brace), at most 200 characters. The call record keeps the raw stderr.
+function errorLine(text) {
+    const lines = stripVTControlCharacters(text).split(/[\r\n]+/).filter((l) => /\w/.test(l));
+    const line = (lines.findLast((l) => !/^\s/.test(l)) ?? lines.at(-1) ?? '').trim();
+    return line.length > 200 ? `${line.slice(0, 199)}…` : line;
+}
 class ProviderError extends Error {
+    constructor(text) {
+        super(errorLine(text));
+    }
 }
 // The one JSON object inside free model text (often fenced): shared by the adapters that answer in text.
 export function extractJsonObject(text) {
@@ -47,7 +58,7 @@ const ADAPTERS = {
             const events = out.split('\n').filter((l) => l.startsWith('{')).map((l) => JSON.parse(l));
             const error = events.find((e) => e.type === 'error');
             if (error)
-                throw new ProviderError(JSON.stringify(error.error ?? error).slice(0, 500));
+                throw new ProviderError(JSON.stringify(error.error ?? error));
             let text = '';
             for (const e of events) {
                 if (e.type === 'step_start')
@@ -79,7 +90,7 @@ const ADAPTERS = {
                     continue;
                 }
                 if (e.type === 'error')
-                    failure = JSON.stringify(e.error ?? e).slice(0, 500);
+                    failure = JSON.stringify(e.error ?? e);
                 if (e.type === 'message_end' && e.message?.role === 'assistant')
                     text = (e.message.content ?? []).filter((p) => p?.type === 'text').map((p) => p.text).join('');
             }
@@ -99,7 +110,7 @@ const ADAPTERS = {
         answer: (out) => {
             const r = JSON.parse(out);
             if (!r.response && r.error)
-                throw new ProviderError(JSON.stringify(r.error).slice(0, 500));
+                throw new ProviderError(JSON.stringify(r.error));
             return extractJsonObject(String(r.response ?? ''));
         },
     },
@@ -145,7 +156,7 @@ export function askAgent(c) {
                 throw res.error;
             if (res.status !== 0) {
                 // An agent that exits non-zero may still say why in its own output (claude: a usage limit, a bad model).
-                let why = String(res.stderr || res.stdout).trim().slice(-500);
+                let why = errorLine(String(res.stderr || res.stdout));
                 try {
                     adapter.answer(String(res.stdout));
                 }

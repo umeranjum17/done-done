@@ -94,7 +94,7 @@ function apply(target: Record<string, any>, text: string | undefined, file: stri
       : spec.type === 'boolean' ? typeof value === 'boolean'
       : spec.type === 'string[]' ? Array.isArray(value) && value.every((v) => typeof v === 'string')
       : spec.type === 'agent' ? value === 'auto' || [value].flat().every((v) => AGENTS.includes(v as string)) && [value].flat().length > 0
-      : spec.type === 'route' ? typeof value === 'string' && (['auto', 'claude-code'].includes(value) || ANSWERER_JUDGES.some((a) => value === `answerer:${a}`))
+      : spec.type === 'route' ? typeof value === 'string' && (['', 'auto', 'claude-code'].includes(value) || ANSWERER_JUDGES.some((a) => value === `answerer:${a}`))
       : spec.type === 'claude_code' ? !!value && typeof value === 'object' && !Array.isArray(value) && Object.entries(value).every(([k, v]) => ['bin', 'config_dir'].includes(k) && typeof v === 'string')
       : spec.type === 'agent_config' ? !!value && typeof value === 'object' && Object.entries(value).every(([a, c]) => AGENTS.includes(a) && !!c && typeof c === 'object' && Object.entries(c).every(([k, m]) => k === 'model' && typeof m === 'string'))
       : !!value && typeof value === 'object' && Object.values(value).every((j: any) => j && typeof j.command === 'string');
@@ -143,12 +143,11 @@ export function loadConfig(repo: string, projectText?: string | null): Config {
   const projectFile = join(repo, '.done-done.yaml');
   apply(cfg, projectText ?? readOptional(projectFile), projectFile, 'repo');
   cfg.skill ||= `.agents/skills/verify-${cfg.app}`;
+  cfg.judge.route ||= 'auto';
   const tilde = (p: string) => p.replace(/^~(?=\/|$)/, homedir());
   const local = tilde(cfg.evidence.local_root);
   cfg.judge.claude_code.bin = tilde(cfg.judge.claude_code.bin);
   cfg.judge.claude_code.config_dir = tilde(cfg.judge.claude_code.config_dir);
-  // auto picks each agent's own cheap model, so a model alone names no judge.
-  if (cfg.judge.route === 'auto' && cfg.judge.model) throw new UsageError(`${globalFile}: judge.model needs judge.route (claude-code or answerer:<agent>); judge.route auto uses each agent's cheap model`);
   // A relative root is under the repo (and dies with the checkout); an absolute one is used as-is.
   cfg.evidence.root = cfg.evidence.root ? resolve(repo, cfg.evidence.root) : join(local, cfg.app);
   return cfg;

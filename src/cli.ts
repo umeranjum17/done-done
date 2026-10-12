@@ -59,7 +59,7 @@ const FLAGS: Record<string, string> = {
   '--foreground': 'run every step in this process instead of a detached runner (use in CI)',
   '--run <run-id>': 'the run to show (default: the newest run of this checkout)',
   '--probe': 'ask the configured agent one JSON-schema question and require a valid answer (one call at the agent\'s model: its cheap default where it has one, else its own; set agent_config.<agent>.model to choose)',
-  '--step <name>': 'the step log to show (resolve, drive, check, receipt, report)',
+  '--step <name>': 'the step log to show (resolve, drive, check, judge, receipt, report)',
   '--limit <n>': 'how many past runs to list (default all)',
   '--agent <agent>': 'also add a SessionStart hook to .claude/settings.json (claude) or .codex/hooks.json (codex) that shows `done-done` to each session, or a plugin to .opencode/plugins that adds it to the first message of each opencode session (opt-in)',
 };
@@ -561,19 +561,20 @@ async function runCheck(argv: string[], run?: { dir: string; judging: (code: num
     // A judge pass never overrides a failed deterministic check: on a fail, no capture is judged.
     if (findings.some((f) => f.level === 'fail')) judged = { skipped: 'the check already failed, so no capture was judged' };
     else {
-      const choice = selectJudge(cfg, selectAgent(cfg));
       run?.judging(findings.length ? INCONCLUSIVE : PASS, [...findings]);
-      const j = await judge(cfg, choice, claim.outcome, captures, run ? join(run.dir, 'agents') : join(home(), 'agents'));
+      const j = await judge(cfg, () => selectJudge(cfg, selectAgent(cfg)), claim.outcome, captures, run ? join(run.dir, 'agents') : join(home(), 'agents'));
       // The judge's next step leads the help when its verdict decides the result.
       if (j.judged.some((r) => r.verdict === 'fail')) judgeLevel = 'fail';
       else if (!findings.length && j.judged.some((r) => r.verdict === 'unsure')) judgeLevel = 'inconclusive';
       for (const r of j.judged.filter((r) => r.verdict !== 'pass'))
         findings.push({ level: r.verdict === 'fail' ? 'fail' : 'inconclusive', why: `${r.path}: judge says ${r.verdict === 'fail' ? 'wrong screen' : 'unsure'}: ${r.reason}` });
       const rows = cap<Judged>(j.judged);
-      const { route, model, independence, author } = choice;
-      judged = { route, model, independence, author: `${author.agent} (model ${author.model || 'none'})`, judged: rows.items.map(({ sha256, ...r }) => r) };
-      const byName = new Map(captures.map((c) => [c.name, receiptPath(repo, cfg, resolve(c.name))]));
-      if (j.judged.length) judgeBlock = { route, model, independence, author, verdicts: j.judged.map((r) => ({ path: byName.get(r.path)!, sha256: r.sha256, verdict: r.verdict })) };
+      const { choice } = j;
+      judged = { ...(choice && { route: choice.route, model: choice.model, independence: choice.independence, author: `${choice.author.agent} (model ${choice.author.model || 'none'})` }), judged: rows.items.map(({ sha256, ...r }) => r) };
+      if (choice && j.judged.length) {
+        const byName = new Map(captures.map((c) => [c.name, receiptPath(repo, cfg, resolve(c.name))]));
+        judgeBlock = { route: choice.route, model: choice.model, independence: choice.independence, author: choice.author, verdicts: j.judged.map((r) => ({ path: byName.get(r.path)!, sha256: r.sha256, verdict: r.verdict })) };
+      }
       if (rows.omitted) judged.judged_omitted = rows.omitted;
       if (j.notJudged.length) judged.not_judged = j.notJudged;
       judged.note = 'only PNG and JPEG captures are judged; text, log and video evidence are not';
@@ -1036,7 +1037,7 @@ async function cmdVerify(argv: string[]): Promise<number> {
   if (!values['claim-id'] && !git(repo, 'branch', '--show-current')) throw new UsageError('HEAD is detached, so no branch names this claim; pass --claim-id <id>');
   const judging = !!values.judge || cfg.judge.enabled;
   // A judge that config forbids (the author's own agent and model) is a usage error now, not a failed run later.
-  if (judging) selectJudge(cfg, selectAgent(cfg));
+  if (judging && cfg.judge.route !== 'auto') selectJudge(cfg, selectAgent(cfg));
   const id = newRunId(git(repo, 'rev-parse', 'HEAD'));
   const dir = join(runsRoot(cfg.app), id);
   mkdirSync(join(dir, 'logs'), { recursive: true });
@@ -1136,7 +1137,7 @@ async function cmdRerun(argv: string[]): Promise<number> {
   // A rerun judges when its source did or config now turns the judge on; a forbidden judge is a usage error here too.
   // Steps follow the current list, so a run from before the judge step gains it.
   const judging = !!src.judge || cfg.judge.enabled;
-  if (judging) selectJudge(cfg, selectAgent(cfg));
+  if (judging && cfg.judge.route !== 'auto') selectJudge(cfg, selectAgent(cfg));
   const steps = STEPS.map((name) => {
     const s = src.steps.find((x) => x.name === name);
     return s && reused(name) && s.status === 'completed' ? { ...s } : { name, status: 'pending' as StepState };
@@ -1791,11 +1792,12 @@ async function cmdDoctor(argv: string[]): Promise<number> {
     const apart = { agent: 'a different agent from the author', model: 'the author\'s agent at a different model', 'session-only': 'the author\'s agent and model in a fresh session (session-only independence)' }[choice.independence];
     const accepted = choice.independence === 'session-only' && cfg.judge.allow_same ? '; judge.allow_same accepts it' : '';
     const apartOk = choice.independence === 'agent';
+    const modelIgnored = cfg.judge.route === 'auto' && !!cfg.judge.model;
     checks.push({
       check: 'judge_choice',
-      status: apartOk ? 'ok' : 'warn',
-      detail: `${choice.route} (model ${choice.model}; ${choice.from === 'auto' ? 'judge.route auto' : 'from config'}) judges the author ${choice.author.agent} (model ${choice.author.model || 'none'}): ${apart}${accepted}`,
-      fix: apartOk ? '' : `Install another agent that can judge (${JUDGES.join(' or ')}) so the judge is apart from the author`,
+      status: apartOk && !modelIgnored ? 'ok' : 'warn',
+      detail: `${choice.route} (model ${choice.model}; ${choice.from === 'auto' ? 'judge.route auto' : 'from config'}) judges the author ${choice.author.agent} (model ${choice.author.model || 'none'}): ${apart}${accepted}${modelIgnored ? `; judge.model ${cfg.judge.model} is ignored under judge.route auto` : ''}`,
+      fix: !apartOk ? `Install another agent that can judge (${JUDGES.join(' or ')}) so the judge is apart from the author` : modelIgnored ? 'Set judge.route to claude-code or answerer:<agent> to use judge.model, or remove judge.model' : '',
     });
   }
   if (values.probe && !agent) checks.push(unknownRow('probe'));

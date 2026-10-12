@@ -1989,6 +1989,30 @@ test('with no agent installed, the judge has no author to keep apart: doctor rec
   assert.match(d.checks[7].detail, /judges the author none \(model none\)/);
 });
 
+test('judge.route empty is auto, and a judge.model under auto is ignored with a warning', () => {
+  const { repo, env } = setup();
+  mkdirSync(env.DONE_DONE_HOME, { recursive: true });
+  writeFileSync(join(env.DONE_DONE_HOME, 'config.yaml'), "judge:\n  route: ''\n");
+  assert.equal(toon(doctorIn(repo, pathEnv(env, ['claude']), 'doctor')).checks[1].status, 'ok');
+  writeFileSync(join(env.DONE_DONE_HOME, 'config.yaml'), 'judge:\n  model: x\n');
+  const d = toon(doctorIn(repo, pathEnv(env, ['claude']), 'doctor'));
+  assert.equal(d.checks[1].status, 'ok');
+  assert.equal(d.checks[7].status, 'warn');
+  assert.match(d.checks[7].detail, /^claude-code \(model claude-haiku-5-5; judge\.route auto\)/, 'auto picks the cheap model, not judge.model');
+  assert.match(d.checks[7].detail, /judge\.model x is ignored under judge\.route auto/);
+});
+
+test('a text-only judged receipt needs no judge, so no installed agent does not block it', () => {
+  const t = setup('app: notes\nevidence:\n  root: .proof\njudge:\n  enabled: true\njourneys:\n  shots:\n    command: node make-shots.mjs ${RUN_ID}\n');
+  const r = t.dd('run', '--', `node -e "require('fs').writeFileSync(process.env.DONE_DONE_EVIDENCE_ROOT + '/session.log','saved 3 notes')"`);
+  assert.equal(r.code, 0, r.out);
+  const log = `.proof/${toon(r).run_id}/session.log`;
+  const rec = doctorIn(t.repo, pathEnv(t.env, []), 'receipt', '--outcome', 'three notes are saved', log);
+  assert.equal(rec.code, 0, rec.out);
+  const v = t.dd('receipt', '--verify', t.head());
+  assert.deepEqual([toon(v).result, toon(v).schema, toon(v).judge], ['pass', 1, undefined]);
+});
+
 // Stub agent CLIs that log how they were started (argv, stdin, cwd) and answer like the real ones:
 // claude -p prints its JSON result with structured_output; opencode run reads the attached prompt file and
 // prints JSON events (after a wrapper's banner line) whose text part holds the answer, fenced as models often do.
@@ -2094,7 +2118,7 @@ test('the agent comes from config (a fallback list moves past missing agents), a
   writeFileSync(join(env.DONE_DONE_HOME, 'config.yaml'), 'judge:\n  route: opencode-go\n');
   assert.match(doctor('').out, /judge\.route must be auto, claude-code \(for claude\), or answerer:<agent>/);
   writeFileSync(join(env.DONE_DONE_HOME, 'config.yaml'), 'judge:\n  model: x\n');
-  assert.match(doctor('').out, /judge\.model needs judge\.route/);
+  assert.equal(doctor('').by('config').status, 'ok', 'a model under judge.route auto is ignored, not a config error');
   assert.match(doctor('agent: cursor\n').out, /agent must be auto, or one or a list of claude, codex, opencode, pi, gemini/);
   assert.match(doctor('judge: auto\n').out, /judge must be a mapping/, 'judge: auto is not a spelling of the judge');
   assert.match(doctor('agent_config:\n  opencode: { model: x }\n').out, /agent_config may only be set in the global config/, 'the project file cannot pick a model');

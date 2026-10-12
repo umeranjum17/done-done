@@ -71,7 +71,7 @@ async function kit() {
   }
 }
 
-type Judge = { ask: Backend['ask']; resolve: typeof import('@byokit/decide/slim').resolve; lastError: () => string; signIn: string; signedIn: () => boolean; agentRecord?: () => string };
+type Judge = { ask: Backend['ask']; resolve: typeof import('@byokit/decide/slim').resolve; lastError: () => string; signIn: string; signedIn: () => boolean };
 
 // The backend for one judge choice. It checks everything that needs no model call, so doctor can use it too.
 // record: where the answerer writes its agent call record (the claude-code route starts no agent of ours).
@@ -81,7 +81,6 @@ export async function backend(cfg: Config, choice: JudgeChoice, record = () => '
     if (!bin) throw new UsageError(`judge: ${choice.route} needs ${choice.agent} on PATH`, `Install ${choice.agent}, or set judge.route in ~/.done-done/config.yaml`);
     const { answerer, resolve } = await kit();
     let lastError = '';
-    let agentRecord = '';
     // The kit hides a failed call's message from the verdict, so the real cause is kept here for the result.
     const ask: Backend['ask'] = answerer({
       name: choice.route,
@@ -95,8 +94,7 @@ export async function backend(cfg: Config, choice: JudgeChoice, record = () => '
             writeFileSync(file, Buffer.from(img.dataUrl.slice(img.dataUrl.indexOf(',') + 1), 'base64'), { mode: 0o600 });
             return file;
           });
-          agentRecord = record();
-          const a = askAgent({ agent: choice.agent, model: choice.model, prompt, schema: ANSWER_SCHEMA, cwd: dir, timeoutMs: TIMEOUT_MS, tools: 'none', record: agentRecord, files });
+          const a = askAgent({ agent: choice.agent, model: choice.model, prompt, schema: ANSWER_SCHEMA, cwd: dir, timeoutMs: TIMEOUT_MS, tools: 'none', record: record(), files });
           lastError = a.ok ? '' : a.error ?? 'no answer';
           if (!a.ok) throw new Error(lastError);
           return JSON.stringify(a.answer);
@@ -105,7 +103,7 @@ export async function backend(cfg: Config, choice: JudgeChoice, record = () => '
         }
       },
     }).ask;
-    return { ask, resolve, lastError: () => lastError, agentRecord: () => agentRecord, signIn: '', signedIn: () => true, detail: `${choice.agent} at ${bin} and the judge kit are present` };
+    return { ask, resolve, lastError: () => lastError, signIn: '', signedIn: () => true, detail: `${choice.agent} at ${bin} and the judge kit are present` };
   }
   const bin = claudeBin(cfg);
   const dir = cfg.judge.claude_code.config_dir;
@@ -148,12 +146,12 @@ function prepare(c: Capture): { mime: string; bytes: Buffer } | string {
 
 // Verdicts are cached in the run store, per app, so a re-run or a later run of the same capture and claim asks no model.
 // The answerer's agent call leaves a record in `records` (judge-<stamp>-<n>.agent.json), never the prompt.
-export async function judge(cfg: Config, choice: JudgeChoice, outcome: string, captures: Capture[], records: string): Promise<{ judged: Judged[]; notJudged: string[] }> {
-  const { route, model } = choice;
+export async function judge(cfg: Config, choose: () => JudgeChoice, outcome: string, captures: Capture[], records: string): Promise<{ judged: Judged[]; notJudged: string[]; choice?: JudgeChoice }> {
   const dir = join(home(), 'runs', cfg.app, 'judge');
   const stamp = new Date().toISOString().replace(/[:.]/g, '-');
   const judged: Judged[] = [];
   const notJudged: string[] = [];
+  let choice: JudgeChoice | undefined;
   let be: Judge | undefined;
   let calls = 0;
   let call = ''; // this capture's record path, without .json
@@ -162,6 +160,8 @@ export async function judge(cfg: Config, choice: JudgeChoice, outcome: string, c
       notJudged.push(c.name);
       continue;
     }
+    choice ??= choose();
+    const { route, model } = choice;
     const key = createHash('sha256').update(JSON.stringify([VERSION, c.sha256, outcome, route, model])).digest('hex');
     const file = join(dir, `${key}.json`);
     try {
@@ -207,5 +207,5 @@ export async function judge(cfg: Config, choice: JudgeChoice, outcome: string, c
     } catch {} // an unwritable cache costs a repeat request, not this verdict
     judged.push(row);
   }
-  return { judged, notJudged };
+  return { judged, notJudged, choice };
 }

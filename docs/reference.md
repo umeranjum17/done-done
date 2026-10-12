@@ -88,7 +88,7 @@ evidence: <paths of the evidence files, or "not proven: <cause>">
 | Valid media | The magic bytes match the extension. PNG and JPEG are complete (end markers present) and at least 64×64. PNG is not a blank frame. WebP and GIF are not truncated. MP4/MOV and WebM/MKV decode at least two video packets (`ffprobe`). Text and log files hold text; JSON parses. |
 | Fresh | The file is in a run record whose commit is HEAD. The one exception: if the only commits since the run touch `ignore_paths`, the evidence still counts. An empty commit does not count as touching only `ignore_paths`. |
 | Clean | The run was not dirty, unless `evidence.allow_dirty: true`. The run command also exited 0. |
-| Not reused | Fails when the files are byte-identical within one claim. Also fails when every file was already used to prove a different claim in this repo; the ledger is `$DONE_DONE_HOME/hashes`. |
+| Not reused | Fails when the files are byte-identical within one claim. Also fails when every file was already used to prove a different claim in this repo. A claim is named by `--claim-id <id>`, by default the current branch (with `--from <PR URL>`, the PR's branch; on a detached HEAD, pass `--claim-id`), so rewording the outcome is not reuse. One branch is one claim: several claims on one branch each need their own `--claim-id`, or they share one reuse scope. The ledger is `<root>/.done-done/ledger` in the evidence root, so each repo keeps its own (pin `app`, as `init` does, so two repos with the same directory name do not share one); `DONE_DONE_HOME` moves it only with the default evidence root. |
 
 Files that are in no run record give an inconclusive result: nothing ties them to a commit. So does a file that more than one run record claims (possible only with records from before each run had its own folder). A file whose path is named in a run record but whose bytes no longer match fails as `changed after run <run-id>` (exit 1), not inconclusive: the path ties it to that run, so editing it after the run is tampering, not untied evidence.
 
@@ -162,8 +162,9 @@ Running `done-done` with no subcommand prints the repo's config state (`config: 
 ### In CI or a merge gate
 
 ```sh
+PR_BRANCH="$(gh pr view "$PR_URL" --json headRefName --jq .headRefName)"
 done-done check --from "$PR_URL" --trusted-ref origin/main
-done-done receipt --from - --trusted-ref origin/main < pr-body.md   # record the pass
+done-done receipt --from - --trusted-ref origin/main --claim-id "$PR_BRANCH" < pr-body.md   # record the pass
 done-done receipt --verify "$HEAD"                                   # re-verify later
 ```
 
@@ -171,7 +172,7 @@ Run `receipt --verify` with that head checked out and the evidence root in place
 
 ### Where proof lives
 
-Evidence, run records (`<root>/.done-done/runs/`) and receipts (`<root>/.done-done/receipts/<head>.json`) all live in the evidence root. By default that is `~/.done-done/evidence/<app>`, outside the repo, so they outlive the checkout that captured them: any checkout of the same repo on the same machine (a fresh clone, a merge gate's checkout) with `<head>` checked out runs `done-done receipt --verify <head>` and finds the same receipt and files. A checkout of a later commit, such as the merge or squash commit on main, does not verify: the receipt is for `<head>` only.
+Evidence, run records (`<root>/.done-done/runs/`), receipts (`<root>/.done-done/receipts/<head>.json`) and the reuse ledger (`<root>/.done-done/ledger`) all live in the evidence root. By default that is `~/.done-done/evidence/<app>`, outside the repo, so they outlive the checkout that captured them: any checkout of the same repo on the same machine (a fresh clone, a merge gate's checkout) with `<head>` checked out runs `done-done receipt --verify <head>` and finds the same receipt and files. A checkout of a later commit, such as the merge or squash commit on main, does not verify: the receipt is for `<head>` only.
 
 - **Same machine** (a merge gate, a fresh clone): check out `<head>`, nothing else. Every checkout reads the same `app` from the committed `.done-done.yaml`, so it resolves the same evidence root. Keep `app` pinned (`init` writes it); without it the app is the directory name, which differs between clones. Receipts are named by the full head sha, which is the same in every clone, shallow or not, so no repo commit is needed in the key, and a receipt verifies only where that commit is checked out.
 - **CI on another machine**: the evidence is not there. Copy the evidence root to the job (for example upload `~/.done-done/evidence/<app>` as a build artifact from the job that captured the proof), restore it as `$DONE_DONE_HOME/evidence/<app>`, check out the head, and run `done-done receipt --verify <head>`.

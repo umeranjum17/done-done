@@ -202,13 +202,39 @@ test('a file claimed by more than one legacy run record is inconclusive', () => 
 });
 
 test('the same evidence cannot prove a second, different claim', () => {
-  const { dd, shots } = setup();
+  const { dd, sh, shots, repo, env } = setup();
   const { files } = shots();
   assert.equal(dd('check', '--outcome', 'home renders', ...files).code, 0);
   assert.equal(dd('check', '--outcome', 'home renders', ...files).code, 0, 're-checking the same claim is fine');
+  const reworded = dd('check', '--outcome', 'home and settings render', ...files);
+  assert.equal(reworded.code, 0, `rewording the claim on the same branch is not reuse: ${reworded.out}`);
+  assert.ok(existsSync(join(repo, '.proof', '.done-done', 'ledger')), 'the ledger lives in the evidence root');
+  assert.ok(!existsSync(join(env.DONE_DONE_HOME, 'hashes')), 'no machine-wide ledger');
+  sh('checkout', '-qb', 'checkout-flow');
   const r = dd('check', '--outcome', 'checkout works', ...files);
   assert.equal(r.code, 1, r.out);
-  assert.match(r.out, /already used as proof of a different claim/);
+  assert.match(toon(r).findings[0].why, /already used as proof of a different claim \(claim id main\), not this one \(claim id checkout-flow, from the current branch\)/);
+  assert.equal(dd('check', '--claim-id', 'main', '--outcome', 'home renders', ...files).code, 0, '--claim-id names the claim');
+  sh('checkout', '-q', '--detach');
+  const detached = dd('check', '--outcome', 'home renders', ...files);
+  assert.equal(detached.code, 2, detached.out);
+  assert.match(toon(detached).error, /HEAD is detached.*pass --claim-id/);
+  assert.equal(dd('check', '--claim-id', 'main', '--outcome', 'home and settings render', ...files).code, 0, 'a detached HEAD names its claim with --claim-id');
+  assert.equal(dd('check', '--claim-id', ' ', '--outcome', 'x', ...files).code, 2, 'an empty claim id is a usage error');
+});
+
+test('two repos never see each other\'s reuse ledger', () => {
+  const capture = (t) => {
+    const r = t.dd('run', '--', 'cp ../screen.png "$DONE_DONE_EVIDENCE_ROOT/home.png"');
+    assert.equal(r.code, 0, r.out);
+    return toon(r).evidence[0];
+  };
+  const a = setup('app: notes\n');
+  const b = setup('app: todo\n');
+  b.env.DONE_DONE_HOME = a.env.DONE_DONE_HOME;
+  assert.equal(a.dd('check', '--claim-id', 'notes-home', '--outcome', 'home renders', capture(a)).code, 0);
+  const r = b.dd('check', '--claim-id', 'todo-home', '--outcome', 'home renders', capture(b));
+  assert.equal(r.code, 0, `the same bytes in another repo are not reuse: ${r.out}`);
 });
 
 test('Checks block: form rules, not-proven and trusted config', () => {

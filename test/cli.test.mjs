@@ -2431,6 +2431,22 @@ test('an edit step whose answer is not JSON is never asked again, while a tool-l
   }
 });
 
+test('maintain counts a truncated feature file as a notice, not drift', () => {
+  const { repo, env, sh } = setup();
+  const s = stubAgents(env, JSON.stringify({ drift: [], recipe: 'open it', recipes: [], missing: [] }));
+  const skill = join(repo, '.agents', 'skills', 'verify-notes');
+  mkdirSync(join(skill, 'features'), { recursive: true });
+  writeFileSync(join(skill, 'SKILL.md'), '# verify-notes\n');
+  writeFileSync(join(skill, 'features', 'README.md'), '# features\n\n- [Home](home.md)\n');
+  writeFileSync(join(skill, 'features', 'home.md'), `# Home\n\n${'x'.repeat(20_000)}\n`);
+  sh('add', '-A');
+  sh('commit', '-qm', 'skill');
+  const r = doctorIn(repo, s.env, 'maintain', '--foreground');
+  const m = toon(r);
+  assert.deepEqual([r.code, m.result, m.git_status], [0, 'clean', 'same'], r.out);
+  assert.deepEqual(m.findings.map((f) => f.kind), ['truncated']);
+});
+
 test('maintain reports a dead link, a wrong file:line and drift from read-only readers, and changes nothing', () => {
   const { repo, env, sh } = setup();
   const answer = JSON.stringify({
@@ -2447,7 +2463,9 @@ test('maintain reports a dead link, a wrong file:line and drift from read-only r
   mkdirSync(join(skill, 'features'), { recursive: true });
   writeFileSync(join(skill, 'SKILL.md'), '# verify-notes\n\nThe map: [features](features/README.md). See https://example.com:443/x and localhost:3000.\n');
   writeFileSync(join(skill, 'features', 'README.md'), '# features\n\n- [Home](home.md)\n- [Search](search.md)\n- [Home again](home.md#top)\n');
-  writeFileSync(join(skill, 'features', 'home.md'), `# Home\n\nSource: src/app.js:1, and the old src/app.js:40.\nAlso app.js:1, app.js:40 and ghost.js:2.\nLong note: ${'x'.repeat(20_000)}\n`);
+  mkdirSync(join(repo, 'src', 'café'));
+  writeFileSync(join(repo, 'src', 'café', 'gate.js'), 'export const gate = 1;\n');
+  writeFileSync(join(skill, 'features', 'home.md'), `# Home\n\nSource: src/app.js:1, and the old src/app.js:40.\nAlso app.js:1, app.js:40, ghost.js:2 and gate.js:1.\nLong note: ${'x'.repeat(20_000)}\n`);
   writeFileSync(join(skill, 'features', 'extra.md'), '# Extra\n');
   sh('add', '-A');
   sh('commit', '-qm', 'skill');

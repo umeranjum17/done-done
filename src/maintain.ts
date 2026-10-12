@@ -26,8 +26,10 @@ const FEATURE_CHARS = 20_000;
 const SOURCE_FILE = /\.(m?[jt]sx?|py|go|rb|rs|php|swift|kt|java|dart)$/;
 // Findings that mean the pass could not finish, so the result is blocked, not drift.
 const BLOCKING = new Set(['coverage', 'repo-changed']);
+// Notices are listed in the run but do not make the result drift.
+const NOTICE = new Set(['truncated']);
 
-const git = (cwd: string, ...args: string[]) => execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: 64 << 20 }).trim();
+const git = (cwd: string, ...args: string[]) => execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: 64 << 20 });
 const repoState = (repo: string) => `${git(repo, 'rev-parse', 'HEAD')}\n${git(repo, 'status', '--porcelain', '--untracked-files=all')}`;
 const lines = (p: string) => readFileSync(p, 'utf8').split('\n');
 const mdFiles = (dir: string) => readdirSync(dir, { recursive: true, withFileTypes: true }).filter((e) => e.isFile() && e.name.endsWith('.md')).map((e) => join(e.parentPath, e.name)).sort();
@@ -147,20 +149,18 @@ Feature file ${rel(file)}:
 ${text.slice(0, FEATURE_CHARS)}`;
     const a = askAgent({ agent: agent.agent, model: agent.model, prompt, schema: READER_SCHEMA, cwd: repo, timeoutMs: CALL_MS, tools: 'read', record: record(`reader-${name.replace(/\.md$/, '')}`) });
     if (!a.ok) add({ kind: 'coverage', file: rel(file), what: `the reader did not answer: ${a.error}` });
-    return { feature: rel(file), ok: a.ok, ...a.answer, ...(a.error && { error: a.error }), record: a.record, ...(a.recordError && { record_error: a.recordError }) };
+    return { feature: rel(file), ok: a.ok, drift: a.answer?.drift, recipe: a.answer?.recipe, ...(a.error && { error: a.error }), record: a.record, ...(a.recordError && { record_error: a.recordError }) };
   });
   h.log('source-wave', { agent: agent.agent, model: agent.model, readers });
   h.set(step, agentBlock ? 'failed' : 'completed', { outputs: readers.flatMap((r) => r.record ?? []) });
 
   // 4 reconcile: plain code checks each file:line the skill and the readers cite; churn comes from git log.
   step = h.begin('reconcile');
-  const tracked = git(repo, 'ls-files').split('\n');
+  const tracked = git(repo, 'ls-files', '-z').split('\0').filter(Boolean);
   for (const f of mdFiles(skill))
     lines(f).forEach((text, i) => {
       for (const m of text.matchAll(CITE)) {
-        // Repo-relative, or relative to the citing file (a helper in the skill folder).
-        const local = resolve(dirname(f), m[1]);
-        const path = !existsSync(join(repo, m[1])) && existsSync(local) ? rel(local) : m[1];
+        const path = m[1];
         // A bare file name is checked against the tracked files it ends; the line must exist in one of them.
         const cited = path.includes('/') ? [path] : tracked.filter((p) => p === path || p.endsWith(`/${path}`));
         const whys = cited.map((p) => citeProblem(repo, p, Number(m[2]), Number(m[3] ?? m[2])));
@@ -177,7 +177,7 @@ ${text.slice(0, FEATURE_CHARS)}`;
     }
   }
   const skillDir = rel(skill);
-  const churn = [...new Set(git(repo, 'log', `--since=${CHURN_SINCE}`, '--name-only', '--format=').split('\n'))]
+  const churn = [...new Set(git(repo, 'log', `--since=${CHURN_SINCE}`, '--name-only', '-z', '--format=').split('\0'))]
     .filter((p) => p && SOURCE_FILE.test(p) && !p.startsWith(`${skillDir}/`) && existsSync(join(repo, p)))
     .sort();
   let recipes: unknown[] = [];
@@ -206,5 +206,6 @@ Recently changed source files (git log since ${CHURN_SINCE}): ${churn.length ? c
   const stop = findings.find((f) => BLOCKING.has(f.kind));
   if (stop) return h.finish('blocked', `${stop.kind}: ${stop.file}: ${stop.what}`);
   if (agentBlock) return h.finish('blocked', agentBlock);
-  h.finish(findings.length ? 'drift' : 'clean', findings.length ? `${findings.length} findings` : undefined);
+  const counted = findings.filter((f) => !NOTICE.has(f.kind));
+  h.finish(counted.length ? 'drift' : 'clean', counted.length ? `${counted.length} findings` : undefined);
 }

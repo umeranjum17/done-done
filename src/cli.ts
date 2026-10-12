@@ -555,7 +555,7 @@ async function cmdReceipt(argv: string[]): Promise<number> {
   let rest = argv;
   if (vi >= 0) {
     verifyHead = argv[vi + 1] ?? null;
-    if (!verifyHead || verifyHead.startsWith('--')) throw new UsageError('receipt --verify needs a head sha');
+    if (!verifyHead || verifyHead.startsWith('--')) throw new UsageError('receipt --verify needs a head sha or ref');
     rest = [...argv.slice(0, vi), ...argv.slice(vi + 2)];
   }
   const repo = repoRoot();

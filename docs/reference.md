@@ -218,7 +218,7 @@ Running `done-done` with no subcommand prints the repo's config state (`config: 
 | 3 | inconclusive (could not be proven either way) |
 | 4 | the run is still running (`verify`, `status`) |
 
-`doctor` exits 2 when a required item (`git`, `config`, `evidence_root`) is missing.
+`doctor` exits 2 when a required item (`git`, `config`, `evidence_root`, and `probe` with `--probe`) is missing.
 
 ### In CI or a merge gate
 

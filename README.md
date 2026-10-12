@@ -103,6 +103,7 @@ Run `done-done` with no arguments to see the current config and the next step.
 - ♻️ **Not reused**: Proof made only of files already used for a different claim fails, and so does citing the same file twice.
 - 🧾 **Honest claims**: Reads a pull request's `## Checks` block — from a file, a URL, or stdin — and makes sure every line is filled in.
 - 📌 **Verifiable later**: `receipt` records a passing check against the exact commit and the sha256 of every file it cited; `receipt --verify` re-checks it in CI or at merge.
+- 👀 **Shows the outcome** (opt-in): `--judge` asks a model on your own Claude plan whether each screenshot is the right screen for the claim; a wrong screen fails.
 - 🔒 **Safe in CI**: `--trusted-ref origin/main` reads the rules from your main branch, so a pull request can't loosen them.
 
 Every answer is an exit code: **0** pass, **1** fail, **2** usage or config error, **3** can't tell either way.
@@ -114,7 +115,7 @@ Every answer is an exit code: **0** pass, **1** fail, **2** usage or config erro
 
 ## What's next
 
-So far: `init`, `run`, `check` and `receipt`. Coming next: an AI check that a screenshot really shows what it claims, and help writing the proof steps for your app.
+So far: `init`, `run`, `check`, `receipt` and the opt-in screenshot judge. Coming next: help writing the proof steps for your app.
 
 ## Develop
 

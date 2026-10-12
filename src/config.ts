@@ -3,7 +3,12 @@ import { homedir } from 'node:os';
 import { basename, join } from 'node:path';
 import { parse } from 'yaml';
 
-export class UsageError extends Error {}
+export class UsageError extends Error {
+  // The exact next command, when the error has one.
+  constructor(message: string, readonly help?: string) {
+    super(message);
+  }
+}
 
 export type Config = {
   app: string;
@@ -11,6 +16,7 @@ export type Config = {
   journeys: Record<string, { command: string }>;
   evidence: { local_root: string; root: string; allow_dirty: boolean; ignore_paths: string[] };
   checks: { not_proven: 'inconclusive' | 'allow'; fix_title: string };
+  judge: { enabled: boolean; model: string; bin: string; config_dir: string };
   trusted: boolean; // project file came from --trusted-ref
 };
 
@@ -25,8 +31,12 @@ const KEYS: Record<string, { scope: 'global' | 'repo'; type: 'string' | 'boolean
   'evidence.ignore_paths': { scope: 'repo', type: 'string[]' },
   'checks.not_proven': { scope: 'repo', type: 'string' },
   'checks.fix_title': { scope: 'repo', type: 'string' },
+  'judge.enabled': { scope: 'repo', type: 'boolean' },
+  'judge.model': { scope: 'global', type: 'string' },
+  'judge.bin': { scope: 'global', type: 'string' },
+  'judge.config_dir': { scope: 'global', type: 'string' },
 };
-const SECTIONS = new Set(['evidence', 'checks']);
+const SECTIONS = new Set(['evidence', 'checks', 'judge']);
 
 export const home = () => process.env.DONE_DONE_HOME || join(homedir(), '.done-done');
 
@@ -87,6 +97,7 @@ export function loadConfig(repo: string, projectText?: string | null): Config {
     journeys: {},
     evidence: { local_root: join(home(), 'evidence'), root: '', allow_dirty: false, ignore_paths: [] },
     checks: { not_proven: 'inconclusive', fix_title: '^(fix|bugfix|hotfix)\\b' },
+    judge: { enabled: false, model: 'claude-opus-5-5', bin: '', config_dir: join(home(), 'claude') },
     trusted: projectText != null,
   };
   const globalFile = join(home(), 'config.yaml');
@@ -94,7 +105,10 @@ export function loadConfig(repo: string, projectText?: string | null): Config {
   const projectFile = join(repo, '.done-done.yaml');
   apply(cfg, projectText ?? readOptional(projectFile), projectFile, 'repo');
   cfg.skill ||= `.agents/skills/verify-${cfg.app}`;
-  const local = cfg.evidence.local_root.replace(/^~(?=\/|$)/, homedir());
+  const tilde = (p: string) => p.replace(/^~(?=\/|$)/, homedir());
+  const local = tilde(cfg.evidence.local_root);
+  cfg.judge.bin = tilde(cfg.judge.bin);
+  cfg.judge.config_dir = tilde(cfg.judge.config_dir);
   cfg.evidence.root = cfg.evidence.root ? join(repo, cfg.evidence.root) : join(local, cfg.app);
   return cfg;
 }

@@ -8,7 +8,7 @@ user-invocable: false
 
 "No proof, no done." done-done runs your capture command and ties every file it writes to the exact
 commit, then checks that the evidence a claim points to is really there, is a real image/video/log,
-comes from the current commit, and is new. It is deterministic, offline and model-free.
+comes from the current commit, and is new. The core checks are deterministic, offline and model-free; the opt-in `--judge` flag asks a model through BYOKit whether each screenshot shows the outcome.
 
 The CLI is the source of truth. Run `done-done --help` for the current commands and flags.
 
@@ -84,6 +84,12 @@ media (magic bytes match the extension, complete, not blank or tiny; video is de
 `ffprobe`); be fresh (in a run record whose commit is HEAD — a diff of only `ignore_paths` keeps it
 fresh); be clean (the run was not dirty and exited 0); and not reused (not byte-identical within the
 claim, and not already used to prove a different claim in this repo).
+
+Add `--judge` (to `check` or `receipt`) to also ask, through BYOKit and the person's own Claude
+plan, whether each PNG/JPEG shows the outcome: a wrong screen fails (1), an unsure answer is
+inconclusive (3). It is off by default and needs a one-time sign-in
+(`mkdir -p ~/.done-done/claude && CLAUDE_CONFIG_DIR=~/.done-done/claude claude auth login`); a
+missing sign-in exits 2 with that command. Text, log and video evidence are not judged.
 
 ## Record and re-verify a receipt
 

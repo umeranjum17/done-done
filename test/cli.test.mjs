@@ -1,7 +1,7 @@
 // End-to-end: drives the built CLI against throwaway git repos with fictional fixtures.
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { appendFileSync, mkdirSync, mkdtempSync, existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { appendFileSync, cpSync, mkdirSync, mkdtempSync, existsSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { after, test } from 'node:test';
@@ -510,4 +510,172 @@ test('bare done-done in a repo with no config points at init', () => {
   const b = toon(r);
   assert.equal(b.config, 'missing');
   assert.match(b.help[0], /done-done init/);
+});
+
+// The relevance judge, driven through BYOKit decide's claude-code backend against a local stub binary:
+// the stub answers `auth status` and the one headless request the kit sends, and logs what it was sent.
+function judgeSetup(answer, { loggedIn = true, projectYaml } = {}) {
+  const t = setup(projectYaml);
+  const cfgDir = join(t.dir, 'judge-signin');
+  const bin = join(t.dir, 'claude');
+  mkdirSync(cfgDir);
+  writeFileSync(
+    bin,
+    `#!${process.execPath}
+const { appendFileSync, readFileSync } = require('node:fs');
+const dir = process.env.CLAUDE_CONFIG_DIR;
+const stub = JSON.parse(readFileSync(dir + '/stub.json', 'utf8'));
+if (process.argv.includes('auth')) {
+  process.stdout.write(JSON.stringify({ loggedIn: stub.loggedIn, authMethod: stub.loggedIn ? 'claude.ai' : 'none', apiProvider: 'firstParty' }));
+  process.exit(stub.loggedIn ? 0 : 1);
+}
+const content = JSON.parse(readFileSync(0, 'utf8')).message.content;
+const images = content.filter((c) => c.type === 'image');
+const img = Buffer.from(images[0].source.data, 'base64');
+appendFileSync(dir + '/calls.jsonl', JSON.stringify({ model: process.argv[process.argv.indexOf('--model') + 1], images: images.length, width: img.readUInt32BE(16), prompt: content.at(-1).text }) + '\\n');
+const p = stub.answer;
+if (p === 'error') process.exit(process.stdout.write(JSON.stringify({ type: 'result', subtype: 'success', is_error: true, result: 'usage limit reached' })) && 0);
+const pick = Object.keys(p).sort((a, b) => p[b] - p[a])[0];
+process.stdout.write(JSON.stringify({ type: 'result', subtype: 'success', is_error: false, result: '', structured_output: { relevance: { probabilities: p, pick, personReason: stub.reason } } }));
+`,
+    { mode: 0o755 },
+  );
+  const stub = (a, li = loggedIn) => writeFileSync(join(cfgDir, 'stub.json'), JSON.stringify({ loggedIn: li, answer: a, reason: 'The screen shows the notes list.' }));
+  stub(answer);
+  mkdirSync(t.env.DONE_DONE_HOME, { recursive: true });
+  writeFileSync(join(t.env.DONE_DONE_HOME, 'config.yaml'), `judge:\n  bin: ${JSON.stringify(bin)}\n  config_dir: ${JSON.stringify(cfgDir)}\n  model: claude-test-1\n`);
+  const calls = () => (existsSync(join(cfgDir, 'calls.jsonl')) ? readFileSync(join(cfgDir, 'calls.jsonl'), 'utf8').trim().split('\n').map((l) => JSON.parse(l)) : []);
+  return { ...t, cfgDir, stub, calls };
+}
+const CORRECT = { correct: 0.95, wrong: 0.03, unclear: 0.02 };
+
+test('with the judge off, check output is unchanged and no model is asked', () => {
+  const t = setup();
+  const { files } = t.shots();
+  const before = t.dd('check', '--outcome', 'home and settings render', ...files);
+  const j = judgeSetup(CORRECT);
+  const { files: files2 } = j.shots();
+  const after = j.dd('check', '--outcome', 'home and settings render', ...files2);
+  assert.equal(after.code, 0, after.out);
+  assert.equal(after.out.replaceAll(files2[0].split('/')[1], 'RUN'), before.out.replaceAll(files[0].split('/')[1], 'RUN'), 'same bytes with judge config present but off');
+  assert.equal(toon(after).judge, undefined);
+  assert.equal(j.calls().length, 0);
+});
+
+test('judge pass exits 0, sends one downscaled image and the outcome only, and a re-run is a cache hit', () => {
+  const j = judgeSetup(CORRECT);
+  writeFileSync(join(j.dir, 'screen2.png'), png(2000, 1000, (x, y) => [x % 256, y % 256, 90]));
+  const { files: cited } = j.shots();
+  const r = j.dd('check', '--judge', '--outcome', 'the notes list shows three notes', ...cited);
+  assert.equal(r.code, 0, r.out);
+  const d = toon(r);
+  assert.equal(d.result, 'pass');
+  assert.equal(d.judge.model, 'claude-test-1');
+  assert.deepEqual(d.judge.judged.map((x) => [x.path, x.verdict, x.cached]), cited.map((p) => [p, 'pass', false]));
+  assert.equal(d.judge.judged[0].reason, 'The screen shows the notes list.');
+  const calls = j.calls();
+  assert.equal(calls.length, 2, 'one request per image');
+  assert.ok(calls.every((c) => c.images === 1 && c.model === 'claude-test-1'));
+  assert.deepEqual(calls.map((c) => c.width), [200, 1000], 'a 2000px capture is downscaled to fit 1280px');
+  assert.ok(calls.every((c) => c.prompt.includes('the notes list shows three notes') && !c.prompt.includes('.proof') && !c.prompt.includes(j.repo)), 'only the outcome line goes with the image');
+  const again = j.dd('check', '--judge', '--outcome', 'the notes list shows three notes', ...cited);
+  assert.equal(again.code, 0, again.out);
+  assert.ok(toon(again).judge.judged.every((x) => x.cached === true && x.verdict === 'pass'));
+  assert.equal(j.calls().length, 2, 'a cache hit asks no model');
+  const cache = readFileSync(join(j.env.DONE_DONE_HOME, 'judge', readdirSync(join(j.env.DONE_DONE_HOME, 'judge'))[0]), 'utf8');
+  assert.doesNotMatch(cache, /token|key|secret/i, 'the cache holds verdicts only');
+});
+
+test('judge wrong screen fails with exit 1, unsure and low confidence are inconclusive with exit 3', () => {
+  const j = judgeSetup({ correct: 0.05, wrong: 0.9, unclear: 0.05 });
+  const { files } = j.shots();
+  const fail = j.dd('check', '--judge', '--outcome', 'the settings page shows dark mode on', files[0]);
+  assert.equal(fail.code, 1, fail.out);
+  const f = toon(fail);
+  assert.equal(f.result, 'fail');
+  assert.equal(f.judge.judged[0].verdict, 'fail');
+  assert.match(f.findings[0].why, /judge says wrong screen/);
+  assert.match(f.help[0], /Capture the screen the outcome describes.*done-done run shots/);
+  const cachedFail = j.dd('check', '--judge', '--outcome', 'the settings page shows dark mode on', files[0]);
+  assert.equal(cachedFail.code, 1, 'a cached wrong-screen verdict still fails');
+  assert.equal(toon(cachedFail).judge.judged[0].cached, true);
+  j.stub({ correct: 0.05, wrong: 0.05, unclear: 0.9 });
+  const unsure = j.dd('check', '--judge', '--outcome', 'the sync finished in the background', files[0]);
+  assert.equal(unsure.code, 3, unsure.out);
+  assert.equal(toon(unsure).judge.judged[0].verdict, 'unsure');
+  assert.match(toon(unsure).help[0], /Look at the capture yourself/);
+  j.stub({ correct: 0.6, wrong: 0.3, unclear: 0.1 });
+  const low = j.dd('check', '--judge', '--outcome', 'the home screen shows the welcome card', files[0]);
+  assert.equal(low.code, 3, low.out);
+  assert.match(toon(low).judge.judged[0].reason, /not confident enough \(confidence 0.6 below floor 0.8\)/);
+  assert.equal(j.calls().length, 3);
+  j.stub('error');
+  const err = j.dd('check', '--judge', '--outcome', 'the home screen shows the sync banner', files[0]);
+  assert.equal(err.code, 3, 'a model error while signed in is inconclusive, not a sign-in error');
+  assert.match(toon(err).judge.judged[0].reason, /did not answer.*judge.model claude-test-1 and your plan's usage limit/);
+  assert.doesNotMatch(err.out, /auth login/);
+});
+
+test('judge.enabled turns the judge on; text evidence is not judged; a failed check is not judged', () => {
+  const j = judgeSetup(CORRECT, { projectYaml: 'app: notes\nevidence:\n  root: .proof\njudge:\n  enabled: true\njourneys:\n  shots:\n    command: node make-shots.mjs ${RUN_ID}\n' });
+  const r = j.dd('run', '--', `node make-shots.mjs mixed && node -e "require('fs').writeFileSync('.proof/mixed/session.log','saved 3 notes')"`);
+  assert.equal(r.code, 0, r.out);
+  const ok = j.dd('check', '--outcome', 'three notes are saved', '.proof/mixed/home.png', '.proof/mixed/session.log');
+  assert.equal(ok.code, 0, ok.out);
+  const d = toon(ok);
+  assert.deepEqual(d.judge.judged.map((x) => x.path), ['.proof/mixed/home.png']);
+  assert.deepEqual(d.judge.not_judged, ['.proof/mixed/session.log']);
+  assert.match(d.judge.note, /text, log and video evidence are not/);
+  const bad = j.dd('check', '--outcome', 'three notes are saved', '.proof/mixed/home.png', '.proof/nope.png');
+  assert.equal(bad.code, 1, bad.out);
+  assert.match(toon(bad).judge.skipped, /already failed/);
+  writeFileSync(join(j.repo, 'stray.png'), screen(11));
+  const stray = j.dd('check', '--outcome', 'three notes are saved', 'stray.png');
+  assert.equal(stray.code, 3, stray.out);
+  assert.deepEqual(toon(stray).judge.judged, [], 'a capture with no run record is never sent');
+  assert.equal(j.calls().length, 1);
+});
+
+test('judge with no sign-in is a config error naming the sign-in command, and writes no receipt', () => {
+  const j = judgeSetup(CORRECT, { loggedIn: false });
+  const { files } = j.shots();
+  const r = j.dd('receipt', '--judge', '--outcome', 'the notes list shows three notes', files[0]);
+  assert.equal(r.code, 2, r.out);
+  const e = toon(r);
+  assert.match(e.error, /^judge: /);
+  assert.ok(e.help[0].includes(`CLAUDE_CONFIG_DIR=${j.cfgDir}`) && e.help[0].includes('auth login'), e.help[0]);
+  assert.equal(j.dd('receipt', '--verify', j.head()).code, 1, 'no receipt was written');
+  rmSync(j.cfgDir, { recursive: true });
+  const missing = j.dd('check', '--judge', '--outcome', 'the notes list shows three notes', files[0]);
+  assert.equal(missing.code, 2, missing.out);
+  assert.match(toon(missing).help[0], /mkdir -p .*auth login/);
+  assert.doesNotMatch(r.out + missing.out, /token|secret/i);
+  mkdirSync(j.cfgDir);
+  j.stub(CORRECT, true);
+  const ok = j.dd('receipt', '--judge', '--outcome', 'the notes list shows three notes', files[0]);
+  assert.equal(ok.code, 0, ok.out);
+  assert.equal(toon(ok).judge.judged[0].verdict, 'pass');
+});
+
+test('without the optional kit, --judge is a config error naming the npx command; the default model is Opus', () => {
+  const j = judgeSetup(CORRECT);
+  const { files } = j.shots();
+  // A plain install: done-done and its dependencies, without the optional @byokit/decide peer.
+  const root = join(dirname(CLI), '..');
+  const pkg = join(j.dir, 'plain');
+  cpSync(join(root, 'dist'), join(pkg, 'dist'), { recursive: true });
+  cpSync(join(root, 'package.json'), join(pkg, 'package.json'));
+  mkdirSync(join(pkg, 'node_modules', '@toon-format'), { recursive: true });
+  symlinkSync(join(root, 'node_modules', 'yaml'), join(pkg, 'node_modules', 'yaml'));
+  symlinkSync(join(root, 'node_modules', '@toon-format', 'toon'), join(pkg, 'node_modules', '@toon-format', 'toon'));
+  const args = ['check', '--judge', '--outcome', "Umer's notes list shows three notes", files[0]];
+  const plain = spawnSync(process.execPath, [join(pkg, 'dist', 'cli.js'), ...args], { cwd: j.repo, env: j.env, encoding: 'utf8' });
+  assert.equal(plain.status, 2, plain.stdout + plain.stderr);
+  const e = toon({ out: plain.stdout });
+  assert.match(e.error, /needs the optional @byokit\/decide@0\.6\.5 kit/);
+  assert.equal(e.help[0], `Run this check with the kit: npx -y -p done-done -p @byokit/decide@0.6.5 done-done check --judge --outcome 'Umer'\\''s notes list shows three notes' ${files[0]}`);
+  assert.equal(j.calls().length, 0);
+  writeFileSync(join(j.env.DONE_DONE_HOME, 'config.yaml'), readFileSync(join(j.env.DONE_DONE_HOME, 'config.yaml'), 'utf8').replace('  model: claude-test-1\n', ''));
+  assert.equal(j.dd(...args).code, 0);
+  assert.equal(j.calls()[0].model, 'claude-opus-5-5');
 });

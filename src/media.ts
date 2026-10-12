@@ -1,9 +1,9 @@
 import { spawnSync } from 'node:child_process';
 import { extname } from 'node:path';
-import { inflateSync } from 'node:zlib';
+import { crc32, deflateSync, inflateSync } from 'node:zlib';
 
 // Result of validating one evidence file: ok, fail (the file is bad) or unverified (could not tell).
-export type Verdict = { status: 'ok' | 'fail' | 'unverified'; type: string; why?: string };
+export type Verdict = { status: 'ok' | 'fail' | 'unverified'; type: string; why?: string; w?: number; h?: number };
 
 const MIN_SIDE = 64;
 const BLANK_STD = 0.005;
@@ -61,14 +61,15 @@ function png(b: Buffer): Verdict {
   if (b.length < 45 || b.toString('latin1', b.length - 8, b.length - 4) !== 'IEND') return { status: 'fail', type: 'png', why: 'png truncated (no IEND chunk at the end)' };
   const w = b.readUInt32BE(16), h = b.readUInt32BE(20);
   if (w < MIN_SIDE || h < MIN_SIDE) return { status: 'fail', type: 'png', why: `png is ${w}x${h}, smaller than ${MIN_SIDE}x${MIN_SIDE}` };
-  const std = pngLumaStd(b, w, h);
+  const std = pngLumaStd(b);
   if (std !== undefined && std < BLANK_STD) return { status: 'fail', type: 'png', why: `png is a blank frame (luminance spread ${std.toFixed(4)})` };
-  return { status: 'ok', type: 'png' };
+  return { status: 'ok', type: 'png', w, h };
 }
 
-// Decodes 8-bit non-interlaced PNGs and returns the standard deviation of luminance (0..1).
-// Other variants return undefined: the blank-frame guard is skipped, the file is still structurally checked.
-function pngLumaStd(b: Buffer, w: number, h: number): number | undefined {
+// Decodes an 8-bit non-interlaced PNG to RGB (alpha is dropped).
+// Other variants return undefined: callers skip what needs pixels and keep the structural checks.
+export function pngPixels(b: Buffer): { w: number; h: number; rgb: Uint8Array } | undefined {
+  const w = b.readUInt32BE(16), h = b.readUInt32BE(20);
   const depth = b[24], colour = b[25], interlace = b[28];
   const channels = ({ 0: 1, 2: 3, 3: 1, 4: 2, 6: 4 } as Record<number, number>)[colour];
   if (depth !== 8 || interlace !== 0 || !channels) return undefined;
@@ -80,6 +81,7 @@ function pngLumaStd(b: Buffer, w: number, h: number): number | undefined {
     if (kind === 'PLTE') palette = b.subarray(off + 8, off + 8 + len);
     off += 12 + len;
   }
+  if (colour === 3 && !palette) return undefined;
   let raw: Buffer;
   try {
     raw = inflateSync(Buffer.concat(idat));
@@ -88,9 +90,8 @@ function pngLumaStd(b: Buffer, w: number, h: number): number | undefined {
   }
   const stride = w * channels;
   if (raw.length < h * (stride + 1)) return undefined;
+  const rgb = new Uint8Array(w * h * 3);
   let prev = new Uint8Array(stride), cur = new Uint8Array(stride);
-  let n = 0, sum = 0, sq = 0;
-  const step = Math.max(1, Math.floor(w / 256));
   for (let y = 0; y < h; y++) {
     const filter = raw[y * (stride + 1)], row = raw.subarray(y * (stride + 1) + 1, (y + 1) * (stride + 1));
     for (let i = 0; i < stride; i++) {
@@ -105,23 +106,68 @@ function pngLumaStd(b: Buffer, w: number, h: number): number | undefined {
       }
       cur[i] = (row[i] + p) & 0xff;
     }
-    for (let x = 0; x < w; x += step) {
+    for (let x = 0; x < w; x++) {
       let r, g, bl;
       if (colour === 3) {
-        if (!palette) return undefined;
         const k = cur[x] * 3;
-        [r, g, bl] = [palette[k], palette[k + 1], palette[k + 2]];
+        [r, g, bl] = [palette![k], palette![k + 1], palette![k + 2]];
       } else if (channels >= 3) [r, g, bl] = [cur[x * channels], cur[x * channels + 1], cur[x * channels + 2]];
       else r = g = bl = cur[x * channels];
-      const l = (0.299 * r + 0.587 * g + 0.114 * bl) / 255;
+      const o = (y * w + x) * 3;
+      rgb[o] = r;
+      rgb[o + 1] = g;
+      rgb[o + 2] = bl;
+    }
+    [prev, cur] = [cur, prev];
+  }
+  return { w, h, rgb };
+}
+
+// Standard deviation of luminance (0..1), sampled across each row.
+function pngLumaStd(b: Buffer): number | undefined {
+  const px = pngPixels(b);
+  if (!px) return undefined;
+  const { w, h, rgb } = px;
+  let n = 0, sum = 0, sq = 0;
+  const step = Math.max(1, Math.floor(w / 256));
+  for (let y = 0; y < h; y++)
+    for (let x = 0; x < w; x += step) {
+      const o = (y * w + x) * 3;
+      const l = (0.299 * rgb[o] + 0.587 * rgb[o + 1] + 0.114 * rgb[o + 2]) / 255;
       n++;
       sum += l;
       sq += l * l;
     }
-    [prev, cur] = [cur, prev];
-  }
   const mean = sum / n;
   return Math.sqrt(Math.max(0, sq / n - mean * mean));
+}
+
+// Shrinks a PNG by a whole box factor until its long side fits `max`, and re-encodes it as 8-bit RGB.
+export function downscalePng(b: Buffer, max: number): Buffer | undefined {
+  const px = pngPixels(b);
+  if (!px) return undefined;
+  const k = Math.ceil(Math.max(px.w, px.h) / max);
+  const w = Math.floor(px.w / k), h = Math.floor(px.h / k);
+  if (!w || !h) return undefined;
+  const raw = Buffer.alloc(h * (w * 3 + 1));
+  for (let y = 0; y < h; y++)
+    for (let x = 0; x < w; x++)
+      for (let c = 0; c < 3; c++) {
+        let sum = 0;
+        for (let dy = 0; dy < k; dy++) for (let dx = 0; dx < k; dx++) sum += px.rgb[((y * k + dy) * px.w + x * k + dx) * 3 + c];
+        raw[y * (w * 3 + 1) + 1 + x * 3 + c] = Math.round(sum / (k * k));
+      }
+  const chunk = (type: string, data: Buffer) => {
+    const head = Buffer.alloc(8), tail = Buffer.alloc(4);
+    head.writeUInt32BE(data.length);
+    head.write(type, 4, 'latin1');
+    tail.writeUInt32BE(crc32(Buffer.concat([head.subarray(4), data])));
+    return Buffer.concat([head, data, tail]);
+  };
+  const ihdr = Buffer.from([0, 0, 0, 0, 0, 0, 0, 0, 8, 2, 0, 0, 0]);
+  ihdr.writeUInt32BE(w, 0);
+  ihdr.writeUInt32BE(h, 4);
+  return Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), chunk('IHDR', ihdr), chunk('IDAT', deflateSync(raw)), chunk('IEND', Buffer.alloc(0))]);
 }
 
 function jpeg(b: Buffer): Verdict {
@@ -131,7 +177,7 @@ function jpeg(b: Buffer): Verdict {
     if (m >= 0xc0 && m <= 0xcf && m !== 0xc4 && m !== 0xc8 && m !== 0xcc) {
       const h = b.readUInt16BE(off + 5), w = b.readUInt16BE(off + 7);
       if (w < MIN_SIDE || h < MIN_SIDE) return { status: 'fail', type: 'jpeg', why: `jpeg is ${w}x${h}, smaller than ${MIN_SIDE}x${MIN_SIDE}` };
-      return { status: 'ok', type: 'jpeg' };
+      return { status: 'ok', type: 'jpeg', w, h };
     }
   }
   return { status: 'fail', type: 'jpeg', why: 'jpeg has no frame header' };

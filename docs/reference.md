@@ -4,7 +4,7 @@ Everything `init`, `run`, `check`, `receipt` and the config files do. For the ov
 
 ## Install
 
-For the install steps, see the [README quick start](../README.md#quick-start). done-done needs Node 22.5 or later and git. `ffprobe` is optional. Without it, videos are reported as "not verified" and the check is inconclusive, never a pass.
+For the install steps, see the [README quick start](../README.md#quick-start). done-done needs Node 22.5 or later and git (the opt-in judge needs Node 22.18). `ffprobe` is optional. Without it, videos are reported as "not verified" and the check is inconclusive, never a pass.
 
 ## Use
 
@@ -94,6 +94,41 @@ Files that are in no run record give an inconclusive result: nothing ties them t
 
 `evidence: not proven: <cause>` is inconclusive too. A repo can set `checks.not_proven: allow`, but that setting is honoured only when the config is read from a trusted ref (`--trusted-ref`).
 
+### Judge relevance (opt-in)
+
+The checks above prove a screenshot is real, fresh and tied to a commit. They do not prove it shows the outcome. `--judge` adds that one question: is this capture the correct screen for the outcome, or the wrong one (another screen, an error, a dialog or keyboard hiding the content)?
+
+```sh
+done-done check --judge --from pr-body.md
+done-done receipt --judge --from pr-body.md
+```
+
+- **Off by default.** Turn it on per run with `--judge`, or for a project with `judge.enabled: true`. With it off, nothing changes and no model is asked.
+- **One question per capture.** Each cited PNG or JPEG that is in a done-done run record goes to the model with the claim's `outcome:` line and nothing else: no repo, no paths, no other files. Text, log and video evidence are not judged, and the result says so.
+- **Your own Claude plan, through BYOKit.** The judge uses [`@byokit/decide`](https://www.npmjs.com/package/@byokit/decide)'s Claude Code backend, which runs your own `claude` binary against a sign-in folder kept only for done-done. done-done never reads, copies or stores a credential. The kit is an optional peer dependency, so a plain install stays small; the judge needs it and Node 22.18 or later. Without it, `--judge` exits 2 with the command to run the same check with the kit:
+
+  ```sh
+  npx -y -p done-done -p @byokit/decide@0.6.5 done-done check --judge --from pr-body.md
+  ```
+
+  In a project that installs done-done, `npm install -D @byokit/decide@0.6.5` adds it for good. Sign in once:
+
+  ```sh
+  mkdir -p ~/.done-done/claude && CLAUDE_CONFIG_DIR=~/.done-done/claude claude auth login
+  ```
+
+- **Bounded.** Captures longer than 1280 px on their long side are downscaled first (8-bit PNG; a larger JPEG is reported unsure). One request per capture, at most 10 requests per check (later captures are unsure), a 120-second timeout, no retries.
+- **Cached.** Verdicts are kept in `$DONE_DONE_HOME/judge/`, keyed by the capture's sha256, the outcome text and the model, so a re-run asks no model.
+- **Only runs on a passing check.** When the deterministic checks already fail, no capture is judged.
+
+| Verdict | Result | Exit |
+|---|---|---|
+| `pass`: the capture shows the outcome | pass | 0 |
+| `fail`: wrong screen | fail | 1 |
+| `unsure`: the model said it cannot tell, was less than 80% sure, or did not answer (a model error or a used-up plan) | inconclusive | 3 |
+
+The result gains a `judge` block with the model and, for each judged file, its verdict, a short reason and whether it came from the cache. A missing or signed-out sign-in folder, a sign-in that is not a Claude subscription, a sign-in folder that is (or links to) your own `~/.claude`, a missing `claude` binary, a missing `@byokit/decide` kit or a Node older than 22.18 is a config error (exit 2) whose `help` line is the command to fix it. The kit cannot tell a bad `judge.model` from a used-up plan, so both are `unsure` with a reason naming each. The judge's confidence is the model's own estimate, not a calibrated score.
+
 ### Record a receipt
 
 A receipt ties one passing check to one commit and to the exact bytes it cited, so a merge step or CI can re-verify the same proof later.
@@ -143,6 +178,10 @@ There are two files. Unknown keys are an error in both.
 ```yaml
 evidence:
   local_root: ~/.done-done/evidence   # evidence root for repos that set none (<local_root>/<app>)
+judge:                                # used only when the judge is on
+  model: claude-opus-5-5              # the default
+  bin: /usr/local/bin/claude          # default: the first `claude` on PATH
+  config_dir: ~/.done-done/claude     # the default; a sign-in folder for done-done only
 ```
 
 **Project:** `<repo>/.done-done.yaml`.
@@ -157,6 +196,7 @@ evidence:
 | `evidence.ignore_paths` | `[]` |
 | `checks.not_proven` | `inconclusive`; `allow` is honoured only from `--trusted-ref` |
 | `checks.fix_title` | `^(fix\|bugfix\|hotfix)\b`: titles that need a repro |
+| `judge.enabled` | `false`: judge relevance on every `check` and `receipt` |
 
 **Precedence:** built-in defaults, then the global file, then the project file.
 

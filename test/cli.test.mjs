@@ -410,7 +410,6 @@ test('evidence edited after its run fails as changed after that run', () => {
   assert.equal(verify.code, 1, verify.out);
   assert.match(verify.out, new RegExp(`changed after run ${id}`));
 });
-});
 
 test('receipt refuses a not-proven pass that cites no evidence, and writes nothing', () => {
   const { repo, sh, dd, head } = setup();

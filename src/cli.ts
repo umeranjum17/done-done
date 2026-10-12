@@ -409,19 +409,18 @@ async function runCheck(argv: string[]): Promise<CheckOutcome> {
     cited.push({ path: receiptPath(repo, cfg, path), sha256: hash });
     if (seen.has(hash)) findings.push({ level: 'fail', why: `${name}: byte-identical to ${seen.get(hash)}` });
     seen.set(hash, name);
-    if (v.status === 'fail') continue;
     // A file in the evidence root is claimed by the record that lists its path; a copy elsewhere, by its bytes.
     const inRoot = under(cfg.evidence.root, path);
     const claims = records.filter((r) => r.files.some((f) => f.sha256 === hash && (inRoot === null || f.path === inRoot)));
-    if (!claims.length) {
-      // The path is named in a run record but the bytes no longer match: the file was edited after its run.
-      if (inRoot !== null) {
-        const edited = records.filter((r) => r.files.some((f) => f.path === inRoot));
-        if (edited.length) {
-          findings.push({ level: 'fail', why: `${name}: changed after run ${edited.map((r) => r.run_id).join(', ')}` });
-          continue;
-        }
+    if (!claims.length && inRoot !== null) {
+      const edited = records.filter((r) => r.files.some((f) => f.path === inRoot));
+      if (edited.length) {
+        findings.push({ level: 'fail', why: `${name}: changed after run ${edited.map((r) => r.run_id).join(', ')}` });
+        continue;
       }
+    }
+    if (v.status === 'fail') continue;
+    if (!claims.length) {
       findings.push({ level: 'inconclusive', why: `${name}: not in any done-done run record, so it is not tied to a commit` });
       continue;
     }

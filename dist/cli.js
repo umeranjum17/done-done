@@ -847,16 +847,17 @@ async function runVerify(dir) {
         const command = journey?.command;
         const timeout = journey?.timeout ?? '30m';
         const limit = parseDuration(timeout);
+        const reused = done('resolve');
+        if (reused)
+            logEvent(dir, { step: 'resolve', status: 'completed', reused: true });
+        else
+            begin('resolve');
         if (!command)
             throw new Error(`journey ${run.journey} is not in .done-done.yaml`);
         if (limit === null)
             throw new Error(`journeys.${run.journey}.timeout must be a duration such as 30m or 90s, not ${timeout}`);
-        if (done('resolve'))
-            logEvent(dir, { step: 'resolve', status: 'completed', reused: true });
-        else {
-            begin('resolve');
+        if (!reused)
             set(step, 'completed');
-        }
         let rec;
         if (done('drive') && run.record) {
             begin('drive');

@@ -1767,6 +1767,10 @@ test('verify --judge with judge.route auto: opencode judges a claude author thro
   assert.equal(b.result, 'fail');
   assert.match(b.reason, /^judge: .*judge says wrong screen/);
   assert.deepEqual(b.steps.map((x) => x.status), ['completed', 'completed', 'completed', 'failed', 'skipped', 'completed'], 'the check passed, the judge failed it, no receipt');
+  // A rerun of the judged run judges again (the cached wrong verdict), so it cannot pass with the judge left out.
+  const re = spawnSync(process.execPath, [CLI, 'rerun', '--run', b.run_id], { cwd: t.repo, env: right.env, encoding: 'utf8' });
+  assert.equal(re.status, 1, re.stdout + re.stderr);
+  assert.deepEqual(toon({ out: re.stdout }).steps.map((x) => [x.name, x.status]).slice(3, 5), [['judge', 'failed'], ['receipt', 'skipped']]);
   // The author's own agent and model as the judge is a usage error before any run starts, unless allow_same accepts it.
   writeFileSync(join(t.env.DONE_DONE_HOME, 'config.yaml'), 'agent: opencode\njudge:\n  route: answerer:opencode\n');
   const same = verify(right.env, 'home and settings render');

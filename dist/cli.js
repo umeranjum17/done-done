@@ -765,6 +765,7 @@ const HEARTBEAT_MS = 5_000;
 // A run that never recorded its runner's pid this long after it was created has no runner.
 const STALE_MS = 60_000;
 const runsRoot = (app) => join(home(), 'runs', app);
+const STEPS = ['resolve', 'drive', 'check', 'judge', 'receipt', 'report'];
 const now = () => new Date().toISOString();
 const errorText = (e) => (e.stderr || e.message || String(e)).trim();
 const killGroup = (pgid) => {
@@ -1049,7 +1050,7 @@ async function cmdVerify(argv) {
     const created = now();
     const run = {
         schema: 2, run_id: id, kind: 'verify', app: cfg.app, repo, journey, claim: values.outcome, claim_id: values['claim-id'] ?? null, judge: judging, status: 'pending',
-        steps: ['resolve', 'drive', 'check', 'judge', 'receipt', 'report'].map((name) => ({ name, status: 'pending' })), created, updated: created,
+        steps: STEPS.map((name) => ({ name, status: 'pending' })), created, updated: created,
         inputs: inputsOf(repo, cfg, journey),
     };
     saveRun(dir, run);
@@ -1146,9 +1147,17 @@ async function cmdRerun(argv) {
     const id = newRunId(git(repo, 'rev-parse', 'HEAD'));
     const dir = join(root, id);
     mkdirSync(join(dir, 'logs'), { recursive: true });
-    const steps = src.steps.map((s) => (reused(s.name) && s.status === 'completed' ? { ...s } : { name: s.name, status: 'pending' }));
+    // A rerun judges when its source did or config now turns the judge on; a forbidden judge is a usage error here too.
+    // Steps follow the current list, so a run from before the judge step gains it.
+    const judging = !!src.judge || cfg.judge.enabled;
+    if (judging)
+        selectJudge(cfg, selectAgent(cfg));
+    const steps = STEPS.map((name) => {
+        const s = src.steps.find((x) => x.name === name);
+        return s && reused(name) && s.status === 'completed' ? { ...s } : { name, status: 'pending' };
+    });
     const created = now();
-    const run = { schema: 2, run_id: id, kind: src.kind, app: cfg.app, repo: src.repo, journey: src.journey, claim: src.claim, claim_id: src.claim_id, status: 'pending', inputs, steps, created, updated: created, ...(driveReuse && src.record && { record: src.record }) };
+    const run = { schema: 2, run_id: id, kind: src.kind, app: cfg.app, repo: src.repo, journey: src.journey, claim: src.claim, claim_id: src.claim_id, judge: judging, status: 'pending', inputs, steps, created, updated: created, ...(driveReuse && src.record && { record: src.record }) };
     saveRun(dir, run);
     for (const s of steps) {
         const f = join(root, srcId, 'logs', `${s.name}.log`);

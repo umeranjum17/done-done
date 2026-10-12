@@ -1801,6 +1801,23 @@ test('verify --judge on the answerer route: a malformed judge answer is one requ
   assert.match(o.reason, /judge says unsure: the judge did not answer: the agent did not answer with valid JSON after 1 try/, r.stdout);
 });
 
+test('a rerun refused by the judge preflight exits 2 and creates no run folder', () => {
+  const t = setup();
+  mkdirSync(t.env.DONE_DONE_HOME, { recursive: true });
+  writeFileSync(join(t.env.DONE_DONE_HOME, 'config.yaml'), 'agent: claude\n');
+  const s = stubAgents(t.env, JSON.stringify({ relevance: { probabilities: CORRECT, rationale: 'The list shows the notes.', personReason: 'The list shows the notes.' } }));
+  symlinkSync(process.execPath, join(s.bin, 'node'));
+  const first = spawnSync(process.execPath, [CLI, 'verify', 'shots', '--outcome', 'home and settings render', '--judge', '--foreground'], { cwd: t.repo, env: s.env, encoding: 'utf8' });
+  assert.equal(first.status, 0, first.stdout + first.stderr);
+  const runs = join(t.env.DONE_DONE_HOME, 'runs', 'notes');
+  const before = readdirSync(runs).sort();
+  writeFileSync(join(t.env.DONE_DONE_HOME, 'config.yaml'), 'agent: opencode\njudge:\n  route: answerer:opencode\n');
+  const re = spawnSync(process.execPath, [CLI, 'rerun', '--run', toon({ out: first.stdout }).run_id], { cwd: t.repo, env: s.env, encoding: 'utf8' });
+  assert.equal(re.status, 2, re.stdout + re.stderr);
+  assert.match(toon({ out: re.stdout }).error, /is the author's own agent and model/);
+  assert.deepEqual(readdirSync(runs).sort(), before, 'the refused rerun leaves no new run folder');
+});
+
 // doctor: read-only health check. Required items (git, config, evidence root) gate
 // exit 0/2; the skill, agent, judge and ffprobe items are optional and never fail it.
 // An isolated PATH holding only git plus the named stub binaries, so agent/judge/ffprobe

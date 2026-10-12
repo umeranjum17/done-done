@@ -1148,14 +1148,14 @@ async function cmdRerun(argv) {
     const same = !!src.inputs && ['head', 'journey', 'skill'].every((k) => src.inputs[k] === inputs[k]);
     const driveReuse = same && drivesClean(src.record, src.inputs?.head);
     const reused = (name) => (name === 'resolve' && same) || (name === 'drive' && driveReuse);
-    const id = newRunId(git(repo, 'rev-parse', 'HEAD'));
-    const dir = join(root, id);
-    mkdirSync(join(dir, 'logs'), { recursive: true });
     // A rerun judges when its source did or config now turns the judge on; a forbidden judge is a usage error here too.
     // Steps follow the current list, so a run from before the judge step gains it.
     const judging = !!src.judge || cfg.judge.enabled;
     if (judging && cfg.judge.route !== 'auto')
         selectJudge(cfg, selectAgent(cfg));
+    const id = newRunId(git(repo, 'rev-parse', 'HEAD'));
+    const dir = join(root, id);
+    mkdirSync(join(dir, 'logs'), { recursive: true });
     const steps = STEPS.map((name) => {
         const s = src.steps.find((x) => x.name === name);
         return s && reused(name) && s.status === 'completed' ? { ...s } : { name, status: 'pending' };

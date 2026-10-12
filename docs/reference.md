@@ -70,7 +70,7 @@ done-done doctor
 done-done doctor --probe
 ```
 
-`--probe` also asks the agent one JSON-schema question (one call at its model) and adds a `probe` item that is then required: `ok` only when the agent answers with a valid object. The call record goes to `$DONE_DONE_HOME/agents/` (mode 0600); it keeps the agent, model, schema, tools, cwd, timeout, argv, prompt size in bytes, timing, exit code, answer or error, and the last 2000 characters of stderr, never the prompt text.
+`--probe` also asks the agent one JSON-schema question (one call at its model) and adds a `probe` item that is then required: `ok` only when the agent answers with a valid object. The call record goes to `$DONE_DONE_HOME/agents/` (mode 0600); it keeps the agent, model, schema, tools, cwd, timeout, argv, prompt size in bytes, timing, exit code, answer or error, and the last 2000 characters of stderr, never the prompt text. A failed probe row shows one clean line: the agent's last line that names an error, or else its last meaningful line, with no colour codes or stack frames and at most 200 characters. The raw stderr stays in the record.
 
 #### Agents
 

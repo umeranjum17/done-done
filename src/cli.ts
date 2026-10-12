@@ -974,7 +974,7 @@ function showRun(dir: string, cfg: Config, command: string, gone = false): numbe
     code === WAITING ? [`The run goes on without this command; read it later: done-done status --run ${run.run_id}`]
     : code === PASS ? [`Verify this receipt (CI or merge): done-done receipt --verify ${rec!.commit}`]
     : status === 'cancelled' ? [`Start again from the failed step: done-done rerun --run ${run.run_id}`, `List past runs: done-done history`]
-    : [`Read the step logs in ${shown(run.repo, join(dir, 'logs'))}`, `Fix the cause, commit, then start a new run: ${again}`];
+    : [`Read the step logs in ${shown(run.repo, join(dir, 'logs'))}`, `Fix the cause, commit, then run again from the failed step: done-done rerun --run ${run.run_id}`, `Or start a new run: ${again}`];
   emit(result);
   return code;
 }

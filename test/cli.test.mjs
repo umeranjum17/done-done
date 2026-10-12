@@ -650,6 +650,48 @@ test('init works in a repo path with a space', () => {
   assert.equal(parse(readFileSync(join(repo, '.done-done.yaml'), 'utf8')).app, 'my project');
 });
 
+test('init --agent claude adds a SessionStart hook that shows the bare state, merges, and never duplicates', () => {
+  const { dir, repo, env, dd } = bareRepo();
+  const settings = join(repo, '.claude', 'settings.json');
+  const r = dd('init', '--agent', 'claude');
+  assert.equal(r.code, 0, r.out);
+  assert.equal(toon(r).claude_hook, 'added to .claude/settings.json');
+  const hooks = JSON.parse(readFileSync(settings, 'utf8')).hooks.SessionStart;
+  assert.equal(hooks.length, 1);
+  const { command } = hooks[0].hooks[0];
+  // Run the hook as Claude Code does: through a shell, from the repo, with done-done on PATH and without it.
+  const bin = join(dir, 'bin');
+  mkdirSync(bin);
+  writeFileSync(join(bin, 'done-done'), `#!/bin/sh\nexec ${JSON.stringify(process.execPath)} ${JSON.stringify(CLI)} "$@"\n`, { mode: 0o755 });
+  const hook = (path) => spawnSync('/bin/sh', ['-c', command], { cwd: repo, env: { ...env, PATH: path }, encoding: 'utf8' });
+  const on = hook(`${bin}:${env.PATH}`);
+  assert.equal(on.status, 0, on.stderr);
+  assert.equal(on.stdout, dd().out, 'the hook prints the bare done-done state');
+  assert.equal(toon({ out: on.stdout }).config, 'present');
+  const off = hook(join(dir, 'empty'));
+  assert.deepEqual([off.status, off.stdout, off.stderr], [0, '', ''], 'without done-done on PATH the hook is silent and exits 0');
+  const before = readFileSync(settings);
+  assert.equal(toon(dd('init', '--agent', 'claude')).claude_hook, 'unchanged');
+  assert.deepEqual(readFileSync(settings), before, 'a second run adds no duplicate');
+  // An existing settings file keeps its other keys and hooks.
+  const other = { permissions: { allow: ['Bash(npm test)'] }, hooks: { SessionStart: [{ matcher: 'startup', hooks: [{ type: 'command', command: 'echo hi' }] }], Stop: [{ hooks: [{ type: 'command', command: 'echo bye' }] }] } };
+  const two = bareRepo();
+  mkdirSync(join(two.repo, '.claude'));
+  writeFileSync(join(two.repo, '.claude', 'settings.json'), JSON.stringify(other));
+  assert.equal(two.dd('init', '--agent', 'claude').code, 0);
+  const merged = JSON.parse(readFileSync(join(two.repo, '.claude', 'settings.json'), 'utf8'));
+  assert.deepEqual(merged, { ...other, hooks: { ...other.hooks, SessionStart: [...other.hooks.SessionStart, hooks[0]] } }, 'both hooks and every other key are kept');
+  // Another agent is a usage error naming the supported value; a malformed settings file is left untouched.
+  const bad = two.dd('init', '--agent', 'codex');
+  assert.equal(bad.code, 2, bad.out);
+  assert.match(toon(bad).error, /supported value is claude/);
+  writeFileSync(join(two.repo, '.claude', 'settings.json'), '{ nope');
+  const broken = two.dd('init', '--agent', 'claude');
+  assert.equal(broken.code, 2, broken.out);
+  assert.match(toon(broken).help[0], /Fix \.claude\/settings\.json/);
+  assert.equal(readFileSync(join(two.repo, '.claude', 'settings.json'), 'utf8'), '{ nope');
+});
+
 test('init outside a git repository reports a clear usage error', () => {
   const dir = mkdtempSync(join(tmpdir(), 'done-done-nogit-'));
   after(() => rmSync(dir, { recursive: true, force: true }));

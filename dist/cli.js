@@ -34,15 +34,17 @@ const FLAGS = {
     '--claim-id <id>': 'the claim the evidence proves; evidence already used for another claim id is reuse (default: the current branch, or the PR branch with --from <PR URL>; required on a detached HEAD)',
     '--judge': 'a model says whether each PNG/JPEG capture shows the outcome (off by default; or judge.enabled: true)',
     '--verify <head>': 'read-only: verify the receipt recorded for <head>',
+    '--agent claude': 'also add a SessionStart hook to .claude/settings.json that shows `done-done` to each session (opt-in)',
 };
 // `more` is the reference text a command needs beyond its flags, shared with the top-level help.
 const COMMANDS = {
     init: {
         usage: [
             ['done-done init', 'write a minimal .done-done.yaml (evidence lives outside the repo)'],
+            ['done-done init --agent claude', 'also show this repo\'s done-done state at each Claude Code session start'],
             ['done-done init --journey <name> -- <command...>', "record a journey's capture recipe in .done-done.yaml"],
         ],
-        flags: ['--journey <name>', '-- <command...>'],
+        flags: ['--agent claude', '--journey <name>', '-- <command...>'],
         more: [JOURNEYS_TEXT],
     },
     run: {
@@ -698,15 +700,46 @@ function ensureIgnored(repo, rel) {
     appendFileSync(file, `${text && !text.endsWith('\n') ? '\n' : ''}${entry}\n`);
     return true;
 }
+// The Claude Code SessionStart hook `init --agent claude` adds; Claude Code shows its stdout to the session.
+// Without done-done on PATH it prints nothing and exits 0, so it never breaks a session.
+const CLAUDE_HOOK = 'command -v done-done >/dev/null && done-done || true';
+// The repo's .claude/settings.json with the hook merged in, keeping every other key and hook; no text when it is already there.
+function claudeSettings(repo) {
+    const file = join(repo, '.claude', 'settings.json');
+    const bad = (why) => new UsageError(`.claude/settings.json ${why}`, 'Fix .claude/settings.json, then re-run: done-done init --agent claude');
+    const isObject = (v) => !!v && typeof v === 'object' && !Array.isArray(v);
+    let settings = {};
+    if (existsSync(file)) {
+        try {
+            settings = JSON.parse(readFileSync(file, 'utf8'));
+        }
+        catch (e) {
+            throw bad(`is not valid JSON (${e.message})`);
+        }
+    }
+    if (!isObject(settings))
+        throw bad('is not a JSON object');
+    if (settings.hooks !== undefined && !isObject(settings.hooks))
+        throw bad('has "hooks" that is not an object');
+    const start = settings.hooks?.SessionStart ?? [];
+    if (!Array.isArray(start))
+        throw bad('has "hooks.SessionStart" that is not a list');
+    if (start.some((m) => Array.isArray(m?.hooks) && m.hooks.some((h) => h?.command === CLAUDE_HOOK)))
+        return { file };
+    settings.hooks = { ...settings.hooks, SessionStart: [...start, { hooks: [{ type: 'command', command: CLAUDE_HOOK }] }] };
+    return { file, text: `${JSON.stringify(settings, null, 2)}\n` };
+}
 function cmdInit(argv) {
     const dash = argv.indexOf('--');
     const { values } = parseArgs({
         args: dash < 0 ? argv : argv.slice(0, dash),
-        options: { journey: { type: 'string' } },
+        options: { agent: { type: 'string' }, journey: { type: 'string' } },
         allowPositionals: false,
     });
     const parts = dash < 0 ? [] : argv.slice(dash + 1);
     const journey = values.journey ?? null;
+    if (values.agent !== undefined && values.agent !== 'claude')
+        throw new UsageError(`--agent ${values.agent} is not supported; the supported value is claude`, 'Run: done-done init --agent claude');
     if (journey === null && parts.length)
         throw new UsageError('init needs --journey <name> to record a command after --');
     if (journey !== null && !parts.some((p) => p.trim()))
@@ -717,6 +750,7 @@ function cmdInit(argv) {
     const file = join(repo, '.done-done.yaml');
     const existed = existsSync(file);
     const cfg = loadConfig(repo); // validates the existing project config; malformed -> exit 2, no writes
+    const hook = values.agent ? claudeSettings(repo) : undefined; // likewise validated before any write
     if (journey !== null) {
         // Record the capture recipe in the repo so any checkout can re-run the proof.
         // The command is stored verbatim; ${RUN_ID} in it becomes the run id, like a run -- command.
@@ -760,6 +794,11 @@ function cmdInit(argv) {
     // An evidence root inside the repo (an older config's `root: .proof`) stays out of git.
     const rel = under(repo, cfg.evidence.root);
     const added = !!rel && ensureIgnored(repo, rel);
+    if (hook?.text) {
+        mkdirSync(dirname(hook.file), { recursive: true });
+        writeFileSync(`${hook.file}.tmp`, hook.text);
+        renameSync(`${hook.file}.tmp`, hook.file);
+    }
     const root = shown(repo, cfg.evidence.root);
     const check = 'done-done check --outcome "<what you proved>" <files it recorded>';
     emit({
@@ -769,9 +808,13 @@ function cmdInit(argv) {
         app: cfg.app,
         evidence_root: root,
         gitignore: added ? `added ${rel.replace(/\/+$/, '')}/` : 'unchanged',
-        help: Object.keys(cfg.journeys).length
-            ? [`Capture proof: ${captureHint(cfg)}, then: ${check}`]
-            : [`Add a journey that drives the real app and saves proof under $DONE_DONE_EVIDENCE_ROOT (each run's own folder in ${root}), e.g. ${journeyExample}`, `Then commit, run \`done-done run smoke\`, and: ${check}`],
+        ...(hook && { claude_hook: hook.text ? 'added to .claude/settings.json' : 'unchanged' }),
+        help: [
+            ...(Object.keys(cfg.journeys).length
+                ? [`Capture proof: ${captureHint(cfg)}, then: ${check}`]
+                : [`Add a journey that drives the real app and saves proof under $DONE_DONE_EVIDENCE_ROOT (each run's own folder in ${root}), e.g. ${journeyExample}`, `Then commit, run \`done-done run smoke\`, and: ${check}`]),
+            ...(hook?.text ? ['Commit .claude/settings.json: each Claude Code session in this repo then starts with `done-done` output (it needs done-done on PATH)'] : []),
+        ],
     });
     return PASS;
 }

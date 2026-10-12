@@ -1428,6 +1428,14 @@ test('status shows the newest run of this checkout and names its repo', () => {
   assert.equal(here.result, 'pass');
 });
 
+test('status shows the run that started last, whatever its id sorts as', () => {
+  const { dd } = setup();
+  const first = toon(dd('verify', 'shots', '--outcome', 'home and settings render', '--foreground')).run_id;
+  const second = toon(dd('verify', 'shots', '--outcome', 'home and settings render', '--foreground')).run_id;
+  assert.notEqual(first, second);
+  assert.equal(toon(dd('status')).run_id, second);
+});
+
 test('a journey past its timeout is killed and the run ends inconclusive', async () => {
   const { repo, dd, env } = setup();
   appendFileSync(join(repo, '.done-done.yaml'), '  hang:\n    command: node -e "setInterval(() => {}, 1000)"\n    timeout: 2s\n');

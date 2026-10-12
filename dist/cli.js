@@ -934,7 +934,8 @@ function cmdStatus(argv) {
     const repo = repoRoot();
     const cfg = loadConfig(repo);
     const root = runsRoot(cfg.app);
-    const id = values.run ?? (existsSync(root) ? readdirSync(root).sort().reverse().find((n) => existsSync(join(root, n, 'run.json')) && loadRun(join(root, n)).repo === repo) : undefined);
+    const mine = existsSync(root) ? readdirSync(root).filter((n) => existsSync(join(root, n, 'run.json'))).map((n) => loadRun(join(root, n))).filter((r) => r.repo === repo) : [];
+    const id = values.run ?? mine.sort((a, b) => a.created.localeCompare(b.created)).pop()?.run_id;
     if (!id)
         throw new UsageError(`no runs for ${cfg.app} in this checkout yet`, `Start one: done-done verify ${Object.keys(cfg.journeys).length > 1 ? '<journey> ' : ''}--outcome "<what a user can now do>"`);
     if (!/^[\w-]+$/.test(id) || !existsSync(join(root, id, 'run.json')))

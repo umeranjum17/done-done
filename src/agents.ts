@@ -118,10 +118,13 @@ export function supported(agent: string) {
 
 // The binary that starts an agent. An acp:<target> agent starts through acpx, which counts as installed only
 // when it runs (a version-manager shim with no version set is on PATH but starts nothing).
+const acpxRuns = new Map<string, boolean>();
 export function agentPath(agent: string): string {
   if (!agent.startsWith('acp:')) return onPath(agent);
   const acpx = onPath('acpx');
-  return acpx && spawnSync(acpx, ['--version'], { stdio: 'ignore', timeout: 30_000 }).status === 0 ? acpx : '';
+  if (!acpx) return '';
+  if (!acpxRuns.has(acpx)) acpxRuns.set(acpx, spawnSync(acpx, ['--version'], { stdio: 'ignore', timeout: 5_000 }).status === 0);
+  return acpxRuns.get(acpx) ? acpx : '';
 }
 
 export function askAgent(c: AgentCall): AgentAnswer {

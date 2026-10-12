@@ -401,6 +401,7 @@ function verifyReceipt(repo: string, cfg: Config, headArg: string): number {
     return fail(`receipt for ${short} is malformed (${(e as Error).message})`);
   }
   if (!rec || typeof rec !== 'object' || rec.schema !== 1 || rec.result !== 'pass' || !Array.isArray(rec.files)) return fail(`receipt for ${short} is malformed`);
+  if (!rec.files.every((f) => f && typeof f === 'object' && typeof f.path === 'string' && typeof f.sha256 === 'string')) return fail(`receipt for ${short} is malformed`);
   if (rec.head !== headArg) return fail(`receipt records head ${String(rec.head).slice(0, 12)}, not ${short}`);
   const now = head(repo);
   if (now.commit !== headArg) return fail(`HEAD is ${now.commit.slice(0, 12)}, not ${short}`);

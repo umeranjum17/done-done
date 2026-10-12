@@ -1800,6 +1800,11 @@ test('doctor in a bare repo fails with the init fix; a malformed config names th
   assert.equal(r2.code, 2, r2.out);
   assert.match(toon(r2).checks[1].detail, /\.done-done\.yaml/);
   assert.ok(!toon(r2).help.some((h) => h.includes('done-done init')), 'init cannot read a malformed config, so it is never the fix');
+  mkdirSync(b.env.DONE_DONE_HOME, { recursive: true });
+  writeFileSync(join(b.env.DONE_DONE_HOME, 'config.yaml'), 'judge:\n  allow_same: true\n');
+  const jc = toon(doctorIn(b.repo, pathEnv(b.env, ['claude']), 'doctor')).checks.find((c) => c.check === 'judge_choice');
+  assert.equal(jc.status, 'missing', 'a broken repo config makes judge_choice unknown, not a global-fallback ok');
+  assert.match(jc.detail, /unknown without a valid config/);
   const outside = doctorIn(b.dir, b.env, 'doctor');
   assert.equal(outside.code, 2, outside.out);
   assert.equal(toon(outside).checks[0].status, 'missing');
@@ -1959,6 +1964,12 @@ test('the agent comes from config (a fallback list moves past missing agents), a
   assert.equal(failed.code, 2, failed.out);
   assert.match(toon(failed).checks.find((x) => x.check === 'probe').detail, /claude did not answer: claude exited 1: You have hit your session limit; record /);
   assert.equal(toon(failed).checks.find((x) => x.check === 'probe').fix, `Check that claude is signed in and can use model claude-haiku-5-5, or set agent_config.claude.model`, 'a probe that ran and failed points at the sign-in');
+  const blockedHome = join(repo, 'home');
+  mkdirSync(blockedHome);
+  writeFileSync(join(blockedHome, 'agents'), 'x');
+  const unwritable = doctorIn(repo, { ...s.env, DONE_DONE_HOME: blockedHome }, 'doctor', '--probe');
+  assert.equal(unwritable.code, 2, unwritable.out);
+  assert.match(toon(unwritable).checks.find((x) => x.check === 'probe').detail, /cannot write the call record/, 'a record that cannot be written fails the probe, not doctor');
   assert.equal(doctorIn(repo, bad.env, 'doctor').code, 0);
   assert.equal(bad.calls().length, 1);
   // An agent without an adapter yet, an explicit judge route, and bad values.
@@ -1977,7 +1988,7 @@ test('the agent comes from config (a fallback list moves past missing agents), a
   assert.match(doctor('agent_config:\n  opencode: { model: x }\n').out, /agent_config may only be set in the global config/, 'the project file cannot pick a model');
   writeFileSync(join(env.DONE_DONE_HOME, 'config.yaml'), 'agent_config:\n  cursor: { model: x }\n');
   assert.match(doctor('').out, /agent_config must be a map of <agent>: \{model: <string>\}/);
-  assert.equal(s.calls().length, 2, 'only --probe asks the agent');
+  assert.equal(s.calls().length, 3, 'only --probe asks the agent');
   // Without a repo config, the agent keys still come from the global config.
   writeFileSync(join(env.DONE_DONE_HOME, 'config.yaml'), 'agent: opencode\n');
   rmSync(join(repo, '.done-done.yaml'));

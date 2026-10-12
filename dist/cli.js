@@ -1430,7 +1430,7 @@ const PROBE_SCHEMA = { type: 'object', properties: { ok: { type: 'boolean' } }, 
 const unknownRow = (check) => ({ check, status: 'missing', detail: 'unknown without a valid config', fix: '' });
 // Is this repo worth driving: git, a valid config and a writable evidence root are
 // required; the verify skill, an agent CLI, the judge binary and ffprobe are optional.
-// Read-only: a missing repo or config is a finding, never a crash, and nothing is created.
+// Only --probe writes, its call record: a missing repo or config is a finding, never a crash, and nothing else is created.
 async function cmdDoctor(argv) {
     let values;
     try {
@@ -1537,11 +1537,11 @@ async function cmdDoctor(argv) {
         ? { check: 'ffprobe', status: 'ok', detail: `found at ${ffprobe}`, fix: '' }
         : { check: 'ffprobe', status: 'missing', detail: 'no ffprobe on PATH; video evidence is unverified, never a pass', fix: 'Install ffprobe (ffmpeg) to verify video evidence' });
     // The judge --judge runs today is the claude judge (judge.ts, at judge.model); judge.route is recorded but not used until judge routes land.
-    if (!agentCfg || !agent) {
+    if (!cfg || !agent) {
         checks.push({ check: 'judge_choice', status: 'missing', detail: 'unknown without a valid config', fix: '' });
     }
     else {
-        const judge = agentCfg.judge;
+        const judge = cfg.judge;
         const route = judge.route ? `; judge.route ${judge.route} is recorded, not used yet` : '';
         const judgeChoice = (detail, ok, fix = '') => ({ check: 'judge_choice', status: ok ? 'ok' : 'missing', detail: `claude judge (model ${judge.model || 'none'})${detail}${route}`, fix });
         const apart = agent.agent !== 'claude';

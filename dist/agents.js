@@ -50,12 +50,14 @@ export function supported(agent) {
 }
 export function askAgent(c) {
     const adapter = ADAPTERS[c.agent];
-    const dir = mkdtempSync(join(tmpdir(), 'done-done-agent-'));
-    const cwd = c.tools === 'none' ? dir : c.cwd;
     const started = Date.now();
+    let dir = '';
+    let cwd = c.cwd;
     let res;
     let out;
     try {
+        dir = mkdtempSync(join(tmpdir(), 'done-done-agent-'));
+        cwd = c.tools === 'none' ? dir : c.cwd;
         if (!adapter)
             throw new Error(`no adapter for ${c.agent} yet`);
         if (!c.model)
@@ -89,12 +91,18 @@ export function askAgent(c) {
         out = { ok: false, error: e.message, record: c.record };
     }
     finally {
-        rmSync(dir, { recursive: true, force: true });
+        if (dir)
+            rmSync(dir, { recursive: true, force: true });
     }
     // The record holds what ran and what came back, never the prompt text.
     const { prompt, ...call } = c;
-    mkdirSync(dirname(c.record), { recursive: true });
-    const record = { ...call, cwd, prompt_bytes: Buffer.byteLength(prompt), argv: adapter?.argv(c, '<tmp>') ?? [], ms: Date.now() - started, exit: res?.status ?? null, ...out, stderr: String(res?.stderr ?? '').slice(-2000) };
-    writeFileSync(c.record, `${JSON.stringify(record, null, 2)}\n`, { mode: 0o600 });
+    try {
+        const record = { ...call, cwd, prompt_bytes: Buffer.byteLength(prompt), argv: adapter?.argv(c, '<tmp>') ?? [], ms: Date.now() - started, exit: res?.status ?? null, ...out, stderr: String(res?.stderr ?? '').slice(-2000) };
+        mkdirSync(dirname(c.record), { recursive: true });
+        writeFileSync(c.record, `${JSON.stringify(record, null, 2)}\n`, { mode: 0o600 });
+    }
+    catch (e) {
+        out = { ok: false, error: `cannot write the call record: ${e.message}`, record: c.record };
+    }
     return out;
 }

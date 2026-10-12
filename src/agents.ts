@@ -73,12 +73,14 @@ export function supported(agent: string) {
 
 export function askAgent(c: AgentCall): AgentAnswer {
   const adapter = ADAPTERS[c.agent];
-  const dir = mkdtempSync(join(tmpdir(), 'done-done-agent-'));
-  const cwd = c.tools === 'none' ? dir : c.cwd;
   const started = Date.now();
+  let dir = '';
+  let cwd = c.cwd;
   let res: ReturnType<typeof spawnSync> | undefined;
   let out: AgentAnswer;
   try {
+    dir = mkdtempSync(join(tmpdir(), 'done-done-agent-'));
+    cwd = c.tools === 'none' ? dir : c.cwd;
     if (!adapter) throw new Error(`no adapter for ${c.agent} yet`);
     if (!c.model) throw new Error(`no model for ${c.agent}; set agent_config.${c.agent}.model`);
     if (adapter.file) writeFileSync(join(dir, 'prompt.md'), `${c.prompt}\n\nAnswer with only one JSON object that matches this JSON schema, and no other text:\n${JSON.stringify(c.schema)}\n`, { mode: 0o600 });
@@ -102,12 +104,16 @@ export function askAgent(c: AgentCall): AgentAnswer {
   } catch (e) {
     out = { ok: false, error: (e as Error).message, record: c.record };
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    if (dir) rmSync(dir, { recursive: true, force: true });
   }
   // The record holds what ran and what came back, never the prompt text.
   const { prompt, ...call } = c;
-  mkdirSync(dirname(c.record), { recursive: true });
-  const record = { ...call, cwd, prompt_bytes: Buffer.byteLength(prompt), argv: adapter?.argv(c, '<tmp>') ?? [], ms: Date.now() - started, exit: res?.status ?? null, ...out, stderr: String(res?.stderr ?? '').slice(-2000) };
-  writeFileSync(c.record, `${JSON.stringify(record, null, 2)}\n`, { mode: 0o600 });
+  try {
+    const record = { ...call, cwd, prompt_bytes: Buffer.byteLength(prompt), argv: adapter?.argv(c, '<tmp>') ?? [], ms: Date.now() - started, exit: res?.status ?? null, ...out, stderr: String(res?.stderr ?? '').slice(-2000) };
+    mkdirSync(dirname(c.record), { recursive: true });
+    writeFileSync(c.record, `${JSON.stringify(record, null, 2)}\n`, { mode: 0o600 });
+  } catch (e) {
+    out = { ok: false, error: `cannot write the call record: ${(e as Error).message}`, record: c.record };
+  }
   return out;
 }

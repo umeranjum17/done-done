@@ -1133,8 +1133,11 @@ function cmdAbort(argv) {
     const run = loadRun(dir);
     if (closed(run))
         return FAIL;
-    const ours = !!run.runner && isOurRunner(run.runner.pid, dir);
-    if (ours) {
+    if (run.runner && !isOurRunner(run.runner.pid, dir)) {
+        emit({ command: 'abort', run_id: id, status: run.status, reason: `could not confirm pid ${run.runner.pid} is this run's runner, so nothing was killed or cancelled`, help: [`Read the run: done-done status --run ${id}`] });
+        return FAIL;
+    }
+    if (run.runner) {
         try {
             process.kill(run.runner.pid, 'SIGKILL');
         }
@@ -1143,10 +1146,10 @@ function cmdAbort(argv) {
     const latest = loadRun(dir);
     if (closed(latest, latest.status))
         return FAIL;
-    if (ours && latest.runner?.journey_pgid)
+    if (latest.runner?.journey_pgid)
         killGroup(latest.runner.journey_pgid);
     latest.status = 'cancelled';
-    latest.reason = latest.runner && !ours ? `aborted; pid ${latest.runner.pid} is not this run's runner, so nothing was killed` : 'aborted';
+    latest.reason = 'aborted';
     logEvent(dir, { status: 'cancelled' });
     saveRun(dir, latest);
     emit({ command: 'abort', run_id: id, status: 'cancelled', reason: latest.reason, help: [`Read the run: done-done status --run ${id}`, `Start again: done-done rerun --run ${id}`] });

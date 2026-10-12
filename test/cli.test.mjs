@@ -390,6 +390,27 @@ test('receipt --verify resolves HEAD, a branch name and a tag to the commit', ()
   assert.match(bad.out, /no receipt for no-such-ref/, 'an unresolvable argument keeps the missing-receipt shape');
 });
 
+test('evidence edited after its run fails as changed after that run', () => {
+  const { repo, dd, head } = setup();
+  const open = dd('run', '--open');
+  assert.equal(open.code, 0, open.out);
+  const { run_id: id, evidence_root: folder } = toon(open);
+  const log = `${folder}/${id}.log`;
+  writeFileSync(join(repo, log), 'added: milk\n');
+  assert.equal(dd('run', '--close', id).code, 0);
+  assert.equal(dd('check', '--outcome', 'notes add works', log).code, 0);
+  const h = head();
+  assert.equal(dd('receipt', '--outcome', 'notes add works', log).code, 0);
+  assert.equal(dd('receipt', '--verify', h).code, 0, 'unmodified evidence still verifies');
+  appendFileSync(join(repo, log), 'tampered');
+  const check = dd('check', '--outcome', 'notes add works', log);
+  assert.equal(check.code, 1, check.out);
+  assert.match(check.out, new RegExp(`changed after run ${id}`));
+  const verify = dd('receipt', '--verify', h);
+  assert.equal(verify.code, 1, verify.out);
+  assert.match(verify.out, new RegExp(`changed after run ${id}`));
+});
+
 test('receipt refuses a not-proven pass that cites no evidence, and writes nothing', () => {
   const { repo, sh, dd, head } = setup();
   writeFileSync(join(repo, '.done-done.yaml'), 'app: notes\nevidence:\n  root: .proof\nchecks:\n  not_proven: allow\n');

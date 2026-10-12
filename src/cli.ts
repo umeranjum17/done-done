@@ -409,10 +409,17 @@ async function runCheck(argv: string[]): Promise<CheckOutcome> {
     cited.push({ path: receiptPath(repo, cfg, path), sha256: hash });
     if (seen.has(hash)) findings.push({ level: 'fail', why: `${name}: byte-identical to ${seen.get(hash)}` });
     seen.set(hash, name);
-    if (v.status === 'fail') continue;
     // A file in the evidence root is claimed by the record that lists its path; a copy elsewhere, by its bytes.
     const inRoot = under(cfg.evidence.root, path);
     const claims = records.filter((r) => r.files.some((f) => f.sha256 === hash && (inRoot === null || f.path === inRoot)));
+    if (!claims.length && inRoot !== null) {
+      const edited = records.filter((r) => r.files.some((f) => f.path === inRoot));
+      if (edited.length) {
+        findings.push({ level: 'fail', why: `${name}: changed after run ${edited.map((r) => r.run_id).join(', ')}` });
+        continue;
+      }
+    }
+    if (v.status === 'fail') continue;
     if (!claims.length) {
       findings.push({ level: 'inconclusive', why: `${name}: not in any done-done run record, so it is not tied to a commit` });
       continue;
@@ -533,6 +540,7 @@ function verifyReceipt(repo: string, cfg: Config, headArg: string): number {
   if (rec.head !== commit) return fail(`receipt records head ${String(rec.head).slice(0, 12)}, not ${short}`);
   const now = head(repo);
   if (now.commit !== commit) return fail(`HEAD is ${now.commit.slice(0, 12)}, not ${short}`);
+  const records = loadRecords(cfg);
   const bad: string[] = [];
   for (const f of rec.files) {
     let bytes: Buffer;
@@ -542,7 +550,12 @@ function verifyReceipt(repo: string, cfg: Config, headArg: string): number {
       bad.push(`${f.path}: missing`);
       continue;
     }
-    if (sha256(bytes) !== f.sha256) bad.push(`${f.path}: hash changed`);
+    if (sha256(bytes) !== f.sha256) {
+      // The receipt names a path a run recorded: the file was edited after its run.
+      const inRoot = f.path.startsWith(IN_EVIDENCE) ? f.path.slice(IN_EVIDENCE.length) : under(cfg.evidence.root, resolve(repo, f.path));
+      const edited = inRoot !== null ? records.filter((r) => r.files.some((rf) => rf.path === inRoot)) : [];
+      bad.push(edited.length ? `${f.path}: changed after run ${edited.map((r) => r.run_id).join(', ')} (hash changed)` : `${f.path}: hash changed`);
+    }
   }
   if (bad.length) return fail(`cited evidence no longer matches the receipt: ${bad.join('; ')}`);
   emit({ command: 'receipt', result: 'pass', head: commit, tree: rec.tree, claim: rec.claim, files: rec.files.length, at: rec.at, help: ['This receipt is valid for this head.'] });

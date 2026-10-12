@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import { encode } from '@toon-format/toon';
 import { Document, parseDocument } from 'yaml';
-import { askAgent, selectAgent, supported } from './agents.js';
+import { ACPX_INSTALL, askAgent, selectAgent, supported } from './agents.js';
 import { AGENTS, home, loadConfig, parseDuration, UsageError } from './config.js';
 import { backend, judge, onPath } from './judge.js';
 import { checkMedia } from './media.js';
@@ -27,7 +27,6 @@ const CHECKS_TEXT = `Checks block (--from): the newest "## Checks" heading, then
   evidence: <the evidence file paths, or "not proven: <cause>">`;
 const RUNS_TEXT = `runs: each verify run lives in $DONE_DONE_HOME/runs/<app>/<run-id> (run.json, events.jsonl, logs/<step>.log)
   and goes on when the command that started it ends; its steps are resolve, drive (the journey), check, receipt, report`;
-const HOOK_AGENTS = ['claude', 'codex', 'opencode'];
 const DOCTOR_TEXT = `doctor changes nothing except the --probe call record (the agent itself may keep its own session files) and exits 0 when every required item is ok, 2 otherwise.
   required: git (inside a repository), config (a valid .done-done.yaml), evidence_root (writable).
   optional: verify_skill (.agents/skills/verify-<app>/), agent (the configured agent, or with agent: auto the first
@@ -56,7 +55,7 @@ const FLAGS = {
     '--probe': 'ask the configured agent one JSON-schema question and require a valid answer (one call at the agent\'s model, its cheap default unless you set agent_config.<agent>.model)',
     '--step <name>': 'the step log to show (resolve, drive, check, receipt, report)',
     '--limit <n>': 'how many past runs to list (default all)',
-    '--agent <agent>': 'also add a SessionStart hook to .claude/settings.json (claude) or .codex/hooks.json (codex) that shows `done-done` to each session, or a plugin to .opencode/plugins that adds it to the first message of each opencode session (opt-in)',
+    '--agent <agent>': 'also add a SessionStart hook to .claude/settings.json (claude), .codex/hooks.json (codex) or .gemini/settings.json (gemini) that shows `done-done` to each session, or a plugin to .opencode/plugins (opencode) or an extension to .pi/extensions (pi) that adds it to the first message of each session (opt-in)',
 };
 // `more` is the reference text a command needs beyond its flags, shared with the top-level help.
 const COMMANDS = {
@@ -67,6 +66,8 @@ const COMMANDS = {
             ['done-done init --agent claude', 'also show this repo\'s done-done state at each Claude Code session start'],
             ['done-done init --agent codex', 'also show this repo\'s done-done state at each Codex session start'],
             ['done-done init --agent opencode', 'also add this repo\'s done-done state to the first message of each opencode session'],
+            ['done-done init --agent pi', 'also add this repo\'s done-done state to the first prompt of each pi session'],
+            ['done-done init --agent gemini', 'also show this repo\'s done-done state at each Gemini CLI session start'],
             ['done-done init --journey <name> -- <command...>', "record a journey's capture recipe in .done-done.yaml"],
         ],
         flags: ['--agent <agent>', '--journey <name>', '-- <command...>'],
@@ -1411,12 +1412,14 @@ function scaffoldVerify(repo, cfg) {
 // Claude Code reads it from the repo's .claude/settings.json, Codex from the repo's .codex/hooks.json
 // (project scope; Codex docs: <repo>/.codex/hooks.json, SessionStart, matcher omitted matches every start).
 const HOOK_COMMAND = 'command -v done-done >/dev/null && done-done || true';
-const CLAUDE_HOOK = HOOK_COMMAND;
-const CODEX_HOOK = HOOK_COMMAND;
-// The repo's .claude/settings.json with the hook merged in, keeping every other key and hook; no text when it is already there.
-function claudeSettings(repo) {
-    const file = join(repo, '.claude', 'settings.json');
-    const bad = (why) => new UsageError(`.claude/settings.json ${why}`, 'Fix .claude/settings.json, then re-run: done-done init --agent claude');
+// Gemini CLI reads a SessionStart hook from the repo's .gemini/settings.json (its hooks reference) but shows plain
+// stdout only to the person, so the state goes to the model as JSON hookSpecificOutput.additionalContext.
+// done-done runs on node, so node is on PATH whenever done-done is.
+const GEMINI_HOOK = `command -v done-done >/dev/null && done-done 2>/dev/null | node -e 'let s="";process.stdin.on("data",(d)=>s+=d).on("end",()=>s.trim()&&process.stdout.write(JSON.stringify({hookSpecificOutput:{additionalContext:s.trim()}})))' || true`;
+// A repo settings file with a SessionStart hook running `command` merged in, keeping every other key and hook; no text when it is already there.
+function sessionStartSettings(repo, rel, command, agent) {
+    const file = join(repo, rel);
+    const bad = (why) => new UsageError(`${rel} ${why}`, `Fix ${rel}, then re-run: done-done init --agent ${agent}`);
     const isObject = (v) => !!v && typeof v === 'object' && !Array.isArray(v);
     let settings = {};
     if (existsSync(file)) {
@@ -1434,36 +1437,19 @@ function claudeSettings(repo) {
     const start = settings.hooks?.SessionStart ?? [];
     if (!Array.isArray(start))
         throw bad('has "hooks.SessionStart" that is not a list');
-    if (start.some((m) => Array.isArray(m?.hooks) && m.hooks.some((h) => h?.command === CLAUDE_HOOK)))
+    if (start.some((m) => Array.isArray(m?.hooks) && m.hooks.some((h) => h?.command === command)))
         return { file };
-    settings.hooks = { ...settings.hooks, SessionStart: [...start, { hooks: [{ type: 'command', command: CLAUDE_HOOK }] }] };
+    settings.hooks = { ...settings.hooks, SessionStart: [...start, { hooks: [{ type: 'command', command }] }] };
     return { file, text: `${JSON.stringify(settings, null, 2)}\n` };
 }
-// The repo's .codex/hooks.json with the hook merged in, keeping every other key and hook; no text when it is already there.
-function codexSettings(repo) {
-    const file = join(repo, '.codex', 'hooks.json');
-    const bad = (why) => new UsageError(`.codex/hooks.json ${why}`, 'Fix .codex/hooks.json, then re-run: done-done init --agent codex');
-    const isObject = (v) => !!v && typeof v === 'object' && !Array.isArray(v);
-    let settings = {};
-    if (existsSync(file)) {
-        try {
-            settings = JSON.parse(readFileSync(file, 'utf8'));
-        }
-        catch (e) {
-            throw bad(`is not valid JSON (${e.message})`);
-        }
-    }
-    if (!isObject(settings))
-        throw bad('is not a JSON object');
-    if (settings.hooks !== undefined && !isObject(settings.hooks))
-        throw bad('has "hooks" that is not an object');
-    const start = settings.hooks?.SessionStart ?? [];
-    if (!Array.isArray(start))
-        throw bad('has "hooks.SessionStart" that is not a list');
-    if (start.some((m) => Array.isArray(m?.hooks) && m.hooks.some((h) => h?.command === CODEX_HOOK)))
+// A file init owns outright: written once, unchanged when identical, never overwritten when someone else's.
+function ownedFile(repo, rel, text, agent) {
+    const file = join(repo, rel);
+    if (!existsSync(file))
+        return { file, text };
+    if (readFileSync(file, 'utf8') === text)
         return { file };
-    settings.hooks = { ...settings.hooks, SessionStart: [...start, { hooks: [{ type: 'command', command: CODEX_HOOK }] }] };
-    return { file, text: `${JSON.stringify(settings, null, 2)}\n` };
+    throw new UsageError(`${rel} already exists with other content, so init will not overwrite it`, `Delete ${rel}, then re-run: done-done init --agent ${agent}`);
 }
 // The opencode session plugin `init --agent opencode` adds: a project-scope file in
 // .opencode/plugins/ (auto-loaded; the home config is never touched) whose chat.message
@@ -1474,16 +1460,15 @@ function codexSettings(repo) {
 // part before save and drops the whole first message when one is invalid. Without
 // done-done on PATH it appends nothing and never throws, so it never breaks a session.
 function opencodePlugin(repo) {
-    const file = join(repo, '.opencode', 'plugins', 'done-done.js');
     const text = `// Written by \`done-done init --agent opencode\`: shows this repo's bare \`done-done\`
 // state to each opencode session. On the first message of a session the chat.message
-// hook runs \`${CLAUDE_HOOK}\` and appends its output to the message parts.
+// hook runs \`${HOOK_COMMAND}\` and appends its output to the message parts.
 // Without done-done on PATH it appends nothing and never throws, so it never breaks
 // a session. Other files in .opencode/plugins/ are untouched; delete this file to opt out.
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 
-const COMMAND = "${CLAUDE_HOOK}";
+const COMMAND = "${HOOK_COMMAND}";
 
 const seen = new Set();
 const firstMessage = (sessionID) => {
@@ -1506,13 +1491,49 @@ export const DoneDonePlugin = async ({ directory }) => {
   };
 };
 `;
-    if (existsSync(file)) {
-        if (readFileSync(file, 'utf8') === text)
-            return { file };
-        throw new UsageError('.opencode/plugins/done-done.js already exists with other content, so init will not overwrite it', 'Delete .opencode/plugins/done-done.js, then re-run: done-done init --agent opencode');
-    }
-    return { file, text };
+    return ownedFile(repo, '.opencode/plugins/done-done.js', text, 'opencode');
 }
+// The pi extension `init --agent pi` adds: a project-scope file in .pi/extensions/ (pi loads it once the project
+// is trusted; its extensions.md) whose before_agent_start handler runs the session command on the first prompt of
+// each session and adds the bare `done-done` state as a message the model reads. Without done-done on PATH it adds
+// nothing and never throws, so it never breaks a session.
+function piExtension(repo) {
+    const text = `// Written by \`done-done init --agent pi\`: shows this repo's bare \`done-done\`
+// state to each pi session. On the first prompt of a session the before_agent_start
+// handler runs \`${HOOK_COMMAND}\` and adds its output as a message.
+// Without done-done on PATH it adds nothing and never throws, so it never breaks
+// a session. Other files in .pi/extensions/ are untouched; delete this file to opt out.
+import { execFile } from "node:child_process";
+
+const COMMAND = "${HOOK_COMMAND}";
+
+const run = (cwd) => new Promise((resolve) => {
+  execFile("sh", ["-c", COMMAND], { cwd, encoding: "utf8", timeout: 30000 }, (error, stdout) => resolve(error ? "" : stdout.trim()));
+});
+
+export default function doneDone(pi) {
+  let shown = false;
+  pi.on("session_start", () => {
+    shown = false;
+  });
+  pi.on("before_agent_start", async (_event, ctx) => {
+    if (shown) return;
+    shown = true;
+    const state = await run(ctx.cwd);
+    if (state) return { message: { customType: "done-done", content: state, display: true } };
+  });
+}
+`;
+    return ownedFile(repo, '.pi/extensions/done-done.js', text, 'pi');
+}
+// What `init --agent <agent>` writes, the init output key that names it, and what a session then gets.
+const HOOKS = {
+    claude: { make: (repo) => sessionStartSettings(repo, '.claude/settings.json', HOOK_COMMAND, 'claude'), rel: '.claude/settings.json', key: 'claude_hook', gets: 'each Claude Code session in this repo then starts with `done-done` output' },
+    codex: { make: (repo) => sessionStartSettings(repo, '.codex/hooks.json', HOOK_COMMAND, 'codex'), rel: '.codex/hooks.json', key: 'codex_hook', gets: 'each Codex session in this repo then starts with `done-done` output' },
+    opencode: { make: opencodePlugin, rel: '.opencode/plugins/done-done.js', key: 'opencode_plugin', gets: 'the first message of each opencode session in this repo then gets `done-done` output added' },
+    pi: { make: piExtension, rel: '.pi/extensions/done-done.js', key: 'pi_extension', gets: 'the first prompt of each pi session in this repo (once you trust the project in pi) then gets `done-done` output added' },
+    gemini: { make: (repo) => sessionStartSettings(repo, '.gemini/settings.json', GEMINI_HOOK, 'gemini'), rel: '.gemini/settings.json', key: 'gemini_hook', gets: 'each Gemini CLI session in this repo (a trusted folder) then starts with `done-done` output' },
+};
 function cmdInit(argv) {
     const dash = argv.indexOf('--');
     const { values } = parseArgs({
@@ -1522,8 +1543,8 @@ function cmdInit(argv) {
     });
     const parts = dash < 0 ? [] : argv.slice(dash + 1);
     const journey = values.journey ?? null;
-    if (values.agent !== undefined && !HOOK_AGENTS.includes(values.agent))
-        throw new UsageError(`--agent ${values.agent} is not supported; the supported values are claude, codex, opencode`, 'Run: done-done init --agent <claude|codex|opencode>');
+    if (values.agent !== undefined && !Object.hasOwn(HOOKS, values.agent))
+        throw new UsageError(`--agent ${values.agent} is not supported; the supported values are ${Object.keys(HOOKS).join(', ')}`, `Run: done-done init --agent <${Object.keys(HOOKS).join('|')}>`);
     if (journey === null && parts.length)
         throw new UsageError('init needs --journey <name> to record a command after --');
     if (journey !== null && !parts.some((p) => p.trim()))
@@ -1536,7 +1557,19 @@ function cmdInit(argv) {
     const cfg = loadConfig(repo); // validates the existing project config; malformed -> exit 2, no writes
     if (cfg.skill.split(/[\\/]/).includes('..'))
         throw new UsageError(`verify skill ${cfg.skill} has a .. segment; use a path inside the repo`, 'Set skill to a repo-relative path in .done-done.yaml');
-    const hook = values.agent === 'claude' ? claudeSettings(repo) : values.agent === 'codex' ? codexSettings(repo) : values.agent === 'opencode' ? opencodePlugin(repo) : undefined; // likewise validated before any write
+    const spec = values.agent === undefined ? undefined : HOOKS[values.agent];
+    const hook = spec?.make(repo); // likewise validated before any write
+    // Written last on both paths, after the config; init reports it as <agent>_hook (or the plugin/extension key).
+    const writeHook = () => {
+        if (!spec || !hook)
+            return { out: {}, help: [] };
+        if (hook.text) {
+            mkdirSync(dirname(hook.file), { recursive: true });
+            writeFileSync(`${hook.file}.tmp`, hook.text);
+            renameSync(`${hook.file}.tmp`, hook.file);
+        }
+        return { out: { [spec.key]: hook.text ? `added to ${spec.rel}` : 'unchanged' }, help: hook.text ? [`Commit ${spec.rel}: ${spec.gets} (it needs done-done on PATH)`] : [] };
+    };
     if (journey !== null) {
         // Record the capture recipe in the repo so any checkout can re-run the proof.
         // The command is stored verbatim; ${RUN_ID} in it becomes the run id, like a run -- command.
@@ -1559,6 +1592,7 @@ function cmdInit(argv) {
         const root = shown(repo, fresh.evidence.root);
         const check = 'done-done check --outcome "<what you proved>" <files it recorded>';
         const verify = scaffoldVerify(repo, fresh);
+        const agentHook = writeHook();
         emit({
             command: 'init',
             result: 'pass',
@@ -1568,7 +1602,8 @@ function cmdInit(argv) {
             evidence_root: root,
             gitignore: added ? `added ${rel.replace(/\/+$/, '')}/` : 'unchanged',
             verify_skill: verify,
-            help: [`Capture proof: done-done run ${journey}, then: ${check}`],
+            ...agentHook.out,
+            help: [`Capture proof: done-done run ${journey}, then: ${check}`, ...agentHook.help],
         });
         return PASS;
     }
@@ -1582,14 +1617,10 @@ function cmdInit(argv) {
     // An evidence root inside the repo (an older config's `root: .proof`) stays out of git.
     const rel = under(repo, cfg.evidence.root);
     const added = !!rel && ensureIgnored(repo, rel);
-    if (hook?.text) {
-        mkdirSync(dirname(hook.file), { recursive: true });
-        writeFileSync(`${hook.file}.tmp`, hook.text);
-        renameSync(`${hook.file}.tmp`, hook.file);
-    }
     const root = shown(repo, cfg.evidence.root);
     const check = 'done-done check --outcome "<what you proved>" <files it recorded>';
     const verify = scaffoldVerify(repo, cfg);
+    const agentHook = writeHook();
     emit({
         command: 'init',
         result: 'pass',
@@ -1598,23 +1629,12 @@ function cmdInit(argv) {
         evidence_root: root,
         gitignore: added ? `added ${rel.replace(/\/+$/, '')}/` : 'unchanged',
         verify_skill: verify,
-        ...(hook &&
-            (values.agent === 'codex'
-                ? { codex_hook: hook.text ? 'added to .codex/hooks.json' : 'unchanged' }
-                : values.agent === 'opencode'
-                    ? { opencode_plugin: hook.text ? 'added to .opencode/plugins/done-done.js' : 'unchanged' }
-                    : { claude_hook: hook.text ? 'added to .claude/settings.json' : 'unchanged' })),
+        ...agentHook.out,
         help: [
             ...(Object.keys(cfg.journeys).length
                 ? [`Capture proof: ${captureHint(cfg)}, then: ${check}`]
                 : [`Add a journey that drives the real app and saves proof under $DONE_DONE_EVIDENCE_ROOT (each run's own folder in ${root}), e.g. ${journeyExample}`, `Then commit, run \`done-done run smoke\`, and: ${check}`]),
-            ...(hook?.text
-                ? values.agent === 'codex'
-                    ? ['Commit .codex/hooks.json: each Codex session in this repo then starts with `done-done` output (it needs done-done on PATH)']
-                    : values.agent === 'opencode'
-                        ? ['Commit .opencode/plugins/done-done.js: the first message of each opencode session in this repo then gets `done-done` output added (it needs done-done on PATH)']
-                        : ['Commit .claude/settings.json: each Claude Code session in this repo then starts with `done-done` output (it needs done-done on PATH)']
-                : []),
+            ...agentHook.help,
         ],
     });
     return PASS;
@@ -1736,7 +1756,10 @@ async function cmdDoctor(argv) {
     }
     const agent = agentCfg && selectAgent(agentCfg);
     const startable = AGENTS.filter(supported).join(' and ');
-    const installFix = `Install ${startable}, or set agent: to an installed one of ${AGENTS.join(', ')}`;
+    // An acp:<target> agent is missing when its acpx bridge is: say which, and how to install it.
+    const acpx = agent?.agent.startsWith('acp:') ? onPath('acpx') : undefined;
+    const notFound = acpx === undefined ? 'is not on PATH' : `needs acpx, the ACP bridge, which is not startable (${acpx ? `${acpx} does not run` : 'not on PATH'})`;
+    const installFix = acpx === undefined ? `Install ${startable}, or set agent: to an installed one of ${AGENTS.join(', ')}` : ACPX_INSTALL;
     const switchFix = `Set agent: to ${startable}`;
     if (repoFileInvalid) {
         checks.push(unknownRow('agent'));
@@ -1748,7 +1771,7 @@ async function cmdDoctor(argv) {
         const skipping = agent.skipped.map((a) => `; skipped ${a}: done-done cannot start it yet`).join('');
         const what = `${agent.agent} (model ${agent.model || 'none'}; ${agent.from === 'auto' ? 'agent: auto' : 'from config'}${skipping})`;
         checks.push(!agent.path
-            ? { check: 'agent', status: 'missing', detail: `${what} is not on PATH`, fix: installFix }
+            ? { check: 'agent', status: 'missing', detail: `${what} ${notFound}`, fix: installFix }
             : !supported(agent.agent)
                 ? { check: 'agent', status: 'missing', detail: `${what} at ${agent.path}, but done-done cannot start ${agent.agent} yet (${startable} for now)`, fix: switchFix }
                 : { check: 'agent', status: 'ok', detail: `${what} at ${agent.path}`, fix: '' });
@@ -1787,11 +1810,11 @@ async function cmdDoctor(argv) {
         checks.push(unknownRow('probe'));
     if (values.probe && agent) {
         const record = join(home(), 'agents', `probe-${new Date().toISOString().replace(/[:.]/g, '-')}-${agent.agent}.json`);
-        const probe = !agent.path ? { ok: false, error: `${agent.agent} is not on PATH`, fix: installFix }
+        const probe = !agent.path ? { ok: false, error: `${agent.agent} ${notFound}`, fix: installFix }
             : !supported(agent.agent) ? { ok: false, error: `done-done cannot start ${agent.agent} yet (${startable} for now)`, fix: switchFix }
                 : askAgent({ agent: agent.agent, model: agent.model, prompt: 'This is a connectivity probe from done-done doctor. Use no tools. Answer with ok set to true.', schema: PROBE_SCHEMA, cwd: repo ?? process.cwd(), timeoutMs: 180_000, tools: 'none', record });
         checks.push(probe.ok && probe.answer?.ok === true
-            ? { check: 'probe', status: 'ok', detail: `${agent.agent} (model ${agent.model}) answered the schema question; ${probe.recordError ? `the call record could not be written: ${probe.recordError}` : `record ${record}`}`, fix: '' }
+            ? { check: 'probe', status: 'ok', detail: `${agent.agent} (model ${agent.model || 'none'}) answered the schema question; ${probe.recordError ? `the call record could not be written: ${probe.recordError}` : `record ${record}`}`, fix: '' }
             : { check: 'probe', status: 'missing', detail: `${agent.agent} did not answer: ${probe.error ?? `answer ${JSON.stringify(probe.answer)}`}${probe.record ? `; record ${record}` : ''}${probe.recordError ? `; the call record could not be written: ${probe.recordError}` : ''}`, fix: probe.fix ?? `Check that ${agent.agent} is signed in${agent.model ? ` and can use model ${agent.model}` : ''}, or set agent_config.${agent.agent}.model` });
     }
     const required = ['git', 'config', 'evidence_root', ...(values.probe ? ['probe'] : [])];

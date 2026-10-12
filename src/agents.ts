@@ -25,6 +25,25 @@ export type AgentAnswer = { ok: boolean; answer?: Record<string, unknown>; error
 // argv never carries the prompt: it goes on stdin, or (file: true) into a 0600 prompt file the argv points at.
 type Adapter = { argv: (c: AgentCall, dir: string) => string[]; answer: (stdout: string) => unknown; file?: boolean; env?: (c: AgentCall) => Record<string, string> };
 
+// acp:<target> runs any Agent Client Protocol agent through the user's acpx bridge (acpx's own registry names
+// the targets): the prompt and the schema on stdin (exec --file -), and the answer is the JSON object in the agent's
+// message chunks of acpx's JSON-RPC event stream. The tool policy maps to acpx's permission mode; a prompt that
+// mode would raise is denied, since nobody can answer it. No model means the target's own default.
+const ACP: Adapter = {
+  argv: (c, dir) => ['--cwd', c.tools === 'none' ? dir : c.cwd, '--format', 'json', '--json-strict', c.tools === 'edit' ? '--approve-all' : c.tools === 'read' ? '--approve-reads' : '--deny-all',
+    '--non-interactive-permissions', 'deny', ...(c.model ? ['--model', c.model] : []), c.agent.slice('acp:'.length), 'exec', '--file', '-'],
+  answer: (out) => {
+    const events = out.split('\n').filter((l) => l.startsWith('{')).map((l) => JSON.parse(l));
+    const text = events.filter((e) => e.method === 'session/update' && e.params?.update?.sessionUpdate === 'agent_message_chunk')
+      .map((e) => e.params.update.content?.text ?? '').join('');
+    // An error response fails the call only when the agent said nothing: a refused side request is not the answer.
+    const error = events.find((e) => e.error)?.error;
+    if (!text && error) throw new Error(String(error.message ?? JSON.stringify(error)).slice(0, 500));
+    return JSON.parse(text.slice(text.indexOf('{'), text.lastIndexOf('}') + 1));
+  },
+};
+export const ACPX_INSTALL = 'Install the acpx ACP bridge (npm install -g acpx, https://github.com/openclaw/acpx), then re-run: done-done doctor';
+
 const ADAPTERS: Record<string, Adapter> = {
   // claude -p: --json-schema puts the validated object in structured_output; --tools '' turns every tool off.
   claude: {
@@ -58,7 +77,7 @@ const ADAPTERS: Record<string, Adapter> = {
 // Its model is agent_config.<agent>.model, else the cheap default. skipped names the installed agents passed over.
 export function selectAgent(cfg: Config): { agent: string; model: string; path: string; from: 'config' | 'auto'; skipped: string[] } {
   const list = cfg.agent === 'auto' ? AGENTS : cfg.agent;
-  const found = list.map((agent) => ({ agent, path: onPath(agent) })).filter((a) => a.path);
+  const found = list.map((agent) => ({ agent, path: agentPath(agent) })).filter((a) => a.path);
   const first = found.findIndex((a) => supported(a.agent));
   const pick = first >= 0 ? found[first] : found[0] ?? { agent: list[0], path: '' };
   const passed = first >= 0 ? found.slice(0, first) : found.slice(1);
@@ -67,12 +86,22 @@ export function selectAgent(cfg: Config): { agent: string; model: string; path: 
 
 export const modelFor = (cfg: Config, agent: string) => cfg.agent_config[agent]?.model || CHEAP_MODELS[agent] || '';
 
+const adapterFor = (agent: string): Adapter | undefined => (agent.startsWith('acp:') ? ACP : Object.hasOwn(ADAPTERS, agent) ? ADAPTERS[agent] : undefined);
+
 export function supported(agent: string) {
-  return Object.hasOwn(ADAPTERS, agent);
+  return !!adapterFor(agent);
+}
+
+// The binary that starts an agent. An acp:<target> agent starts through acpx, which counts as installed only
+// when it runs (a version-manager shim with no version set is on PATH but starts nothing).
+export function agentPath(agent: string): string {
+  if (!agent.startsWith('acp:')) return onPath(agent);
+  const acpx = onPath('acpx');
+  return acpx && spawnSync(acpx, ['--version'], { stdio: 'ignore', timeout: 30_000 }).status === 0 ? acpx : '';
 }
 
 export function askAgent(c: AgentCall): AgentAnswer {
-  const adapter = ADAPTERS[c.agent];
+  const adapter = adapterFor(c.agent);
   const started = Date.now();
   let dir = '';
   let cwd = c.cwd;
@@ -82,9 +111,12 @@ export function askAgent(c: AgentCall): AgentAnswer {
     dir = mkdtempSync(join(tmpdir(), 'done-done-agent-'));
     cwd = c.tools === 'none' ? dir : c.cwd;
     if (!adapter) throw new Error(`no adapter for ${c.agent} yet`);
-    if (!c.model) throw new Error(`no model for ${c.agent}; set agent_config.${c.agent}.model`);
-    if (adapter.file) writeFileSync(join(dir, 'prompt.md'), `${c.prompt}\n\nAnswer with only one JSON object that matches this JSON schema, and no other text:\n${JSON.stringify(c.schema)}\n`, { mode: 0o600 });
-    res = spawnSync(onPath(c.agent) || c.agent, adapter.argv(c, dir), { cwd, input: adapter.file ? '' : c.prompt, env: { ...process.env, ...adapter.env?.(c) }, encoding: 'utf8', timeout: c.timeoutMs, maxBuffer: 64 << 20 });
+    if (!c.model && adapter !== ACP) throw new Error(`no model for ${c.agent}; set agent_config.${c.agent}.model`);
+    const promptText = `${c.prompt}\n\nAnswer with only one JSON object that matches this JSON schema, and no other text:\n${JSON.stringify(c.schema)}\n`;
+    if (adapter.file) writeFileSync(join(dir, 'prompt.md'), promptText, { mode: 0o600 });
+    const bin = agentPath(c.agent);
+    if (!bin) throw new Error(c.agent.startsWith('acp:') ? `${c.agent} needs acpx, and acpx is not startable; ${ACPX_INSTALL}` : `${c.agent} is not on PATH`);
+    res = spawnSync(bin, adapter.argv(c, dir), { cwd, input: adapter.file ? '' : promptText, env: { ...process.env, ...adapter.env?.(c) }, encoding: 'utf8', timeout: c.timeoutMs, maxBuffer: 64 << 20 });
     if (res.error) throw res.error;
     if (res.status !== 0) {
       // An agent that exits non-zero may still say why in its own output (claude: a usage limit, a bad model).

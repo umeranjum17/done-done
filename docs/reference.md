@@ -44,6 +44,20 @@ done-done init --agent opencode
 
 `--agent opencode` instead writes a session-start plugin to the repo's `.opencode/plugins/done-done.js` (project scope; your `~/.config/opencode` is never touched), so the bare `done-done` state is added to the first message of each session, not at session open (opencode's plugin hooks cannot add context when a session is created). The plugin remembers sessions in memory, so a resumed session gets the state again after opencode restarts. That `chat.message` hook runs `command -v done-done >/dev/null && done-done || true` and waits for it (up to 30 seconds) before appending the output to the message: without done-done on PATH it appends nothing and never throws, so it never breaks a session. Other files in `.opencode/plugins/` are untouched; re-running adds no duplicate. The result's `opencode_plugin` says `added to .opencode/plugins/done-done.js` or `unchanged`. Delete the file to opt out. Commit it to share the plugin.
 
+```sh
+done-done init --agent gemini
+```
+
+`--agent gemini` adds a Gemini CLI SessionStart hook to the repo's `.gemini/settings.json` (project scope; your `~/.gemini` is never touched). Gemini CLI shows a hook's plain output only to you, so this hook pipes the bare `done-done` state through `node` into the JSON `hookSpecificOutput.additionalContext` that Gemini CLI adds to the session as context; without done-done on PATH it prints nothing and exits 0. Same merge contract as the Claude hook, and the result's `gemini_hook` says `added to .gemini/settings.json` or `unchanged`. Gemini CLI reads project settings only in a trusted folder and warns once before it runs a new project hook. Commit `.gemini/settings.json` to share the hook.
+
+```sh
+done-done init --agent pi
+```
+
+`--agent pi` writes an extension to the repo's `.pi/extensions/done-done.js` (project scope; your `~/.pi` is never touched). On the first prompt of each session its `before_agent_start` handler runs `command -v done-done >/dev/null && done-done || true` (up to 30 seconds) and adds the output as a message the model reads; without done-done on PATH it adds nothing and never throws. pi loads project extensions only after you trust the project. Same file contract as the opencode plugin: other files are untouched, a re-run adds no duplicate, an existing file with other content exits 2 untouched, and the result's `pi_extension` says `added to .pi/extensions/done-done.js` or `unchanged`. Commit it to share the extension.
+
+`--agent` works with `--journey` too: `init --journey smoke --agent claude -- <command>` records the journey and adds the hook.
+
 ### Check the setup
 
 ```sh
@@ -60,9 +74,9 @@ done-done doctor --probe
 
 #### Agents
 
-done-done works with the coding agent you have. `agent:` names it (`claude`, `codex`, `opencode`, `pi` or `gemini`), or a fallback list such as `[opencode, claude]`, which moves on when an agent is not installed or done-done cannot start it yet; doctor names each installed agent it skipped. `agent: auto` (the default) takes the first of claude, codex, opencode, pi, gemini on PATH that done-done can start (claude and opencode today). The model is `agent_config.<agent>.model` (global config only), else the agent's cheap default (`claude-haiku-5-5` for claude, `opencode-go/muse-spark-1.3-contributor` for opencode); codex, pi and gemini cannot be started yet; each gets its adapter and cheap default in a later release. These defaults are the cost guard: done-done never defaults to a flagship model, whatever the vendor.
+done-done works with the coding agent you have. `agent:` names it (`claude`, `codex`, `opencode`, `pi` or `gemini`), or a fallback list such as `[opencode, claude]`, which moves on when an agent is not installed or done-done cannot start it yet; doctor names each installed agent it skipped. `agent: auto` (the default) takes the first of claude, codex, opencode, pi, gemini on PATH that done-done can start (claude and opencode today). The model is `agent_config.<agent>.model` (global config only), else the agent's cheap default (`claude-haiku-5-5` for claude, `opencode-go/muse-spark-1.3-contributor` for opencode); codex, pi and gemini cannot be started yet; each gets its adapter and cheap default in a later release. These defaults are the cost guard: done-done never defaults to a flagship model, whatever the vendor. `agent: acp:<target>` (for example `acp:gemini`) starts any Agent Client Protocol agent through [acpx](https://github.com/openclaw/acpx), which you install yourself (`npm install -g acpx`); it has no cheap default, so the target runs its own default model unless `agent_config.acp:<target>.model` names one. doctor reports an `acp:` agent missing, with that install step, when acpx is not on PATH or does not start.
 
-Each call is a fresh, single-shot session that must answer one JSON object matching a schema. The prompt goes on stdin (claude) or into a 0600 prompt file (opencode), never in argv. done-done can start claude (`claude -p --output-format json --json-schema <schema> --model <model> --no-session-persistence`, all tools off with `--tools ''`; tool-less calls also pass `--setting-sources ''` and run from a scratch folder, so no project settings or hooks load) and opencode (`opencode run "Follow the attached instructions." --format json -m <provider/model> -f <prompt file>`, with the schema in the 0600 prompt file and every tool denied through `OPENCODE_PERMISSION`) today; codex, pi and gemini come next.
+Each call is a fresh, single-shot session that must answer one JSON object matching a schema. The prompt goes on stdin (claude, acp) or into a 0600 prompt file (opencode), never in argv. done-done can start claude (`claude -p --output-format json --json-schema <schema> --model <model> --no-session-persistence`, all tools off with `--tools ''`; tool-less calls also pass `--setting-sources ''` and run from a scratch folder, so no project settings or hooks load) opencode (`opencode run "Follow the attached instructions." --format json -m <provider/model> -f <prompt file>`, with the schema in the 0600 prompt file and every tool denied through `OPENCODE_PERMISSION`) and `acp:<target>` (`acpx --cwd <dir> --format json --json-strict --deny-all --non-interactive-permissions deny [--model <model>] <target> exec --file -`, with the prompt and schema on stdin; `--approve-reads` for read steps and `--approve-all` for edit steps) today; codex, pi and gemini come next.
 
 ### Run a journey
 

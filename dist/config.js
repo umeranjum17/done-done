@@ -12,6 +12,8 @@ export class UsageError extends Error {
 }
 // The coding agents done-done can start, in the order `agent: auto` looks for them on PATH.
 export const AGENTS = ['claude', 'codex', 'opencode', 'pi', 'gemini'];
+// Or acp:<target>, any agent the user's acpx bridge can start; the target is one argv word, so it never reads as a flag.
+const isAgent = (v) => AGENTS.includes(v) || (typeof v === 'string' && /^acp:[A-Za-z0-9][\w.-]*$/.test(v));
 // The cost guard is this table: a default model is always the agent's cheap one, never a flagship,
 // whatever the vendor; any other model runs only when the user names it. pi and gemini get theirs with their adapters.
 export const CHEAP_MODELS = { claude: 'claude-haiku-5-5', opencode: 'opencode-go/muse-spark-1.3-contributor' };
@@ -82,10 +84,10 @@ function apply(target, text, file, scope) {
         const ok = spec.type === 'string' ? typeof value === 'string'
             : spec.type === 'boolean' ? typeof value === 'boolean'
                 : spec.type === 'string[]' ? Array.isArray(value) && value.every((v) => typeof v === 'string')
-                    : spec.type === 'agent' ? value === 'auto' || [value].flat().every((v) => AGENTS.includes(v)) && [value].flat().length > 0
-                        : spec.type === 'agent_config' ? !!value && typeof value === 'object' && Object.entries(value).every(([a, c]) => AGENTS.includes(a) && !!c && typeof c === 'object' && Object.entries(c).every(([k, m]) => k === 'model' && typeof m === 'string'))
+                    : spec.type === 'agent' ? value === 'auto' || [value].flat().every(isAgent) && [value].flat().length > 0
+                        : spec.type === 'agent_config' ? !!value && typeof value === 'object' && Object.entries(value).every(([a, c]) => isAgent(a) && !!c && typeof c === 'object' && Object.entries(c).every(([k, m]) => k === 'model' && typeof m === 'string'))
                             : !!value && typeof value === 'object' && Object.values(value).every((j) => j && typeof j.command === 'string');
-        const want = { journeys: 'a map of name: {command: <string>}', agent: `auto, or one or a list of ${AGENTS.join(', ')}`, agent_config: `a map of <agent>: {model: <string>} for ${AGENTS.join(', ')}` };
+        const want = { journeys: 'a map of name: {command: <string>}', agent: `auto, or one or a list of ${AGENTS.join(', ')}, acp:<target>`, agent_config: `a map of <agent>: {model: <string>} for ${AGENTS.join(', ')}, acp:<target>` };
         if (!ok)
             throw new UsageError(`${file}: ${key} must be ${want[spec.type] ?? `a ${spec.type}`}`);
         if (key === 'checks.not_proven' && value !== 'inconclusive' && value !== 'allow')

@@ -9,7 +9,7 @@
 
 done-done won't accept "done" without real, fresh proof from your product, captured at the exact commit being called done.
 
-[![Node 22.5+](https://img.shields.io/badge/node-22.5%2B-3fb950?logo=nodedotjs&logoColor=white)](https://nodejs.org) [![Status: early preview](https://img.shields.io/badge/status-early%20preview-d29922)](#whats-next) [![npm: not published yet](https://img.shields.io/badge/npm-not%20published%20yet-8b949e?logo=npm&logoColor=white)](#quick-start)
+[![Node 22.5+](https://img.shields.io/badge/node-22.5%2B-3fb950?logo=nodedotjs&logoColor=white)](https://nodejs.org) [![Status: early preview](https://img.shields.io/badge/status-early%20preview-d29922)](#whats-next) [![npm: not published yet](https://img.shields.io/badge/npm-not%20published%20yet-8b949e?logo=npm&logoColor=white)](#use-it-from-your-agent)
 
 <br>
 
@@ -43,9 +43,51 @@ Four moments from a demo notes app. Every picture is real output from the curren
 <picture><source media="(prefers-color-scheme: dark)" srcset="docs/media/reasons-dark.svg"><img src="docs/media/reasons-light.svg" alt="done-done check fails: one screenshot is from an older commit, one file is empty, one is a blank frame." width="400" align="top"></picture>
 <picture><source media="(prefers-color-scheme: dark)" srcset="docs/media/config-dark.svg"><img src="docs/media/config-light.svg" alt="done-done run stops with exit 2 because the config has an unknown key." width="400" align="top"></picture>
 
-## Quick start
+done-done is an [AXI](https://axi.md), which means -
 
-You need Node 22.5 or later and git. done-done is not on npm yet, so install it from source.
+- It's just a CLI any capable agent can run without setup.
+- It's built for agents: [TOON](https://github.com/toon-format/spec) output by default (`--json` and `--full` when needed), and every result names the next command in its `help` lines.
+- The skill below only handles discovery; agents learn done-done by using it.
+
+## Use It From Your Agent
+
+You need Node 22.5 or later and git. Give your agent the done-done skill in the [Agent Skills](https://agentskills.io) format with [`npx skills`](https://github.com/vercel-labs/skills), naming your agent with `-a`:
+
+```sh
+npx skills add umeranjum17/done-done --skill done-done -a claude-code -y
+```
+
+Use `-a codex` or `-a opencode` for those agents. `-a` and `-y` skip the installer's four prompts and keep it from writing skill folders for agents you do not use.
+
+The skill lands in this project (`.claude/skills/done-done/` for Claude Code, `.agents/skills/done-done/` for Codex and opencode) next to a `skills-lock.json`: commit both so teammates and CI get it too. Or add `-g` to install it once for all your projects (`~/.claude/skills/` for Claude Code) and leave the project untouched.
+
+That is the entire setup - no npm install needed.
+The skill tells your agent to use `done-done` if it is on PATH and otherwise run it through `npx`, so the CLI comes along on demand.
+It stays a short stub and sends the agent to `--help` and the bare command for current instructions, so an installed copy cannot go stale against a newer CLI.
+
+done-done is not on npm yet, so today the skill runs it straight from GitHub. This is the command that works now:
+
+```sh
+npx -y --allow-git=all github:umeranjum17/done-done --help
+```
+
+The first run builds it: 10 to 20 seconds cold (measured with npm 10, 11 and 12, and in a clean `node:22` container); later runs take about 2 seconds. npm 12 refuses GitHub packages without `--allow-git=all`. Once done-done is on npm, the switch is one line in `src/skill.ts`: `const NPX = 'npx -y done-done';`.
+
+Then, in agents that expose skills as slash commands (Claude Code, for example), invoke it directly:
+
+```
+/done-done prove the app in this repo works
+```
+
+Or just ask in plain words - "prove the app in this repo works", "is this really done?", "gate this PR on proof" - and the agent loads the skill on its own.
+
+## Other Ways to Use done-done
+
+The skill is the recommended path, but it is not the only one.
+
+### Manual CLI
+
+Install it from source:
 
 **1. Install**
 
@@ -67,8 +109,10 @@ done-done init
 ```yaml
 journeys:
   smoke:
-    command: npm test > .proof/${RUN_ID}.log
+    command: npm test > $DONE_DONE_EVIDENCE_ROOT/${RUN_ID}.log
 ```
+
+The command runs from the repo root with `DONE_DONE_EVIDENCE_ROOT` (the evidence root) and `DONE_DONE_RUN_ID` set, and `${RUN_ID}` in it is replaced. A run that writes nothing under the evidence root fails.
 
 Commit the config, because proof only counts from a clean tree:
 
@@ -122,6 +166,8 @@ So far: `init`, `run`, `check`, `receipt` and the opt-in screenshot judge. Comin
 ```sh
 npm install
 npm test   # builds, then runs the end-to-end tests against throwaway git repos
+npm run build:skill              # regenerate skills/done-done/SKILL.md from src/skill.ts
+npm run build:skill -- --check   # fail if the committed skill is out of date (CI runs this)
 ```
 
 The terminal pictures (hero, run, pass, reasons, config) are real output from the current build; redraw them with `npm run build && node docs/media/make.mjs`. The wordmark and the flow picture are hand-made SVGs.

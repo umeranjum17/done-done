@@ -1,4 +1,0 @@
-# done-done has no hosted CI right now, and its integration tests run in the
-# local validation pipeline. This declaration lets validation complete on
-# zero-check PRs that have no CI checks to wait for.
-no_ci: true

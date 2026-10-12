@@ -27,6 +27,15 @@ global flags: --json (JSON instead of TOON), --full (do not truncate lists)
   capture shows the outcome; a wrong screen fails, an unsure answer is inconclusive. Off by default.
 exit codes: 0 pass, 1 fail, 2 usage or config error, 3 inconclusive
 
+journeys (.done-done.yaml): the command runs with DONE_DONE_EVIDENCE_ROOT (the evidence root) and DONE_DONE_RUN_ID
+  set, and \${RUN_ID} in it is replaced; it must write its files under the evidence root, e.g.
+  journeys: { smoke: { command: "<drive the real app> > \$DONE_DONE_EVIDENCE_ROOT/\${RUN_ID}.log" } }
+Checks block (--from): the newest "## Checks" heading, then these four keys, each at the start of a line:
+  outcome: <what a user can now do>
+  repro: <command that failed before and passes now, or n/a; a fix PR needs one>
+  proof: <the command or path that drove the real product; name the repo's verify-<app> skill, or say "no verify skill">
+  evidence: <the evidence file paths, or "not proven: <cause>">
+
 Results are printed as one TOON document (the AXI convention); pass --json for JSON.`;
 
 // How many list rows a compact result shows before it reports the rest as omitted.
@@ -53,6 +62,10 @@ function captureHint(cfg: Config): string {
   if (names.length > 1) return `done-done run <journey> (${names.join(', ')})`;
   return 'done-done run -- <capture command>';
 }
+
+// The shape of a journey, so a new user or agent can write one without opening the reference.
+// done-done sets DONE_DONE_EVIDENCE_ROOT and replaces ${RUN_ID}, so the example works for any evidence root.
+const journeyExample = 'journeys: { smoke: { command: "<drive the real app> > $DONE_DONE_EVIDENCE_ROOT/${RUN_ID}.log" } }';
 
 type RunRecord = {
   schema: 1;
@@ -141,7 +154,7 @@ function closeRun(repo: string, cfg: Config, rec: RunRecord): number {
   let reason = '';
   if (now.commit !== rec.commit) reason = `HEAD moved from ${rec.commit} to ${now.commit} during the run; evidence is not tied to one commit`;
   else if (rec.exit !== null && rec.exit !== 0) reason = `the run command exited ${rec.exit}`;
-  else if (!rec.files.length) reason = `the run wrote no files under ${cfg.evidence.root}`;
+  else if (!rec.files.length) reason = `the run wrote no files under ${cfg.evidence.root}; the command gets it as $DONE_DONE_EVIDENCE_ROOT and its run id as $DONE_DONE_RUN_ID (or \${RUN_ID} in the command)`;
   const evidence: unknown[] = FULL ? rec.files.map((f) => ({ path: rel(f.path), sha256: f.sha256, bytes: f.bytes })) : rec.files.map((f) => rel(f.path));
   const rows = cap(evidence);
   const result: Record<string, unknown> = {
@@ -563,9 +576,11 @@ function cmdInit(argv: string[]): number {
   const existed = existsSync(file);
   const cfg = loadConfig(repo); // validates the existing project config; malformed -> exit 2, no writes
   let rel: string;
+  let root = INIT_EVIDENCE_ROOT;
   if (existed) {
     const r = relative(repo, cfg.evidence.root);
     rel = r && !r.startsWith('..') ? r : '';
+    root = rel || cfg.evidence.root;
     console.log('init: .done-done.yaml already exists; left unchanged');
   } else {
     const app = basename(repo);
@@ -576,7 +591,8 @@ function cmdInit(argv: string[]): number {
     console.log(`init: wrote .done-done.yaml (app: ${app})`);
   }
   if (rel && ensureIgnored(repo, rel)) console.log(`init: added ${rel.replace(/\/+$/, '')}/ to .gitignore`);
-  console.log('next: add a journey to .done-done.yaml, then `done-done run <journey>`');
+  console.log(`next: add a journey that drives the real app and saves proof under ${root}, e.g. ${journeyExample}`);
+  console.log('then: commit, `done-done run smoke`, and `done-done check --outcome "<what you proved>" <files it recorded>`');
   return PASS;
 }
 
@@ -604,17 +620,19 @@ function cmdBare(): number {
   }
   const cfg = loadConfig(repo);
   const journeys = Object.keys(cfg.journeys);
+  const root = relative(repo, cfg.evidence.root) || cfg.evidence.root;
   const result: Record<string, unknown> = {
     command: 'done-done',
     config: 'present',
     app: cfg.app,
-    evidence_root: relative(repo, cfg.evidence.root) || cfg.evidence.root,
+    evidence_root: root,
     journeys,
     runs: loadRecords(cfg).length,
   };
+  const check = '`done-done check --outcome "<what you proved>" <files it recorded>`';
   result.help = journeys.length
-    ? [`Capture proof with \`done-done run ${journeys[0]}\`, then check it with \`done-done check\``]
-    : ['Add a journey to .done-done.yaml, or capture a one-off proof with `done-done run -- <command>`, then `done-done check`'];
+    ? [`Capture proof with \`done-done run ${journeys[0]}\`, then check it with ${check}`]
+    : [`Add a journey to .done-done.yaml (${journeyExample}), commit, then \`done-done run smoke\` and ${check}`];
   emit(result);
   return PASS;
 }

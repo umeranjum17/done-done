@@ -1,126 +1,41 @@
 ---
 name: done-done
-description: "Prove that the real product works before calling work done. done-done captures commit-bound evidence (screenshots, recordings, logs) by running a journey, then checks a claim's evidence is real, fresh, tied to the current commit and not reused. Use when asked to prove a change works, capture screenshots/recordings/logs as evidence, gate a pull request on real proof, or check that cited evidence is genuine."
-user-invocable: false
+description: "Prove the real app works before work is called done: done-done runs a capture of the real product, ties every screenshot, recording and log it writes to the exact commit, then checks that cited evidence is real, fresh and not reused. Use when the user asks to prove a change or app works, asks whether a task is really done, wants screenshots, recordings or logs captured as evidence, or wants a pull request gated on proof."
+license: Apache-2.0
+argument-hint: "[what to prove, e.g. the app in this repo works]"
+metadata:
+  author: umeranjum17
+  hermes:
+    tags: [proof, evidence, verification, screenshots, ci, axi]
+    category: devops
 ---
 
 # done-done
 
-"No proof, no done." done-done runs your capture command and ties every file it writes to the exact
-commit, then checks that the evidence a claim points to is really there, is a real image/video/log,
-comes from the current commit, and is new. The core checks are deterministic, offline and model-free; the opt-in `--judge` flag asks a model through BYOKit whether each screenshot shows the outcome.
+"No proof, no done." done-done captures proof from the real product, ties every screenshot, recording
+and log to the exact commit, and checks that cited proof is real, fresh and not reused. You run it for
+the user; they only say what should be proven.
 
-The CLI is the source of truth. Run `done-done --help` for the current commands and flags.
+## Current guidance lives in the CLI
 
-## Install
+Do not follow command or config details from memory or from this file - installed copies go stale.
+Get the current source of truth from the CLI.
 
-The package ships a single `done-done` bin. If it is not already on your `PATH`, install it from the
-packed tarball (or, once it is published, from the registry):
+First run `command -v done-done`. If it prints a path, run `done-done` as shown below. If not, run
+`npx -y --allow-git=all github:umeranjum17/done-done` wherever this file or done-done output says `done-done` - nothing to install (the first
+run builds it, about 20 seconds).
 
-```sh
-npm install -g ./done-done-<version>.tgz
-done-done --help
-```
+- `done-done` (no arguments, inside the repo) for this repo's proof setup and the next step
+- `done-done --help` for every command and flag, the journey format and the exact `## Checks` block
 
-Do not assume `npx -y done-done` works before the package is published. The full reference ships with
-the package as `docs/reference.md`.
+Results are TOON (`init` prints plain text): read `result` and follow the `help` lines through
+`init`, `run`, `check` and `receipt`. Proof comes from driving the real product, not from a unit test run, and counts only from a committed
+tree: commit the done-done setup (config, .gitignore, capture script) before you capture. `fail` or
+`inconclusive` is not done: fix the cause and re-run, or tell the user exactly what is still unproven.
 
-## Set up a repo
+## Request
 
-```sh
-cd <repo>
-done-done init
-```
+$ARGUMENTS
 
-`init` writes a minimal `.done-done.yaml` only when one does not exist, and adds the evidence root
-(`.proof/`, or a config's existing `evidence.root`) to `.gitignore` when git does not already ignore
-it. It never overwrites an existing config: running it again changes nothing, and a malformed
-`.done-done.yaml` makes it exit 2 and leave the file untouched.
-
-Then describe how to capture proof in `.done-done.yaml`:
-
-```yaml
-app: notes
-evidence:
-  root: .proof                     # keep this out of git
-  ignore_paths: ["docs/**"]        # commits touching only these keep evidence fresh
-journeys:
-  smoke:
-    command: node scripts/capture.mjs --out .proof/${RUN_ID}
-```
-
-Commit `.done-done.yaml` and `.gitignore`, because proof only counts from a clean tree.
-
-## Prove a change (capture)
-
-```sh
-done-done run smoke
-```
-
-`run` records HEAD, its tree and whether tracked files were dirty; runs the journey with `${RUN_ID}`
-substituted; and hashes every file created or changed under the evidence root into
-`.proof/.done-done/runs/<run-id>.json`. A non-zero command exit, a moved HEAD, or a run that wrote
-nothing fails.
-
-For a proof you drive by hand or through an agent:
-
-```sh
-done-done run --open          # prints a run id
-# ...capture files under the evidence root...
-done-done run --close <run-id>
-```
-
-A one-off command without a journey: `done-done run -- <command>`.
-
-## Check a claim
-
-```sh
-done-done check --outcome "notes sync between two devices" .proof/<run-id>/after.png
-done-done check --from pr-body.md            # newest "## Checks" block; a file, `-` for stdin, or a GitHub PR URL
-```
-
-`check` looks only at the files the claim names. Each must exist and be non-empty; be valid real
-media (magic bytes match the extension, complete, not blank or tiny; video is decoded with
-`ffprobe`); be fresh (in a run record whose commit is HEAD — a diff of only `ignore_paths` keeps it
-fresh); be clean (the run was not dirty and exited 0); and not reused (not byte-identical within the
-claim, and not already used to prove a different claim in this repo).
-
-Add `--judge` (to `check` or `receipt`) to also ask, through BYOKit and the person's own Claude
-plan, whether each PNG/JPEG shows the outcome: a wrong screen fails (1), an unsure answer is
-inconclusive (3). It is off by default and needs a one-time sign-in
-(`mkdir -p ~/.done-done/claude && CLAUDE_CONFIG_DIR=~/.done-done/claude claude auth login`); a
-missing sign-in exits 2 with that command. Text, log and video evidence are not judged.
-
-## Record and re-verify a receipt
-
-```sh
-done-done receipt --from pr-body.md            # same claim inputs as check (also `--from -`); writes only on a clean-tree pass that cited evidence
-done-done receipt --verify <head>              # read-only re-check for CI or merge
-```
-
-A receipt binds one passing check to one commit and the sha256 of every file it cited. See
-`docs/reference.md` ("Record a receipt") for the exact write and verify rules.
-
-## Exit codes
-
-`0` pass, `1` fail, `2` usage or config error, `3` inconclusive.
-
-## Honest outcomes — these are not a pass
-
-- A cited file that is in no run record is **inconclusive (3)**: nothing ties it to a commit.
-- Video evidence is "not verified" (inconclusive) when `ffprobe` is missing; without it a video
-  cannot be proven. Install ffmpeg/ffprobe to verify it.
-- `evidence: not proven: <cause>` is inconclusive (3). A repo may allow it only through a trusted
-  ref (`--trusted-ref`), never from the working copy.
-- Report only what you saw. Results print as one TOON document (`--json` for JSON): a pass is
-  `result: pass` with exit 0, a failure is `result: fail` with exit 1, and an inconclusive result is
-  `result: inconclusive` with exit 3.
-
-## In CI or a merge gate
-
-```sh
-done-done check --from "$PR_URL" --trusted-ref origin/main
-```
-
-`--trusted-ref` reads `.done-done.yaml` from that ref instead of the pull request branch, so a PR
-cannot loosen the rules. `--from <URL>` needs the `gh` CLI.
+If the request above is non-empty, the user invoked `/done-done` explicitly - fetch the current CLI
+guidance, then prove that. If it is empty, infer what to prove from the conversation.

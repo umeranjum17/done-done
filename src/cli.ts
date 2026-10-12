@@ -254,7 +254,7 @@ function closeRun(repo: string, cfg: Config, rec: RunRecord): number {
   if (rec.command) {
     const template = rec.command.replaceAll(rec.run_id, '${RUN_ID}');
     const recorded = Object.values(cfg.journeys).some((j) => j.command === template);
-    if (!recorded) (result.help as string[]).push(`this command's recipe is not in the repo (.done-done.yaml journeys); record it with: done-done init --journey <name> -- ${quote(template)}`);
+    if (!recorded) (result.help as string[]).push(`this command's recipe is not in the repo (.done-done.yaml journeys); record it with: done-done init --journey <name> -- <command>`);
   }
   emit(result);
   return reason ? FAIL : PASS;

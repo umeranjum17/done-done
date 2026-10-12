@@ -6,8 +6,9 @@ import { homedir } from 'node:os';
 import { dirname, isAbsolute, join, matchesGlob, relative, resolve, sep } from 'node:path';
 import { parseArgs } from 'node:util';
 import { encode } from '@toon-format/toon';
+import { Document, parseDocument } from 'yaml';
 import { loadConfig, UsageError } from './config.js';
-import { judge } from './judge.js';
+import { judge, quote } from './judge.js';
 import { checkMedia } from './media.js';
 const PASS = 0, FAIL = 1, USAGE = 2, INCONCLUSIVE = 3;
 // The shape of a journey, so a new user or agent can write one without opening the reference.
@@ -24,6 +25,7 @@ const CHECKS_TEXT = `Checks block (--from): the newest "## Checks" heading, then
 // One table drives `--help` and every `<command> --help`: each command's usage lines and the flags it takes.
 const FLAGS = {
     '-- <command...>': 'run this command instead of a journey; ${RUN_ID} in it becomes the run id',
+    '--journey <name>': 'record this command as a journey in .done-done.yaml; ${RUN_ID} in it becomes the run id',
     '--open': 'open a run for a hand- or agent-driven proof; prints its id and folder',
     '--close <run-id>': 'seal an open run and record the files in its folder',
     '--outcome "<claim>"': 'the outcome the evidence files prove; the files follow as arguments',
@@ -32,17 +34,15 @@ const FLAGS = {
     '--claim-id <id>': 'the claim the evidence proves; evidence already used for another claim id is reuse (default: the current branch, or the PR branch with --from <PR URL>; required on a detached HEAD)',
     '--judge': 'a model says whether each PNG/JPEG capture shows the outcome (off by default; or judge.enabled: true)',
     '--verify <head>': 'read-only: verify the receipt recorded for <head>',
-    '--agent <agent>': 'also add a SessionStart hook to .claude/settings.json (claude) or .codex/hooks.json (codex) that shows `done-done` to each session (opt-in)',
 };
 // `more` is the reference text a command needs beyond its flags, shared with the top-level help.
 const COMMANDS = {
     init: {
         usage: [
             ['done-done init', 'write a minimal .done-done.yaml (evidence lives outside the repo)'],
-            ['done-done init --agent claude', 'also show this repo\'s done-done state at each Claude Code session start'],
-            ['done-done init --agent codex', 'also show this repo\'s done-done state at each Codex session start'],
+            ['done-done init --journey <name> -- <command...>', "record a journey's capture recipe in .done-done.yaml"],
         ],
-        flags: ['--agent <agent>'],
+        flags: ['--journey <name>', '-- <command...>'],
         more: [JOURNEYS_TEXT],
     },
     run: {
@@ -104,6 +104,7 @@ function emit(value) {
 function cap(items) {
     return FULL || items.length <= COMPACT_LIST ? { items, omitted: 0 } : { items: items.slice(0, COMPACT_LIST), omitted: items.length - COMPACT_LIST };
 }
+const commandText = (argv) => (argv.length === 1 ? argv[0] : argv.map(quote).join(' '));
 // A hint that names the exact command that moves the work forward, naming the journey when there is one.
 function captureHint(cfg) {
     const names = Object.keys(cfg.journeys);
@@ -215,6 +216,14 @@ function closeRun(repo, cfg, rec) {
     result.help = [reason
             ? `Fix the capture, commit, then re-run: ${captureHint(cfg)}`
             : `Check this proof: done-done check --outcome "<what you proved>" ${rel(rec.files[0].path)}`];
+    // A command that matches no repo-recorded journey cannot be re-run from the repo recipe.
+    // A journey run expands ${RUN_ID} to the run id, so compare with the placeholder restored.
+    if (rec.command) {
+        const template = rec.command.replaceAll(rec.run_id, '${RUN_ID}');
+        const recorded = Object.values(cfg.journeys).some((j) => j.command === template);
+        if (!recorded)
+            result.help.push(`this command's recipe is not in the repo (.done-done.yaml journeys); record it with: done-done init --journey <name> -- <command>`);
+    }
     emit(result);
     return reason ? FAIL : PASS;
 }
@@ -239,7 +248,7 @@ function cmdRun(argv) {
     const journey = positionals[0] ?? null;
     if (positionals.length > 1)
         throw new UsageError('run takes at most one journey name');
-    let command = dash < 0 ? null : argv.slice(dash + 1).join(' ');
+    let command = dash < 0 ? null : commandText(argv.slice(dash + 1));
     if (journey && !command) {
         const j = cfg.journeys[journey];
         if (!j)
@@ -690,74 +699,58 @@ function ensureIgnored(repo, rel) {
     appendFileSync(file, `${text && !text.endsWith('\n') ? '\n' : ''}${entry}\n`);
     return true;
 }
-// The session-start hook `init --agent <agent>` adds; the agent shows its stdout to the session.
-// Without done-done on PATH it prints nothing and exits 0, so it never breaks a session.
-// Claude Code reads it from the repo's .claude/settings.json, Codex from the repo's .codex/hooks.json
-// (project scope; Codex docs: <repo>/.codex/hooks.json, SessionStart, matcher omitted matches every start).
-const HOOK_COMMAND = 'command -v done-done >/dev/null && done-done || true';
-const CLAUDE_HOOK = HOOK_COMMAND;
-const CODEX_HOOK = HOOK_COMMAND;
-// The repo's .claude/settings.json with the hook merged in, keeping every other key and hook; no text when it is already there.
-function claudeSettings(repo) {
-    const file = join(repo, '.claude', 'settings.json');
-    const bad = (why) => new UsageError(`.claude/settings.json ${why}`, 'Fix .claude/settings.json, then re-run: done-done init --agent claude');
-    const isObject = (v) => !!v && typeof v === 'object' && !Array.isArray(v);
-    let settings = {};
-    if (existsSync(file)) {
-        try {
-            settings = JSON.parse(readFileSync(file, 'utf8'));
-        }
-        catch (e) {
-            throw bad(`is not valid JSON (${e.message})`);
-        }
-    }
-    if (!isObject(settings))
-        throw bad('is not a JSON object');
-    if (settings.hooks !== undefined && !isObject(settings.hooks))
-        throw bad('has "hooks" that is not an object');
-    const start = settings.hooks?.SessionStart ?? [];
-    if (!Array.isArray(start))
-        throw bad('has "hooks.SessionStart" that is not a list');
-    if (start.some((m) => Array.isArray(m?.hooks) && m.hooks.some((h) => h?.command === CLAUDE_HOOK)))
-        return { file };
-    settings.hooks = { ...settings.hooks, SessionStart: [...start, { hooks: [{ type: 'command', command: CLAUDE_HOOK }] }] };
-    return { file, text: `${JSON.stringify(settings, null, 2)}\n` };
-}
-// The repo's .codex/hooks.json with the hook merged in, keeping every other key and hook; no text when it is already there.
-function codexSettings(repo) {
-    const file = join(repo, '.codex', 'hooks.json');
-    const bad = (why) => new UsageError(`.codex/hooks.json ${why}`, 'Fix .codex/hooks.json, then re-run: done-done init --agent codex');
-    const isObject = (v) => !!v && typeof v === 'object' && !Array.isArray(v);
-    let settings = {};
-    if (existsSync(file)) {
-        try {
-            settings = JSON.parse(readFileSync(file, 'utf8'));
-        }
-        catch (e) {
-            throw bad(`is not valid JSON (${e.message})`);
-        }
-    }
-    if (!isObject(settings))
-        throw bad('is not a JSON object');
-    if (settings.hooks !== undefined && !isObject(settings.hooks))
-        throw bad('has "hooks" that is not an object');
-    const start = settings.hooks?.SessionStart ?? [];
-    if (!Array.isArray(start))
-        throw bad('has "hooks.SessionStart" that is not a list');
-    if (start.some((m) => Array.isArray(m?.hooks) && m.hooks.some((h) => h?.command === CODEX_HOOK)))
-        return { file };
-    settings.hooks = { ...settings.hooks, SessionStart: [...start, { hooks: [{ type: 'command', command: CODEX_HOOK }] }] };
-    return { file, text: `${JSON.stringify(settings, null, 2)}\n` };
-}
 function cmdInit(argv) {
-    const { values } = parseArgs({ args: argv, options: { agent: { type: 'string' } }, allowPositionals: false });
-    if (values.agent !== undefined && values.agent !== 'claude' && values.agent !== 'codex')
-        throw new UsageError(`--agent ${values.agent} is not supported; the supported values are claude, codex`, 'Run: done-done init --agent <claude|codex>');
+    const dash = argv.indexOf('--');
+    const { values } = parseArgs({
+        args: dash < 0 ? argv : argv.slice(0, dash),
+        options: { journey: { type: 'string' } },
+        allowPositionals: false,
+    });
+    const parts = dash < 0 ? [] : argv.slice(dash + 1);
+    const journey = values.journey ?? null;
+    if (journey === null && parts.length)
+        throw new UsageError('init needs --journey <name> to record a command after --');
+    if (journey !== null && !parts.some((p) => p.trim()))
+        throw new UsageError(`init --journey ${journey} needs a command after --`);
+    if (journey !== null && !/^[A-Za-z0-9][A-Za-z0-9_-]*$/.test(journey))
+        throw new UsageError(`invalid journey name ${journey}; use letters, digits, - or _`);
     const repo = repoRoot();
     const file = join(repo, '.done-done.yaml');
     const existed = existsSync(file);
     const cfg = loadConfig(repo); // validates the existing project config; malformed -> exit 2, no writes
-    const hook = values.agent === 'claude' ? claudeSettings(repo) : values.agent === 'codex' ? codexSettings(repo) : undefined; // likewise validated before any write
+    if (journey !== null) {
+        // Record the capture recipe in the repo so any checkout can re-run the proof.
+        // The command is stored verbatim; ${RUN_ID} in it becomes the run id, like a run -- command.
+        const command = commandText(parts);
+        const doc = existed ? parseDocument(readFileSync(file, 'utf8')) : new Document({ app: cfg.app });
+        const top = (doc.toJS() ?? {});
+        if (typeof top !== 'object' || Array.isArray(top))
+            throw new UsageError(`${file}: top level must be a mapping`);
+        const journeys = top.journeys ?? {};
+        if (typeof journeys !== 'object' || Array.isArray(journeys))
+            throw new UsageError(`${file}: journeys must be a mapping`);
+        if (top.journeys == null)
+            doc.set('journeys', doc.createNode({}));
+        doc.setIn(['journeys', journey], { command });
+        writeFileSync(`${file}.tmp`, doc.toString({ lineWidth: 0 }));
+        renameSync(`${file}.tmp`, file);
+        const fresh = loadConfig(repo);
+        const rel = under(repo, fresh.evidence.root);
+        const added = !!rel && ensureIgnored(repo, rel);
+        const root = shown(repo, fresh.evidence.root);
+        const check = 'done-done check --outcome "<what you proved>" <files it recorded>';
+        emit({
+            command: 'init',
+            result: 'pass',
+            config: existed ? 'updated' : 'written',
+            journey,
+            app: fresh.app,
+            evidence_root: root,
+            gitignore: added ? `added ${rel.replace(/\/+$/, '')}/` : 'unchanged',
+            help: [`Capture proof: done-done run ${journey}, then: ${check}`],
+        });
+        return PASS;
+    }
     if (!existed) {
         // No evidence.root: proof goes to <local_root>/<app>, outside the repo, so it outlives this checkout.
         // The pinned app name is what lets every checkout of the repo find the same evidence and receipts.
@@ -768,11 +761,6 @@ function cmdInit(argv) {
     // An evidence root inside the repo (an older config's `root: .proof`) stays out of git.
     const rel = under(repo, cfg.evidence.root);
     const added = !!rel && ensureIgnored(repo, rel);
-    if (hook?.text) {
-        mkdirSync(dirname(hook.file), { recursive: true });
-        writeFileSync(`${hook.file}.tmp`, hook.text);
-        renameSync(`${hook.file}.tmp`, hook.file);
-    }
     const root = shown(repo, cfg.evidence.root);
     const check = 'done-done check --outcome "<what you proved>" <files it recorded>';
     emit({
@@ -782,20 +770,9 @@ function cmdInit(argv) {
         app: cfg.app,
         evidence_root: root,
         gitignore: added ? `added ${rel.replace(/\/+$/, '')}/` : 'unchanged',
-        ...(hook &&
-            (values.agent === 'codex'
-                ? { codex_hook: hook.text ? 'added to .codex/hooks.json' : 'unchanged' }
-                : { claude_hook: hook.text ? 'added to .claude/settings.json' : 'unchanged' })),
-        help: [
-            ...(Object.keys(cfg.journeys).length
-                ? [`Capture proof: ${captureHint(cfg)}, then: ${check}`]
-                : [`Add a journey that drives the real app and saves proof under $DONE_DONE_EVIDENCE_ROOT (each run's own folder in ${root}), e.g. ${journeyExample}`, `Then commit, run \`done-done run smoke\`, and: ${check}`]),
-            ...(hook?.text
-                ? values.agent === 'codex'
-                    ? ['Commit .codex/hooks.json: each Codex session in this repo then starts with `done-done` output (it needs done-done on PATH)']
-                    : ['Commit .claude/settings.json: each Claude Code session in this repo then starts with `done-done` output (it needs done-done on PATH)']
-                : []),
-        ],
+        help: Object.keys(cfg.journeys).length
+            ? [`Capture proof: ${captureHint(cfg)}, then: ${check}`]
+            : [`Add a journey that drives the real app and saves proof under $DONE_DONE_EVIDENCE_ROOT (each run's own folder in ${root}), e.g. ${journeyExample}`, `Then commit, run \`done-done run smoke\`, and: ${check}`],
     });
     return PASS;
 }

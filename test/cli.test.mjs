@@ -784,6 +784,15 @@ test('init --journey stores an argv with spaces so the run gets the same argumen
   assert.ok(!toon(adhoc).help.join('\n').includes('not in the repo'), 'the same command run ad hoc matches the recorded recipe');
 });
 
+test('the outside-repo hint never prints the ad-hoc command, so a secret in it is not suggested for commit', () => {
+  const { dd } = bareRepo();
+  const r = dd('run', '--', 'true', '--token', 's3cret-value');
+  const help = toon(r).help.join('\n');
+  assert.match(help, /not in the repo/);
+  assert.match(help, /init --journey <name> -- <command>/);
+  assert.ok(!help.includes('s3cret-value'), help);
+});
+
 test('init with an empty --journey name is a usage error, not a plain init', () => {
   const { repo, dd } = bareRepo();
   const r = dd('init', '--journey', '', '--', 'echo hi');

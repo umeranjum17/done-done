@@ -2061,6 +2061,15 @@ test('a rerun does not reuse a drive recorded from a dirty tree', () => {
   assert.doesNotMatch(readFileSync(join(t.env.DONE_DONE_HOME, 'runs', 'notes', r.run_id, 'events.jsonl'), 'utf8'), /"reused":true/);
 });
 
+test('a rerun whose source record is gone starts a fresh run', () => {
+  const t = setup();
+  const a = toon(t.dd('verify', 'shots', '--outcome', 'home renders', '--foreground'));
+  rmSync(JSON.parse(readFileSync(join(t.env.DONE_DONE_HOME, 'runs', 'notes', a.run_id, 'run.json'), 'utf8')).record);
+  const r = t.dd('rerun', '--run', a.run_id);
+  assert.equal(r.code, 0, r.out);
+  assert.equal(toon(r).result, 'pass');
+});
+
 // A run as `verify` left it, rewritten to pending with no runner: the state a run is in before its runner boots.
 function pendingRun(t, edit = () => {}) {
   const src = toon(t.dd('verify', 'shots', '--outcome', 'home renders', '--foreground'));

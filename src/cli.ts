@@ -1065,6 +1065,14 @@ function cmdLogs(argv: string[]): number {
   return PASS;
 }
 
+const drivesClean = (record?: string) => {
+  try {
+    return !!record && JSON.parse(readFileSync(record, 'utf8')).dirty === false;
+  } catch {
+    return false;
+  }
+};
+
 async function cmdRerun(argv: string[]): Promise<number> {
   const { values } = parseArgs({ args: argv, options: { run: { type: 'string' }, wait: { type: 'boolean' }, 'no-wait': { type: 'boolean' } } });
   if (values.wait && values['no-wait']) throw new UsageError('pass only one of --wait and --no-wait');
@@ -1078,10 +1086,10 @@ async function cmdRerun(argv: string[]): Promise<number> {
   const group = src.runner?.journey_pgid;
   if (['pending', 'running'].includes(src.status) && group && alive(-group)) throw new UsageError(`the journey of run ${srcId} is still running, so it cannot be rerun yet`, `Read it: done-done status --run ${srcId}`);
   const inputs = inputsOf(src.repo, loadConfig(src.repo), src.journey);
+  const reuse = !!src.inputs && (['head', 'journey', 'skill'] as const).every((k) => src.inputs![k] === inputs[k]) && drivesClean(src.record);
   const id = newRunId(git(repo, 'rev-parse', 'HEAD'));
   const dir = join(root, id);
   mkdirSync(join(dir, 'logs'), { recursive: true });
-  const reuse = !!src.inputs && (['head', 'journey', 'skill'] as const).every((k) => src.inputs![k] === inputs[k]) && !!src.record && JSON.parse(readFileSync(src.record, 'utf8')).dirty === false;
   const steps = src.steps.map((s) => (reuse && ['resolve', 'drive'].includes(s.name) && s.status === 'completed' ? { ...s } : { name: s.name, status: 'pending' as StepState }));
   const created = now();
   const run: Run = { schema: 2, run_id: id, kind: src.kind, app: cfg.app, repo: src.repo, journey: src.journey, claim: src.claim, claim_id: src.claim_id, status: 'pending', inputs, steps, created, updated: created, ...(reuse && src.record && { record: src.record }) };

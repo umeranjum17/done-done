@@ -111,7 +111,7 @@ done-done receipt --judge --from pr-body.md
   npx -y -p done-done-axi -p @byokit/decide@0.6.5 done-done-axi check --judge --from pr-body.md
   ```
 
-  In a project that installs done-done, `npm install -D @byokit/decide@0.6.5` adds it for good. Sign in once:
+  In a project that installs done-done-axi, `npm install -D @byokit/decide@0.6.5` adds it for good. Sign in once:
 
   ```sh
   mkdir -p ~/.done-done/claude && CLAUDE_CONFIG_DIR=~/.done-done/claude claude auth login

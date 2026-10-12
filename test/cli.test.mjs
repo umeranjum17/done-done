@@ -1801,8 +1801,12 @@ test('doctor in a bare repo fails with the init fix; a malformed config names th
   assert.match(toon(r2).checks[1].detail, /\.done-done\.yaml/);
   assert.ok(!toon(r2).help.some((h) => h.includes('done-done init')), 'init cannot read a malformed config, so it is never the fix');
   mkdirSync(b.env.DONE_DONE_HOME, { recursive: true });
-  writeFileSync(join(b.env.DONE_DONE_HOME, 'config.yaml'), 'judge:\n  allow_same: true\n');
-  const jc = toon(doctorIn(b.repo, pathEnv(b.env, ['claude']), 'doctor')).checks.find((c) => c.check === 'judge_choice');
+  writeFileSync(join(b.env.DONE_DONE_HOME, 'config.yaml'), 'agent: claude\njudge:\n  allow_same: true\n');
+  const broke = toon(doctorIn(b.repo, pathEnv(b.env, ['claude']), 'doctor'));
+  const ag = broke.checks.find((c) => c.check === 'agent');
+  assert.equal(ag.status, 'missing', 'a broken repo config makes the agent unknown, not the global agent');
+  assert.match(ag.detail, /unknown without a valid config/);
+  const jc = broke.checks.find((c) => c.check === 'judge_choice');
   assert.equal(jc.status, 'missing', 'a broken repo config makes judge_choice unknown, not a global-fallback ok');
   assert.match(jc.detail, /unknown without a valid config/);
   const outside = doctorIn(b.dir, b.env, 'doctor');

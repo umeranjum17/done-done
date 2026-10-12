@@ -28,7 +28,7 @@ const CHECKS_TEXT = `Checks block (--from): the newest "## Checks" heading, then
 const RUNS_TEXT = `runs: each verify run lives in $DONE_DONE_HOME/runs/<app>/<run-id> (run.json, events.jsonl, logs/<step>.log)
   and goes on when the command that started it ends; its steps are resolve, drive (the journey), check, receipt, report`;
 const HOOK_AGENTS = ['claude', 'codex', 'opencode'];
-const DOCTOR_TEXT = `doctor is read-only (--probe writes only its call record) and exits 0 when every required item is ok, 2 otherwise.
+const DOCTOR_TEXT = `doctor changes nothing except the --probe call record (the agent itself may keep its own session files) and exits 0 when every required item is ok, 2 otherwise.
   required: git (inside a repository), config (a valid .done-done.yaml), evidence_root (writable).
   optional: verify_skill (.agents/skills/verify-<app>/), agent (the configured agent, or with agent: auto the first
   of claude, codex, opencode, pi, gemini on PATH that done-done can start, and its model), judge_choice (the claude judge, and whether it is
@@ -1430,7 +1430,7 @@ const PROBE_SCHEMA = { type: 'object', properties: { ok: { type: 'boolean' } }, 
 const unknownRow = (check) => ({ check, status: 'missing', detail: 'unknown without a valid config', fix: '' });
 // Is this repo worth driving: git, a valid config and a writable evidence root are
 // required; the verify skill, an agent CLI, the judge binary and ffprobe are optional.
-// Only --probe writes, its call record: a missing repo or config is a finding, never a crash, and nothing else is created.
+// doctor changes nothing except the --probe call record (the agent itself may keep its own session files): a missing repo or config is a finding, never a crash.
 async function cmdDoctor(argv) {
     let values;
     try {
@@ -1493,10 +1493,11 @@ async function cmdDoctor(argv) {
                 fix: `Write ${shown(repo, skillFile)} describing how to drive this app (a later done-done init will scaffold it)`,
             });
     }
-    // Without a usable repo config, the agent keys still come from the global config.
+    // A repo file that exists but is invalid makes the agent unknown; the global config alone resolves it only when there is no repo file.
+    const repoFileInvalid = !cfg && !!repo && existsSync(join(repo, '.done-done.yaml'));
     let agentCfg = cfg;
     let agentError = '';
-    if (!agentCfg) {
+    if (!agentCfg && !repoFileInvalid) {
         try {
             agentCfg = loadConfig(repo ?? process.cwd(), '');
         }
@@ -1508,7 +1509,10 @@ async function cmdDoctor(argv) {
     const startable = AGENTS.filter(supported).join(' and ');
     const installFix = `Install ${startable}, or set agent: to an installed one of ${AGENTS.join(', ')}`;
     const switchFix = `Set agent: to ${startable}`;
-    if (!agent) {
+    if (repoFileInvalid) {
+        checks.push(unknownRow('agent'));
+    }
+    else if (!agent) {
         checks.push({ check: 'agent', status: 'missing', detail: agentError, fix: 'Fix the config file named above, then re-run: done-done doctor' });
     }
     else {

@@ -2309,6 +2309,52 @@ test('maintain blocks on an unreadable feature file instead of crashing', { skip
   }
 });
 
+test('maintain blocks when a reader rewrites a file that was already modified', () => {
+  const { repo, env, sh } = setup();
+  const answer = JSON.stringify({ drift: [], recipe: 'open it', recipes: [], missing: [] });
+  const s = stubAgents(env, answer);
+  const skill = join(repo, '.agents', 'skills', 'verify-notes');
+  mkdirSync(join(skill, 'features'), { recursive: true });
+  mkdirSync(join(repo, 'src'), { recursive: true });
+  writeFileSync(join(repo, 'src', 'app.js'), 'export const app = 1;\n');
+  writeFileSync(join(skill, 'SKILL.md'), '# verify-notes\n');
+  writeFileSync(join(skill, 'features', 'README.md'), '# features\n\n- [Home](home.md)\n');
+  writeFileSync(join(skill, 'features', 'home.md'), '# Home\n');
+  sh('add', '-A');
+  sh('commit', '-qm', 'skill');
+  writeFileSync(join(repo, 'src', 'app.js'), 'export const app = 2;\n');
+  writeFileSync(join(s.bin, 'claude'), `#!${process.execPath}\nif (process.argv.includes('Read,Grep,Glob')) require('node:fs').writeFileSync('src/app.js', 'export const app = 3;\\n');\nprocess.stdout.write(JSON.stringify({ structured_output: ${answer} }));\n`, { mode: 0o755 });
+  const r = doctorIn(repo, s.env, 'maintain', '--foreground');
+  const m = toon(r);
+  assert.deepEqual([r.code, m.result, m.git_status], [3, 'blocked', 'changed'], r.out);
+  assert.match(m.reason, /^repo-changed: /);
+});
+
+test('maintain does not send a symlinked feature file to the agent', () => {
+  const { repo, env, sh } = setup();
+  const s = stubAgents(env, JSON.stringify({ drift: [], recipe: 'open it', recipes: [], missing: [] }));
+  const outside = mkdtempSync(join(tmpdir(), 'dd-outside-'));
+  try {
+    const secret = join(outside, 'creds.txt');
+    writeFileSync(secret, 'SECRET-TOKEN\n');
+    const skill = join(repo, '.agents', 'skills', 'verify-notes');
+    mkdirSync(join(skill, 'features'), { recursive: true });
+    writeFileSync(join(skill, 'SKILL.md'), '# verify-notes\n');
+    writeFileSync(join(skill, 'features', 'README.md'), '# features\n\n- [Home](home.md)\n- [Creds](creds.md)\n');
+    writeFileSync(join(skill, 'features', 'home.md'), '# Home\n');
+    symlinkSync(secret, join(skill, 'features', 'creds.md'));
+    sh('add', '-A');
+    sh('commit', '-qm', 'skill');
+    const r = doctorIn(repo, s.env, 'maintain', '--foreground');
+    const m = toon(r);
+    assert.deepEqual([r.code, m.result, m.git_status], [3, 'blocked', 'same'], r.out);
+    assert.match(m.reason, /^coverage: .*creds\.md/);
+    assert.ok(s.calls().every((c) => !c.stdin.includes('SECRET-TOKEN')));
+  } finally {
+    rmSync(outside, { recursive: true, force: true });
+  }
+});
+
 test('maintain reports a dead link, a wrong file:line and drift from read-only readers, and changes nothing', () => {
   const { repo, env, sh } = setup();
   const answer = JSON.stringify({

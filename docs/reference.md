@@ -217,7 +217,7 @@ done-done history [--limit <n>]                                     # this check
 done-done maintain        # --no-wait, --wait (the default), or --foreground (CI)
 ```
 
-`maintain` checks the repo's verify skill against the source in a run of kind `maintain`, in the same store as `verify`, so `status`, `attach`, `logs`, `abort` and `history` work on it. It reads only: it never edits the skill, the product code or git, and it records HEAD, `git status --porcelain --untracked-files=all`, `git diff --binary HEAD` and the sha256 of each untracked file's content before and after; if they differ, the run is `blocked` with a `repo-changed` finding. Its steps:
+`maintain` checks the repo's verify skill against the source in a run of kind `maintain`, in the same store as `verify`, so `status`, `attach`, `logs`, `abort` and `history` work on it. It reads only: it never edits the skill, the product code or git, and it records HEAD, `git status --porcelain --untracked-files=all` and the content of each changed or untracked path (git hashes regular files; symlinks are compared by target text and never read through) before and after; if they differ, the run is `blocked` with a `repo-changed` finding. Its steps:
 
 - `locate`: the verify skill (`skill`, default `.agents/skills/verify-<app>`) must have a `SKILL.md`; with none, the run ends `blocked` and points at `done-done init`.
 - `hygiene` (plain code): every local markdown link in the skill must resolve (`dead-link`); `features/README.md` must exist (`index`), list each `features/*.md` file (`unlisted`) and list it only once (`duplicate`).

@@ -1,6 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { createHash } from 'node:crypto';
-import { existsSync, readdirSync, readFileSync } from 'node:fs';
+import { existsSync, lstatSync, readdirSync, readFileSync, readlinkSync, statSync } from 'node:fs';
 import { dirname, extname, isAbsolute, join, relative, resolve } from 'node:path';
 import { askAgent, selectAgent, supported } from './agents.js';
 import type { Config } from './config.js';
@@ -31,10 +30,19 @@ const BLOCKING = new Set(['coverage', 'repo-changed']);
 const NOTICE = new Set(['truncated']);
 
 const git = (cwd: string, ...args: string[]) => execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: 64 << 20 });
-const sha = (data: Buffer | string) => createHash('sha256').update(data).digest('hex');
+// The read-only proof: HEAD, the status, and the content of every changed or untracked path. git hashes regular files
+// in a stream (no --no-filters blob is written), and symlinks are fingerprinted by their target text, never read through.
 const repoState = (repo: string) => {
-  const untracked = git(repo, 'ls-files', '-z', '--others', '--exclude-standard').split('\0').filter(Boolean);
-  return [git(repo, 'rev-parse', 'HEAD'), git(repo, 'status', '--porcelain', '--untracked-files=all'), git(repo, 'diff', '--binary', 'HEAD'), ...untracked.map((f) => `${f} ${sha(readFileSync(join(repo, f)))}`)].join('\n');
+  const paths = [...new Set([...git(repo, 'diff', '--name-only', '-z', 'HEAD').split('\0'), ...git(repo, 'ls-files', '-z', '--others', '--exclude-standard').split('\0')])].filter(Boolean);
+  const files: string[] = [];
+  const links: string[] = [];
+  for (const p of paths) {
+    const st = lstatSync(join(repo, p), { throwIfNoEntry: false });
+    if (st?.isSymbolicLink()) links.push(`${p} -> ${readlinkSync(join(repo, p))}`);
+    else if (st?.isFile()) files.push(p);
+  }
+  const hashes = files.length ? execFileSync('git', ['hash-object', '--no-filters', '--stdin-paths'], { cwd: repo, encoding: 'utf8', input: files.join('\n'), maxBuffer: 64 << 20 }).split('\n') : [];
+  return [git(repo, 'rev-parse', 'HEAD'), git(repo, 'status', '--porcelain', '--untracked-files=all'), ...links, ...files.map((p, i) => `${p} ${hashes[i]}`)].join('\n');
 };
 const lines = (p: string) => readFileSync(p, 'utf8').split('\n');
 const mdFiles = (dir: string) => readdirSync(dir, { recursive: true, withFileTypes: true }).filter((e) => e.isFile() && e.name.endsWith('.md')).map((e) => join(e.parentPath, e.name)).sort();
@@ -122,7 +130,7 @@ export async function maintainSteps<S>(run: { repo: string; findings?: Finding[]
   const featDir = join(skill, 'features');
   const index = join(featDir, 'README.md');
   const features = existsSync(featDir) ? readdirSync(featDir).filter((n) => n.endsWith('.md') && n !== 'README.md').sort() : [];
-  if (!existsSync(index)) add({ kind: 'index', file: rel(index), what: 'the feature map has no index' });
+  if (!statSync(index, { throwIfNoEntry: false })?.isFile()) add({ kind: 'index', file: rel(index), what: 'the feature map has no index' });
   else {
     const listed = new Map<string, number>();
     lines(index).forEach((text, i) => {
@@ -149,7 +157,12 @@ export async function maintainSteps<S>(run: { repo: string; findings?: Finding[]
   const record = (name: string) => join(dir, 'agents', `${++calls}-${name}.json`);
   const read = agentBlock ? [] : features.slice(0, MAX_CALLS - 1);
   if (!agentBlock && read.length < features.length) add({ kind: 'coverage', file: rel(featDir), what: `${features.length - read.length} feature files not read: the run's call cap is ${MAX_CALLS}` });
-  const readers = read.map((name): { feature: string; ok: boolean; record?: string } & Record<string, unknown> => {
+  const regular = read.filter((name) => {
+    const ok = statSync(join(featDir, name), { throwIfNoEntry: false })?.isFile() ?? false;
+    if (!ok) add({ kind: 'coverage', file: rel(join(featDir, name)), what: 'the feature entry is not a readable file, so no reader covers it' });
+    return ok;
+  });
+  const readers = regular.map((name):{ feature: string; ok: boolean; record?: string } & Record<string, unknown> => {
     const file = join(featDir, name);
     const text = readFileSync(file, 'utf8');
     if (text.length > FEATURE_CHARS) add({ kind: 'truncated', file: rel(file), what: `the reader saw only the first ${FEATURE_CHARS} characters of this feature file` });

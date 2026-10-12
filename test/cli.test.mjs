@@ -2253,6 +2253,24 @@ test('maintain does not read host:port text as a file citation', () => {
   assert.equal(m.findings?.length ?? 0, 0);
 });
 
+test('maintain fingerprints untracked symlinks without reading through them and blocks a dangling feature entry', () => {
+  const { repo, env, sh } = setup();
+  const s = stubAgents(env, JSON.stringify({ drift: [], recipe: 'open it', recipes: [], missing: [] }));
+  const skill = join(repo, '.agents', 'skills', 'verify-notes');
+  mkdirSync(join(skill, 'features'), { recursive: true });
+  writeFileSync(join(skill, 'SKILL.md'), '# verify-notes\n');
+  writeFileSync(join(skill, 'features', 'README.md'), '# features\n\n- [Home](home.md)\n- [Broken](broken.md)\n');
+  writeFileSync(join(skill, 'features', 'home.md'), '# Home\n');
+  sh('add', '-A');
+  sh('commit', '-qm', 'skill');
+  symlinkSync(join(repo, '.agents'), join(repo, 'agents-link'));
+  symlinkSync(join(repo, 'nowhere.md'), join(skill, 'features', 'broken.md'));
+  const r = doctorIn(repo, s.env, 'maintain', '--foreground');
+  const m = toon(r);
+  assert.deepEqual([r.code, m.result, m.git_status], [3, 'blocked', 'same'], r.out);
+  assert.match(m.reason, /^coverage: .*broken\.md/);
+});
+
 test('maintain reports a dead link, a wrong file:line and drift from read-only readers, and changes nothing', () => {
   const { repo, env, sh } = setup();
   const answer = JSON.stringify({

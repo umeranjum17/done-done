@@ -1050,7 +1050,7 @@ async function cmdAttach(argv) {
     for (;;) {
         const run = loadRun(dir);
         const gone = runnerGone(run);
-        const lines = existsSync(join(dir, 'events.jsonl')) ? readFileSync(join(dir, 'events.jsonl'), 'utf8').split('\n').filter(Boolean) : [];
+        const lines = existsSync(join(dir, 'events.jsonl')) ? readFileSync(join(dir, 'events.jsonl'), 'utf8').split('\n').slice(0, -1) : [];
         for (; shown < lines.length; shown++)
             process.stderr.write(`${lines[shown]}\n`);
         if (run.status === 'completed' || run.status === 'failed' || run.status === 'cancelled')

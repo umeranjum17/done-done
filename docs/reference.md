@@ -187,7 +187,7 @@ There are two files. Unknown keys are an error in both.
 evidence:
   local_root: ~/.done-done/evidence   # evidence root for repos that set none (<local_root>/<app>)
 judge:                                # used only when the judge is on
-  model: claude-opus-5-5              # the default
+  model: claude-haiku-5-5              # the default: cheap and reads images; set any model you like
   bin: /usr/local/bin/claude          # default: the first `claude` on PATH
   config_dir: ~/.done-done/claude     # the default; a sign-in folder for done-done only
 ```

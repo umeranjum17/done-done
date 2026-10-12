@@ -108,7 +108,6 @@ const RECONCILE_SCHEMA = {
     additionalProperties: false,
 };
 // Model answers are input from outside: keep only the items with the shape the schema asked for.
-const items = (v, ok) => (Array.isArray(v) ? v.filter((x) => x && typeof x === 'object' && ok(x)) : []);
 const isCite = (x) => typeof x.file === 'string' && Number.isInteger(x.line);
 export async function maintainSteps(run, dir, cfg, h) {
     const repo = run.repo;
@@ -275,8 +274,20 @@ ${text.slice(0, FEATURE_CHARS)}${toolless ? citedSource(text) : ''}`;
             }
         });
     const unverified = [];
+    const shaped = (v, ok, where) => {
+        if (!Array.isArray(v)) {
+            unverified.push(`${where} is not a list, so none of it is checked`);
+            return [];
+        }
+        return v.flatMap((x) => {
+            if (x && typeof x === 'object' && ok(x))
+                return [x];
+            unverified.push(`${where} has an item in an unexpected shape, so it is not checked`);
+            return [];
+        });
+    };
     for (const r of readers.filter((r) => r.ok)) {
-        for (const d of items(r.drift, (x) => isCite(x) && typeof x.claim === 'string' && typeof x.why === 'string')) {
+        for (const d of shaped(r.drift, (x) => isCite(x) && typeof x.claim === 'string' && typeof x.why === 'string', `${r.feature} drift`)) {
             const why = citeWhy(repo, tracked, d.file, d.line);
             if (why)
                 unverified.push(`${r.feature}: drift "${d.claim}" cites ${d.file}:${d.line}: ${why}`);
@@ -301,12 +312,14 @@ Recently changed files (git log since ${CHURN_SINCE}): ${churn.length ? churn.jo
         const a = askAgent({ agent: agent.agent, model: agent.model, prompt, schema: RECONCILE_SCHEMA, cwd: repo, timeoutMs: CALL_MS, tools: 'none', record: record('reconcile') });
         if (!a.ok)
             add({ kind: 'coverage', file: skillDir, what: `the reconcile call did not answer: ${a.error}` });
-        recipes = items(a.answer?.recipes, (x) => typeof x.state === 'string');
-        for (const m of items(a.answer?.missing, (x) => typeof x.file === 'string' && typeof x.why === 'string')) {
-            if (churn.includes(m.file))
-                add({ kind: 'unmapped', file: m.file, what: `changed recently and no feature covers it: ${m.why}` });
-            else
-                unverified.push(`missing ${m.file}: not in the churn list`);
+        if (a.answer) {
+            recipes = shaped(a.answer.recipes, (x) => typeof x.state === 'string' && Array.isArray(x.features) && Array.isArray(x.steps), 'reconcile recipes');
+            for (const m of shaped(a.answer.missing, (x) => typeof x.file === 'string' && typeof x.why === 'string', 'reconcile missing')) {
+                if (churn.includes(m.file))
+                    add({ kind: 'unmapped', file: m.file, what: `changed recently and no feature covers it: ${m.why}` });
+                else
+                    unverified.push(`missing ${m.file}: not in the churn list`);
+            }
         }
     }
     run.git_status = repoState(repo) === before ? 'same' : 'changed';

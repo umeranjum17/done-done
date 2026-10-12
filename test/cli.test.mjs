@@ -2680,6 +2680,24 @@ test('maintain gives a pi reader no tools and puts the cited source in its promp
   assert.match(reader.stdin, /Cited source src\/app\.js:\nexport const app = 1; \/\/ CITED-SOURCE-LINE/);
 });
 
+test('maintain lists a reader drift item with a string line as unverified, not as a finding', () => {
+  const { repo, env, sh } = setup();
+  const s = stubAgents(env, JSON.stringify({ recipe: 'open it', drift: [{ claim: 'app is 2', why: 'it is 1', file: 'src/app.js', line: '1' }], recipes: [], missing: [] }));
+  const skill = join(repo, '.agents', 'skills', 'verify-notes');
+  mkdirSync(join(skill, 'features'), { recursive: true });
+  mkdirSync(join(repo, 'src'), { recursive: true });
+  writeFileSync(join(repo, 'src', 'app.js'), 'export const app = 1;\n');
+  writeFileSync(join(skill, 'SKILL.md'), '# verify-notes\n');
+  writeFileSync(join(skill, 'features', 'README.md'), '# features\n\n- [Home](home.md)\n');
+  writeFileSync(join(skill, 'features', 'home.md'), '# Home\n');
+  sh('add', '-A');
+  sh('commit', '-qm', 'skill');
+  const r = doctorIn(repo, s.env, 'maintain', '--foreground');
+  const m = toon(r);
+  assert.deepEqual([r.code, m.result], [0, 'clean'], r.out);
+  assert.match(toon(doctorIn(repo, s.env, 'logs', '--step', 'reconcile')).log.join('\n'), /drift has an item in an unexpected shape/);
+});
+
 test('maintain fingerprints an untracked file whose name has a newline', () => {
   const { repo, env, sh } = setup();
   const s = stubAgents(env, JSON.stringify({ drift: [], recipe: 'open it', recipes: [], missing: [] }));

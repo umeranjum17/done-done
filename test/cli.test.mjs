@@ -1852,6 +1852,7 @@ test('auto judge with claude as the only agent and no sign-in folder has no judg
   const run = toon({ out: v.stdout });
   assert.equal(run.steps.find((x) => x.name === 'judge').status, 'failed');
   assert.match(run.reason, /no installed agent can judge/);
+  assert.doesNotMatch(run.reason, /judge: judge:/);
 });
 
 test('auto judge skips a claude route with a relative bin, since the claude-code route needs absolute paths', () => {

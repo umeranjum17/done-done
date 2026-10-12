@@ -943,7 +943,9 @@ async function runVerify(dir) {
         for (const s of run.steps)
             if (s.status === 'pending')
                 s.status = 'skipped';
-        Object.assign(run, { status: 'failed', reason: `${step?.name ?? 'setup'}: ${errorText(e)}` });
+        const name = step?.name ?? 'setup';
+        const text = errorText(e);
+        Object.assign(run, { status: 'failed', reason: text.startsWith(`${name}:`) ? text : `${name}: ${text}` });
         if (step)
             set(step, 'failed');
         else {

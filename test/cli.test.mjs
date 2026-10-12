@@ -10,6 +10,7 @@ import { fileURLToPath } from 'node:url';
 import { crc32, deflateSync } from 'node:zlib';
 import { parse } from 'yaml';
 import { decode } from '@toon-format/toon';
+import { DEFAULT_JUDGE_MODEL, FLAGSHIP_MODEL_PATTERN, loadConfig } from '../dist/config.js';
 
 const CLI = join(dirname(fileURLToPath(import.meta.url)), '..', 'dist', 'cli.js');
 
@@ -867,7 +868,7 @@ test('judge with no sign-in is a config error naming the sign-in command, and wr
   assert.equal(toon(ok).judge.judged[0].verdict, 'pass');
 });
 
-test('without the optional kit, --judge is a config error naming the npx command; the default model is Opus', () => {
+test('without the optional kit, --judge is a config error naming the npx command; the default model is cheap Haiku', () => {
   const j = judgeSetup(CORRECT);
   const { files } = j.shots();
   // A plain install: done-done and its dependencies, without the optional @byokit/decide peer.
@@ -887,5 +888,25 @@ test('without the optional kit, --judge is a config error naming the npx command
   assert.equal(j.calls().length, 0);
   writeFileSync(join(j.env.DONE_DONE_HOME, 'config.yaml'), readFileSync(join(j.env.DONE_DONE_HOME, 'config.yaml'), 'utf8').replace('  model: claude-test-1\n', ''));
   assert.equal(j.dd(...args).code, 0);
-  assert.equal(j.calls()[0].model, 'claude-opus-5-5');
+  assert.equal(j.calls()[0].model, 'claude-haiku-5-5');
+});
+
+test('the default judge model is cheap, never a flagship', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'done-done-cheap-default-'));
+  after(() => rmSync(dir, { recursive: true, force: true }));
+  const repo = join(dir, 'repo');
+  mkdirSync(repo, { recursive: true });
+  const home = join(dir, 'home');
+  mkdirSync(home, { recursive: true });
+  const prev = process.env.DONE_DONE_HOME;
+  process.env.DONE_DONE_HOME = home;
+  let cfg;
+  try {
+    cfg = loadConfig(repo);
+  } finally {
+    if (prev === undefined) delete process.env.DONE_DONE_HOME;
+    else process.env.DONE_DONE_HOME = prev;
+  }
+  assert.equal(cfg.judge.model, DEFAULT_JUDGE_MODEL, 'the default is the exported cheap default');
+  assert.doesNotMatch(cfg.judge.model, FLAGSHIP_MODEL_PATTERN, 'the default must never be a flagship model again');
 });

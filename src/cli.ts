@@ -1396,6 +1396,7 @@ function writableDir(p: string): boolean {
 }
 
 type DoctorCheck = { check: string; status: 'ok' | 'missing'; detail: string; fix: string };
+const unknownRow = (check: string): DoctorCheck => ({ check, status: 'missing', detail: 'unknown without a valid config', fix: '' });
 
 // Is this repo worth driving: git, a valid config and a writable evidence root are
 // required; the verify skill, an agent CLI, the judge binary and ffprobe are optional.
@@ -1431,14 +1432,14 @@ async function cmdDoctor(argv: string[]): Promise<number> {
     }
   }
   if (!cfg || !repo) {
-    checks.push({ check: 'evidence_root', status: 'missing', detail: 'unknown without a valid config', fix: '' });
+    checks.push(unknownRow('evidence_root'));
   } else if (writableDir(cfg.evidence.root)) {
     checks.push({ check: 'evidence_root', status: 'ok', detail: `writable: ${shown(repo, cfg.evidence.root)}`, fix: '' });
   } else {
     checks.push({ check: 'evidence_root', status: 'missing', detail: `not writable: ${shown(repo, cfg.evidence.root)}`, fix: `Make ${cfg.evidence.root} writable, or set evidence.root to a writable folder in .done-done.yaml` });
   }
   if (!cfg || !repo) {
-    checks.push({ check: 'verify_skill', status: 'missing', detail: 'unknown without a valid config', fix: '' });
+    checks.push(unknownRow('verify_skill'));
   } else {
     const dir = join(repo, cfg.skill);
     const skillFile = join(dir, 'SKILL.md');
@@ -1458,7 +1459,7 @@ async function cmdDoctor(argv: string[]): Promise<number> {
       : { check: 'agent', status: 'missing', detail: 'no claude, codex or opencode binary on PATH', fix: 'Install an agent CLI (claude, codex or opencode); without one, init stays scaffold-only' },
   );
   if (!cfg) {
-    checks.push({ check: 'judge', status: 'missing', detail: 'unknown without a valid config', fix: '' });
+    checks.push(unknownRow('judge'));
   } else {
     try {
       const { bin } = await backend(cfg);

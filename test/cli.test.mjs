@@ -1803,6 +1803,16 @@ test('doctor reports the judge missing when claude has no sign-in or judge.bin i
   assert.match(relative.checks[5].detail, /must be absolute paths \(got claude/);
 });
 
+test('doctor reports the judge missing when judge.bin does not exist', () => {
+  const { repo, env } = setup();
+  mkdirSync(join(env.DONE_DONE_HOME, 'claude'), { recursive: true });
+  writeFileSync(join(env.DONE_DONE_HOME, 'config.yaml'), `judge:\n  bin: ${JSON.stringify(join(env.DONE_DONE_HOME, 'gone', 'claude'))}\n`);
+  const j = toon(doctorIn(repo, pathEnv(env, ['claude']), 'doctor'));
+  assert.equal(j.checks[5].status, 'missing');
+  assert.match(j.checks[5].detail, /is not an executable file/);
+  assert.match(j.checks[5].fix, /judge\.bin/);
+});
+
 test('doctor reports the judge missing when its sign-in folder is a ~/.claude', () => {
   const { repo, env } = setup();
   const userHome = join(env.DONE_DONE_HOME, 'userhome');

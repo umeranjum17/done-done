@@ -22,15 +22,20 @@ const QUESTION = {
     personReason: true,
     images: ['capture'],
 };
+function isExecutable(path) {
+    try {
+        accessSync(path, constants.X_OK);
+        return true;
+    }
+    catch {
+        return false;
+    }
+}
 export function onPath(name) {
     for (const dir of (process.env.PATH ?? '').split(delimiter)) {
         const path = join(dir, name);
-        try {
-            accessSync(path, constants.X_OK);
-            if (isAbsolute(path))
-                return path;
-        }
-        catch { }
+        if (isAbsolute(path) && isExecutable(path))
+            return path;
     }
     return '';
 }
@@ -58,6 +63,8 @@ export async function backend(cfg) {
         throw new UsageError('judge: no claude binary on PATH; install Claude Code or set judge.bin in ~/.done-done/config.yaml', 'Install Claude Code, or set judge.bin to its absolute path');
     if (!isAbsolute(bin) || !isAbsolute(dir))
         throw new UsageError(`judge: judge.bin and judge.config_dir must be absolute paths (got ${bin}, ${dir})`, 'Fix judge.bin or judge.config_dir in ~/.done-done/config.yaml');
+    if (!isExecutable(bin))
+        throw new UsageError(`judge: judge.bin ${bin} is not an executable file`, 'Fix judge.bin in ~/.done-done/config.yaml or install Claude Code');
     if (!existsSync(dir))
         throw new UsageError(`judge: no Claude sign-in at ${dir}`, `Sign in once with your Claude plan: mkdir -p ${dir} && ${signIn}`);
     const { claudeCode, resolve } = await kit();

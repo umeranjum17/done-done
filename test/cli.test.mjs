@@ -314,6 +314,38 @@ test('receipt --verify fails on a changed file and on a missing receipt', () => 
   assert.match(missing.out, /no receipt/);
 });
 
+test('receipt refuses a not-proven pass that cites no evidence, and writes nothing', () => {
+  const { repo, sh, dd, head } = setup();
+  writeFileSync(join(repo, '.done-done.yaml'), 'app: notes\nevidence:\n  root: .proof\nchecks:\n  not_proven: allow\n');
+  writeFileSync(join(repo, '..', 'pr.md'), '## Checks\noutcome: x\nrepro: n/a\nproof: no verify skill - `done-done run shots`\nevidence: not proven: no device here\n');
+  sh('commit', '-qam', 'allow not proven');
+  const h = head();
+  assert.equal(dd('check', '--from', '../pr.md', '--trusted-ref', 'HEAD').code, 0, 'check still honours the not-proven allowance');
+  const r = dd('receipt', '--from', '../pr.md', '--trusted-ref', 'HEAD');
+  assert.equal(r.code, 1, r.out);
+  assert.match(r.out, /cited no evidence files/);
+  assert.ok(!existsSync(join(repo, '.proof', '.done-done', 'receipts', `${h}.json`)), 'no receipt file is produced');
+  const v = dd('receipt', '--verify', h);
+  assert.equal(v.code, 1, v.out);
+  assert.match(v.out, /no receipt/);
+});
+
+test('receipt written from a subdirectory stores canonical paths and verifies from the root', () => {
+  const { repo, env, dd, head, shots } = setup();
+  const { files } = shots();
+  const h = head();
+  const fromSub = (...args) => {
+    const r = spawnSync(process.execPath, [CLI, ...args], { cwd: join(repo, 'src'), env, encoding: 'utf8' });
+    return { code: r.status, out: r.stdout + r.stderr };
+  };
+  const relativeFiles = files.map((f) => join('..', f));
+  const r = fromSub('receipt', '--outcome', 'home and settings render', ...relativeFiles);
+  assert.equal(r.code, 0, r.out);
+  const rec = JSON.parse(readFileSync(join(repo, toon(r).receipt), 'utf8'));
+  assert.deepEqual(rec.files.map((f) => f.path).sort(), [...files].sort(), 'stored paths are relative to the repo root');
+  assert.equal(dd('receipt', '--verify', h).code, 0, 'the receipt verifies from the repo root');
+});
+
 // A bare git repo with no done-done config yet, for exercising `init`.
 function bareRepo(dirName = 'repo') {
   const dir = mkdtempSync(join(tmpdir(), 'done-done-init-'));

@@ -324,7 +324,7 @@ function runCheck(argv: string[]): CheckOutcome {
     if (v.status !== 'ok') findings.push({ level: v.status === 'fail' ? 'fail' : 'inconclusive', why: `${name}: ${v.why}` });
     const hash = sha256(bytes);
     hashes.push(hash);
-    cited.push({ path: name, sha256: hash });
+    cited.push({ path: relative(repo, path), sha256: hash });
     if (seen.has(hash)) findings.push({ level: 'fail', why: `${name}: byte-identical to ${seen.get(hash)}` });
     seen.set(hash, name);
     if (v.status === 'fail') continue;
@@ -443,6 +443,10 @@ function cmdReceipt(argv: string[]): number {
   }
   if (r.head.dirty) {
     emit({ command: 'receipt', result: 'fail', head: r.head.commit, claim: r.claim, reason: 'tracked files have uncommitted changes; commit or revert them, then re-run receipt', help: ['Commit the tracked changes, then: done-done receipt --from <file|->'] });
+    return FAIL;
+  }
+  if (!r.cited.length) {
+    emit({ command: 'receipt', result: 'fail', head: r.head.commit, claim: r.claim, reason: 'the check cited no evidence files, so no receipt was written; a receipt must bind at least one cited evidence file', help: ['Cite real proof: done-done receipt --outcome "<claim>" <files...>'] });
     return FAIL;
   }
   const rec: Receipt = { schema: 1, repo: cfg.app, head: r.head.commit, tree: r.head.tree, claim: r.claim ?? '', result: 'pass', at: new Date().toISOString(), files: r.cited };

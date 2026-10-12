@@ -54,12 +54,12 @@ done-done is an [AXI](https://axi.md), which means -
 You need Node 22.5 or later and git. Give your agent the done-done skill in the [Agent Skills](https://agentskills.io) format with [`npx skills`](https://github.com/vercel-labs/skills), naming your agent with `-a`:
 
 ```sh
-npx skills add umeranjum17/done-done-axi --skill done-done -a claude-code -y
+npx skills add umeranjum17/done-done-axi --skill done-done -a <agent> -y
 ```
 
-Use `-a codex` or `-a opencode` for those agents. `-a` and `-y` skip the installer's four prompts and keep it from writing skill folders for agents you do not use.
+`<agent>` is `claude-code`, `codex`, `opencode`, `pi` or `gemini-cli`. `-a` and `-y` skip the installer's four prompts and keep it from writing skill folders for agents you do not use.
 
-The skill lands in this project (`.claude/skills/done-done/` for Claude Code, `.agents/skills/done-done/` for Codex and opencode) next to a `skills-lock.json`: commit both so teammates and CI get it too. Or add `-g` to install it once for all your projects (`~/.claude/skills/` for Claude Code) and leave the project untouched.
+The skill lands in this project (`.claude/skills/done-done/` for Claude Code, `.pi/skills/done-done/` for Pi, `.agents/skills/done-done/` for Codex, opencode and Gemini CLI) next to a `skills-lock.json`: commit both so teammates and CI get it too. Or add `-g` to install it once for all your projects (for example `~/.claude/skills/` for Claude Code) and leave the project untouched.
 
 That is the entire setup - no npm install needed.
 The skill tells your agent to use `done-done` if it is on PATH and otherwise run the GitHub package through `npx`, so the CLI comes along on demand:
@@ -168,10 +168,10 @@ Every answer is an exit code: **0** pass, **1** fail, **2** usage or config erro
 
 [Firstmate](https://github.com/kunchenguid/firstmate) hands tasks to agent workers and merges their work. done-done ships what those workers need to prove each task, and what the merge needs to check that proof, in [`integrations/firstmate/`](integrations/firstmate/).
 
-Install the skill once per machine for your workers' agent (`-a codex` or `-a opencode` for those), install the CLI from GitHub, and copy two files from it into your Firstmate home:
+Install the skill once per machine for your workers' agent (the same `-a` values), install the CLI from GitHub, and copy two files from it into your Firstmate home:
 
 ```sh
-npx skills add umeranjum17/done-done-axi --skill done-done -g -a claude-code -y
+npx skills add umeranjum17/done-done-axi --skill done-done -g -a <agent> -y
 npm install -g --allow-git=all github:umeranjum17/done-done-axi
 cat "$(npm root -g)/done-done-axi/integrations/firstmate/brief-include.md" >> "$FM_HOME/config/brief-include.md"
 cp "$(npm root -g)/done-done-axi/integrations/firstmate/merge-gate" "$FM_HOME/config/merge-gate"

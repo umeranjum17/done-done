@@ -4,6 +4,11 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { AGENTS, CHEAP_MODELS } from './config.js';
 import { onPath } from './judge.js';
+// argv never carries the prompt: it goes on stdin, or (file: true) into a 0600 prompt file the argv points at.
+// done-done parses the answer, validates it against the schema, and asks a tool-less call again, at most ASK_ATTEMPTS calls.
+const ASK_ATTEMPTS = 3;
+class ProviderError extends Error {
+}
 // The answer object in an agent's free text, in one pass: the first top-level '{'..'}' span that parses to an object
 // with every required key, skipping braces and quotes in narration. With no such span, the last span that parsed is
 // returned, so the caller reports the missing keys.
@@ -58,7 +63,7 @@ const ACP = {
         // An error response fails the call only when the agent said nothing: a refused side request is not the answer.
         const error = events.find((e) => e.error)?.error;
         if (!text && error)
-            throw new Error(String(error.message ?? JSON.stringify(error)).slice(0, 500));
+            throw new ProviderError(String(error.message ?? JSON.stringify(error)).slice(0, 500));
         return extractJsonObject(text, c.schema.required);
     },
 };
@@ -72,11 +77,11 @@ const ADAPTERS = {
         answer: (out) => {
             const r = JSON.parse(out);
             if (r.is_error)
-                throw new Error(String(r.result || r.subtype));
+                throw new ProviderError(String(r.result || r.subtype));
             return r.structured_output;
         },
     },
-    // opencode run reads no stdin and has no schema flag: the prompt and the schema go in an attached file,
+    // opencode run reads no stdin: the prompt and the schema go in an attached file,
     // and the answer is the JSON object in the text parts of its JSON event stream.
     opencode: {
         file: true,
@@ -85,11 +90,61 @@ const ADAPTERS = {
             const events = out.split('\n').filter((l) => l.startsWith('{')).map((l) => JSON.parse(l));
             const error = events.find((e) => e.type === 'error');
             if (error)
-                throw new Error(JSON.stringify(error.error ?? error).slice(0, 500));
-            const text = events.filter((e) => e.type === 'text').map((e) => e.part.text).join('');
+                throw new ProviderError(JSON.stringify(error.error ?? error).slice(0, 500));
+            let text = '';
+            for (const e of events) {
+                if (e.type === 'step_start')
+                    text = '';
+                if (e.type === 'text')
+                    text += e.part.text;
+            }
             return extractJsonObject(text, c.schema.required);
         },
         env: (c) => (c.tools === 'edit' ? {} : { OPENCODE_PERMISSION: JSON.stringify(c.tools === 'read' ? { '*': 'deny', read: 'allow', grep: 'allow', glob: 'allow', list: 'allow' } : { '*': 'deny' }) }),
+    },
+    // pi -p reads the prompt on stdin (probed 12 Oct: with no positional message, stdin becomes the user
+    // message); --mode json streams JSONL events whose assistant message_end holds the answer text,
+    // --no-session keeps the probe ephemeral.
+    // Pi has no permission gate for edit steps, so doctor warns about it. Without a model, pi runs its own default.
+    pi: {
+        argv: (c) => ['-p', '--mode', 'json', '--no-session', ...(c.tools === 'none' ? ['--no-tools'] : c.tools === 'read' ? ['-t', 'read,grep,find,ls'] : []), ...(c.model ? ['--model', c.model] : [])],
+        answer: (out, c) => {
+            let text = '';
+            let failure = '';
+            for (const line of out.split('\n')) {
+                if (!line.startsWith('{'))
+                    continue;
+                let e;
+                try {
+                    e = JSON.parse(line);
+                }
+                catch {
+                    continue;
+                }
+                if (e.type === 'error')
+                    failure = JSON.stringify(e.error ?? e).slice(0, 500);
+                if (e.type === 'message_end' && e.message?.role === 'assistant')
+                    text = (e.message.content ?? []).filter((p) => p?.type === 'text').map((p) => p.text).join('');
+            }
+            if (!text && failure)
+                throw new ProviderError(failure);
+            return extractJsonObject(text, c.schema.required);
+        },
+    },
+    // gemini -p text is appended to stdin, so -p carries only a fixed trailer and the prompt goes on stdin;
+    // -o json prints one object {response, stats, error?} (its headless.md). plan mode is read-only, so a
+    // headless call never blocks on an approval prompt; auto_edit (edits approved, shell still asks) is only for edit steps.
+    // --skip-trust is only for the tool-less probe in its scratch folder (the headless path in its trusted-folders.md): done-done
+    // never runs interactively, so the trust dialog could never be answered there. Repo calls keep Gemini's trust gate.
+    gemini: {
+        argv: (c) => ['-p', 'Follow the instructions on stdin.', '-o', 'json', '-m', c.model, '--approval-mode', c.tools === 'edit' ? 'auto_edit' : 'plan', ...(c.tools === 'none' ? ['--skip-trust'] : [])],
+        hint: 'if gemini refused this folder as untrusted, trust it in Gemini CLI first, then retry',
+        answer: (out, c) => {
+            const r = JSON.parse(out);
+            if (!r.response && r.error)
+                throw new ProviderError(JSON.stringify(r.error).slice(0, 500));
+            return extractJsonObject(String(r.response ?? ''), c.schema.required);
+        },
     },
 };
 // The author agent: the first of the configured list (or of AGENTS for auto) that is on PATH and that
@@ -133,42 +188,58 @@ export function askAgent(c) {
     let dir = '';
     let cwd = c.cwd;
     let res;
+    let attempts = 0;
     let out;
     try {
         dir = mkdtempSync(join(tmpdir(), 'done-done-agent-'));
         cwd = c.tools === 'none' ? dir : c.cwd;
         if (!adapter)
             throw new Error(`no adapter for ${c.agent} yet`);
-        if (!c.model && adapter !== ACP)
-            throw new Error(`no model for ${c.agent}; set agent_config.${c.agent}.model`);
-        const promptText = `${c.prompt}\n\nAnswer with only one JSON object that matches this JSON schema, and no other text:\n${JSON.stringify(c.schema)}\n`;
-        if (adapter.file)
-            writeFileSync(join(dir, 'prompt.md'), promptText, { mode: 0o600 });
         const bin = agentPath(c.agent);
         if (!bin)
             throw new Error(c.agent.startsWith('acp:') ? `${c.agent} needs acpx, and acpx is not startable; ${ACPX_INSTALL}` : `${c.agent} is not on PATH`);
-        res = spawnSync(bin, adapter.argv(c, dir), { cwd, input: adapter.file ? '' : promptText, env: { ...process.env, ...adapter.env?.(c) }, encoding: 'utf8', timeout: c.timeoutMs, maxBuffer: 64 << 20 });
-        if (res.error)
-            throw res.error;
-        if (res.status !== 0) {
-            // An agent that exits non-zero may still say why in its own output (claude: a usage limit, a bad model).
-            let why = String(res.stderr || res.stdout).trim().slice(-500);
+        let lastError = '';
+        for (;;) {
+            attempts++;
+            // An ask-again names what was wrong with the last answer.
+            const schemaTrailer = `\n\nAnswer with only one JSON object that matches this JSON schema, and no other text:\n${JSON.stringify(c.schema)}\n`;
+            const promptText = (attempts === 1 ? c.prompt : `${c.prompt}\n\nYour previous answer was not valid (${lastError}).`) + schemaTrailer;
+            if (adapter.file)
+                writeFileSync(join(dir, 'prompt.md'), promptText, { mode: 0o600 });
+            res = spawnSync(bin, adapter.argv(c, dir), { cwd, input: adapter.file ? '' : promptText, env: { ...process.env, ...adapter.env?.(c) }, encoding: 'utf8', timeout: c.timeoutMs, maxBuffer: 64 << 20 });
+            if (res.error)
+                throw res.error;
+            if (res.status !== 0) {
+                // An agent that exits non-zero may still say why in its own output (claude: a usage limit, a bad model).
+                let why = String(res.stderr || res.stdout).trim().slice(-500);
+                try {
+                    adapter.answer(String(res.stdout), c);
+                }
+                catch (e) {
+                    if (!(e instanceof SyntaxError))
+                        why = e.message;
+                }
+                throw new Error(`${c.agent} exited ${res.status}: ${why}${adapter.hint && c.tools !== 'none' ? `; ${adapter.hint}` : ''}`);
+            }
             try {
-                adapter.answer(String(res.stdout), c);
+                const answer = adapter.answer(String(res.stdout), c);
+                if (!answer || typeof answer !== 'object' || Array.isArray(answer))
+                    throw new Error(`the answer is not a JSON object: ${JSON.stringify(answer)}`);
+                const missing = (c.schema.required ?? []).filter((k) => !(k in answer));
+                if (missing.length)
+                    throw new Error(`the answer does not match the schema (missing ${missing.join(', ')})`);
+                out = { ok: true, answer: answer };
+                break;
             }
             catch (e) {
-                if (!(e instanceof SyntaxError))
-                    why = e.message;
+                if (e instanceof ProviderError)
+                    throw e;
+                // Only a tool-less call is asked again: an edit or read step may already have changed the repo or read it.
+                lastError = e.message;
+                if (c.tools !== 'none' || attempts >= ASK_ATTEMPTS)
+                    throw new Error(`the agent did not answer with valid JSON after ${attempts} ${attempts === 1 ? 'try' : 'tries'}: ${lastError}`);
             }
-            throw new Error(`${c.agent} exited ${res.status}: ${why}`);
         }
-        const answer = adapter.answer(String(res.stdout), c);
-        if (!answer || typeof answer !== 'object' || Array.isArray(answer))
-            throw new Error(`the answer is not a JSON object: ${JSON.stringify(answer)}`);
-        const missing = (c.schema.required ?? []).filter((k) => !(k in answer));
-        if (missing.length)
-            throw new Error(`the answer does not match the schema (missing ${missing.join(', ')})`);
-        out = { ok: true, answer: answer };
     }
     catch (e) {
         out = { ok: false, error: e.message };
@@ -180,7 +251,7 @@ export function askAgent(c) {
     // The record holds what ran and what came back, never the prompt text.
     const { prompt, ...call } = c;
     try {
-        const record = { ...call, cwd, prompt_bytes: Buffer.byteLength(prompt), argv: adapter?.argv(c, '<tmp>') ?? [], ms: Date.now() - started, exit: res?.status ?? null, ...out, stderr: String(res?.stderr ?? '').slice(-2000) };
+        const record = { ...call, cwd, prompt_bytes: Buffer.byteLength(prompt), argv: adapter?.argv(c, '<tmp>') ?? [], ms: Date.now() - started, exit: res?.status ?? null, attempts, ...out, stderr: String(res?.stderr ?? '').slice(-2000) };
         mkdirSync(dirname(c.record), { recursive: true });
         writeFileSync(c.record, `${JSON.stringify(record, null, 2)}\n`, { mode: 0o600 });
         out = { ...out, record: c.record };

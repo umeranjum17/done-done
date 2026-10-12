@@ -51,8 +51,6 @@ const KEYS: Record<string, { scope: 'global' | 'repo' | 'any'; type: 'string' | 
   'judge.allow_same': { scope: 'global', type: 'boolean' },
 };
 const SECTIONS = new Set(['evidence', 'checks', 'judge']);
-// Keys that moved, so an old config names the new key instead of failing as unknown.
-const MOVED: Record<string, string> = { 'judge.bin': 'judge.claude_code.bin', 'judge.config_dir': 'judge.claude_code.config_dir' };
 
 export const home = () => process.env.DONE_DONE_HOME || join(homedir(), '.done-done');
 
@@ -87,7 +85,6 @@ function apply(target: Record<string, any>, text: string | undefined, file: stri
   }
   for (const [key, value] of flatten(doc, file)) {
     const spec = KEYS[key];
-    if (MOVED[key]) throw new UsageError(`${file}: ${key} is now ${MOVED[key]}`);
     if (!spec) throw new UsageError(`${file}: unknown key ${key}`);
     if (spec.scope !== scope && spec.scope !== 'any') throw new UsageError(`${file}: ${key} may only be set in the ${spec.scope === 'global' ? 'global config' : 'project .done-done.yaml'}`);
     const ok =
@@ -95,11 +92,11 @@ function apply(target: Record<string, any>, text: string | undefined, file: stri
       : spec.type === 'boolean' ? typeof value === 'boolean'
       : spec.type === 'string[]' ? Array.isArray(value) && value.every((v) => typeof v === 'string')
       : spec.type === 'agent' ? value === 'auto' || [value].flat().every((v) => AGENTS.includes(v as string)) && [value].flat().length > 0
-      : spec.type === 'route' ? typeof value === 'string' && (['auto', 'claude-code'].includes(value) || AGENTS.some((a) => value === `answerer:${a}`))
+      : spec.type === 'route' ? typeof value === 'string' && (['auto', 'claude-code'].includes(value) || AGENTS.some((a) => a !== 'claude' && value === `answerer:${a}`))
       : spec.type === 'claude_code' ? !!value && typeof value === 'object' && !Array.isArray(value) && Object.entries(value).every(([k, v]) => ['bin', 'config_dir'].includes(k) && typeof v === 'string')
       : spec.type === 'agent_config' ? !!value && typeof value === 'object' && Object.entries(value).every(([a, c]) => AGENTS.includes(a) && !!c && typeof c === 'object' && Object.entries(c).every(([k, m]) => k === 'model' && typeof m === 'string'))
       : !!value && typeof value === 'object' && Object.values(value).every((j: any) => j && typeof j.command === 'string');
-    const want = { journeys: 'a map of name: {command: <string>}', agent: `auto, or one or a list of ${AGENTS.join(', ')}`, agent_config: `a map of <agent>: {model: <string>} for ${AGENTS.join(', ')}`, route: `auto, claude-code, or answerer:<agent> for one of ${AGENTS.join(', ')}`, claude_code: 'a map with bin and config_dir, each a string' } as Record<string, string>;
+    const want = { journeys: 'a map of name: {command: <string>}', agent: `auto, or one or a list of ${AGENTS.join(', ')}`, agent_config: `a map of <agent>: {model: <string>} for ${AGENTS.join(', ')}`, route: `auto, claude-code (for claude), or answerer:<agent> for one of ${AGENTS.filter((a) => a !== 'claude').join(', ')}`, claude_code: 'a map with bin and config_dir, each a string' } as Record<string, string>;
     if (!ok) throw new UsageError(`${file}: ${key} must be ${want[spec.type] ?? `a ${spec.type}`}`);
     if (key === 'checks.not_proven' && value !== 'inconclusive' && value !== 'allow') throw new UsageError(`${file}: checks.not_proven must be inconclusive or allow`);
     const [a, b] = key.split('.');

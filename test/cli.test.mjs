@@ -1666,6 +1666,18 @@ test('judge.enabled turns the judge on; text evidence is not judged; a failed ch
   assert.equal(j.calls().length, 1);
 });
 
+test('a judge that judged no capture leaves a schema 1 receipt with no judge block', () => {
+  const j = judgeSetup(CORRECT, { projectYaml: 'app: notes\nevidence:\n  root: .proof\njudge:\n  enabled: true\njourneys:\n  shots:\n    command: node make-shots.mjs ${RUN_ID}\n' });
+  const r = j.dd('run', '--', `node -e "require('fs').writeFileSync(process.env.DONE_DONE_EVIDENCE_ROOT + '/session.log','saved 3 notes')"`);
+  assert.equal(r.code, 0, r.out);
+  const log = `.proof/${toon(r).run_id}/session.log`;
+  const rec = j.dd('receipt', '--outcome', 'three notes are saved', log);
+  assert.equal(rec.code, 0, rec.out);
+  const verified = toon(j.dd('receipt', '--verify', j.head()));
+  assert.deepEqual([verified.result, verified.schema, verified.judge], ['pass', 1, undefined]);
+  assert.equal(j.calls().length, 0, 'text evidence is never sent to the model');
+});
+
 test('judge with no sign-in is a config error naming the sign-in command, and writes no receipt', () => {
   const j = judgeSetup(CORRECT, { loggedIn: false });
   const { files } = j.shots();
@@ -1892,7 +1904,7 @@ test('doctor reports the judge missing when claude has no sign-in or judge.claud
   assert.equal(relative.checks[5].status, 'missing');
   assert.match(relative.checks[5].detail, /judge\.claude_code\.bin and judge\.claude_code\.config_dir must be absolute paths \(got claude/);
   writeFileSync(join(env.DONE_DONE_HOME, 'config.yaml'), 'judge:\n  bin: /usr/bin/claude\n');
-  assert.match(toon(dd('doctor')).checks[1].detail, /judge\.bin is now judge\.claude_code\.bin/, 'the old key names its new place');
+  assert.match(toon(dd('doctor')).checks[1].detail, /unknown key judge\.bin/, 'a key that never shipped is unknown');
 });
 
 test('doctor reports the judge missing when judge.claude_code.bin does not exist', () => {
@@ -1945,9 +1957,9 @@ test('doctor finds agent, judge and ffprobe binaries from PATH; missing optional
   assert.match(codexOnly.checks[7].detail, /no installed agent can judge \(judge\.route auto looks for claude, opencode\)/);
   const two = toon(doctorIn(repo, pathEnv(env, ['codex', 'opencode']), 'doctor'));
   assert.match(two.checks[4].detail, /^opencode .* at /, 'auto skips an installed agent done-done cannot start');
-  assert.equal(two.checks[7].status, 'missing', 'the only agent that can judge is the author at its own model: a warning');
+  assert.equal(two.checks[7].status, 'warn', 'the only agent that can judge is the author at its own model: a warning, and the run judges it');
   assert.match(two.checks[7].detail, /^answerer:opencode .* judges the author opencode .*: the author's agent and model in a fresh session \(session-only independence\)$/);
-  assert.match(two.checks[7].fix, /Install another agent that can judge \(claude or opencode\), or accept it with judge\.allow_same: true/);
+  assert.match(two.checks[7].fix, /Install another agent that can judge \(claude or opencode\) so the judge is apart from the author/);
   const none = doctorIn(repo, pathEnv(env, []), 'doctor');
   assert.equal(none.code, 0, 'missing optionals still exit 0 when every required item is ok');
   const n = toon(none);
@@ -1962,10 +1974,10 @@ test('doctor finds agent, judge and ffprobe binaries from PATH; missing optional
   assert.match(inRepo.checks[1].detail, /judge\.allow_same may only be set in the global config/, 'the project file cannot waive the judge');
   writeFileSync(join(repo, '.done-done.yaml'), repoYaml);
   const unwaived = toon(doctorIn(repo, claudeOnly, 'doctor'));
-  assert.equal(unwaived.checks[7].status, 'missing');
+  assert.equal(unwaived.checks[7].status, 'warn', 'auto runs a session-only judge without allow_same, so doctor warns, not missing');
   writeFileSync(join(env.DONE_DONE_HOME, 'config.yaml'), 'judge:\n  allow_same: true\n');
   const same = toon(doctorIn(repo, claudeOnly, 'doctor'));
-  assert.deepEqual([same.checks[7].status, /judge\.allow_same accepts it/.test(same.checks[7].detail)], ['ok', true]);
+  assert.deepEqual([same.checks[7].status, /judge\.allow_same accepts it/.test(same.checks[7].detail)], ['warn', true]);
 });
 
 // Stub agent CLIs that log how they were started (argv, stdin, cwd) and answer like the real ones:
@@ -2064,12 +2076,12 @@ test('the agent comes from config (a fallback list moves past missing agents), a
   assert.match(same.by('judge_choice').detail, /judge\.route answerer:opencode at model opencode-go\/test-model is the author's own agent and model/);
   assert.match(same.by('judge_choice').fix, /judge\.allow_same: true/);
   routeCfg('  model: opencode-go/test-model\n  allow_same: true\n');
-  assert.equal(doctor('agent: opencode\n').by('judge_choice').status, 'ok', 'allow_same accepts a session-only judge');
+  assert.equal(doctor('agent: opencode\n').by('judge_choice').status, 'warn', 'allow_same runs a session-only judge, and doctor says so');
   routeCfg('');
   writeFileSync(join(env.DONE_DONE_HOME, 'config.yaml'), 'judge:\n  route: answerer:claude\n');
-  assert.match(doctor('').by('judge').detail, /cannot judge through claude yet/, 'claude judges through claude-code');
+  assert.match(doctor('').out, /judge\.route must be auto, claude-code \(for claude\), or answerer:<agent>/, 'claude judges through claude-code');
   writeFileSync(join(env.DONE_DONE_HOME, 'config.yaml'), 'judge:\n  route: opencode-go\n');
-  assert.match(doctor('').out, /judge\.route must be auto, claude-code, or answerer:<agent>/);
+  assert.match(doctor('').out, /judge\.route must be auto, claude-code \(for claude\), or answerer:<agent>/);
   writeFileSync(join(env.DONE_DONE_HOME, 'config.yaml'), 'judge:\n  model: x\n');
   assert.match(doctor('').out, /judge\.model needs judge\.route/);
   assert.match(doctor('agent: cursor\n').out, /agent must be auto, or one or a list of claude, codex, opencode, pi, gemini/);
@@ -2425,7 +2437,7 @@ test('agent auto picks pi over gemini, and doctor warns that pi has no permissio
   const d = toon(doctorIn(repo, s.env, 'doctor'));
   assert.match(d.checks.find((x) => x.check === 'agent').detail, /^pi \(its own default model; set agent_config\.pi\.model to choose one; agent: auto\) at /);
   const gate = d.checks.find((x) => x.check === 'tool_gate');
-  assert.equal(gate.status, 'warning');
+  assert.equal(gate.status, 'warn');
   assert.equal(gate.detail, 'pi has no permission gate: every pi tool runs without approval');
 });
 

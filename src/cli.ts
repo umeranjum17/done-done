@@ -573,7 +573,7 @@ async function runCheck(argv: string[], run?: { dir: string; judging: (code: num
       const { route, model, independence, author } = choice;
       judged = { route, model, independence, author: `${author.agent} (model ${author.model || 'none'})`, judged: rows.items.map(({ sha256, ...r }) => r) };
       const byName = new Map(captures.map((c) => [c.name, receiptPath(repo, cfg, resolve(c.name))]));
-      judgeBlock = { route, model, independence, author, verdicts: j.judged.map((r) => ({ path: byName.get(r.path)!, sha256: r.sha256, verdict: r.verdict })) };
+      if (j.judged.length) judgeBlock = { route, model, independence, author, verdicts: j.judged.map((r) => ({ path: byName.get(r.path)!, sha256: r.sha256, verdict: r.verdict })) };
       if (rows.omitted) judged.judged_omitted = rows.omitted;
       if (j.notJudged.length) judged.not_judged = j.notJudged;
       judged.note = 'only PNG and JPEG captures are judged; text, log and video evidence are not';
@@ -654,7 +654,7 @@ function verifyReceipt(repo: string, cfg: Config, headArg: string): number {
   if (!rec.files.every((f) => f && typeof f === 'object' && typeof f.path === 'string' && typeof f.sha256 === 'string')) return fail(`receipt for ${short} is malformed`);
   // A schema 2 judge block must name its judge, and pass only captures this receipt cites.
   const j = rec.judge;
-  if (rec.schema === 2 && (!j || typeof j !== 'object' || typeof j.route !== 'string' || typeof j.model !== 'string' || !['agent', 'model', 'session-only'].includes(j.independence) || !Array.isArray(j.verdicts)
+  if (rec.schema === 2 && (!j || typeof j !== 'object' || typeof j.route !== 'string' || typeof j.model !== 'string' || !['agent', 'model', 'session-only'].includes(j.independence) || !Array.isArray(j.verdicts) || !j.verdicts.length
     || !j.verdicts.every((v) => v && v.verdict === 'pass' && rec.files.some((f) => f.path === v.path && f.sha256 === v.sha256))))
     return fail(`receipt for ${short} has a malformed judge block`);
   if (rec.head !== commit) return fail(`receipt records head ${String(rec.head).slice(0, 12)}, not ${short}`);
@@ -931,11 +931,13 @@ async function runVerify(dir: string): Promise<void> {
     const logged: Record<string, unknown> = { ...checked.result, findings: checked.findings };
     delete logged.findings_omitted;
     log('check', logged);
-    if (step!.name === 'judge') {
+    const judgeRan = step!.name === 'judge';
+    const judgeFindings = judgeRan ? checked.findings.slice(checkFindings) : [];
+    if (judgeRan) {
       log('judge', checked.judge!);
-      set(step!, checked.code === PASS ? 'completed' : 'failed', { exit: checked.code, findings: checked.findings.slice(checkFindings) });
+      set(step!, judgeFindings.length ? 'failed' : 'completed', { exit: judgeFindings.length ? checked.code : PASS, findings: judgeFindings });
     } else set(step!, checked.code === PASS ? 'completed' : 'failed', { exit: checked.code, findings: checked.findings });
-    if (checked.code !== PASS) return finish(checked.code === FAIL ? 'fail' : 'inconclusive', `${step!.name}: ${checked.findings[0]?.why ?? 'did not pass'}`);
+    if (checked.code !== PASS) return finish(checked.code === FAIL ? 'fail' : 'inconclusive', `${judgeFindings.length ? 'judge' : 'check'}: ${(judgeFindings[0] ?? checked.findings[0])?.why ?? 'did not pass'}`);
 
     begin('receipt');
     const receipt = recordReceipt(run.repo, cfg, checked);
@@ -1657,7 +1659,7 @@ function writableDir(p: string): boolean {
 }
 
 const PROBE_SCHEMA = { type: 'object', properties: { ok: { type: 'boolean' } }, required: ['ok'], additionalProperties: false };
-type DoctorCheck = { check: string; status: 'ok' | 'missing' | 'warning'; detail: string; fix: string };
+type DoctorCheck = { check: string; status: 'ok' | 'warn' | 'missing'; detail: string; fix: string };
 const unknownRow = (check: string): DoctorCheck => ({ check, status: 'missing', detail: 'unknown without a valid config', fix: '' });
 const modelPhrase = (agent: string, model: string) => (model ? `model ${model}` : `its own default model; set agent_config.${agent}.model to choose one`);
 
@@ -1749,7 +1751,7 @@ async function cmdDoctor(argv: string[]): Promise<number> {
           ? { check: 'agent', status: 'missing', detail: `${what} at ${agent.path}, but done-done cannot start ${agent.agent} yet (${startable} for now)`, fix: switchFix }
           : { check: 'agent', status: 'ok', detail: `${what} at ${agent.path}`, fix: '' },
     );
-    if (agent.agent === 'pi') checks.push({ check: 'tool_gate', status: 'warning', detail: 'pi has no permission gate: every pi tool runs without approval', fix: '' });
+    if (agent.agent === 'pi') checks.push({ check: 'tool_gate', status: 'warn', detail: 'pi has no permission gate: every pi tool runs without approval', fix: '' });
   }
   // The judge --judge runs: judge.route, or with auto the first installed agent that can judge and is not the author.
   let choice: JudgeChoice | undefined;
@@ -1779,8 +1781,8 @@ async function cmdDoctor(argv: string[]): Promise<number> {
       ? { check: 'ffprobe', status: 'ok', detail: `found at ${ffprobe}`, fix: '' }
       : { check: 'ffprobe', status: 'missing', detail: 'no ffprobe on PATH; video evidence is unverified, never a pass', fix: 'Install ffprobe (ffmpeg) to verify video evidence' },
   );
-  // How far the judge is from the author. A session-only judge is allowed (auto falls back to it when no other agent
-  // can judge), but it is a warning, not an ok, unless judge.allow_same accepts it.
+  // How far the judge is from the author, as selectJudge picks it: another agent is ok; the author's agent at another
+  // model or in a fresh session runs too, so it is a warning that never fails doctor.
   if (!cfg || !agent) {
     checks.push(unknownRow('judge_choice'));
   } else if (!choice) {
@@ -1788,11 +1790,12 @@ async function cmdDoctor(argv: string[]): Promise<number> {
   } else {
     const apart = { agent: 'a different agent from the author', model: 'the author\'s agent at a different model', 'session-only': 'the author\'s agent and model in a fresh session (session-only independence)' }[choice.independence];
     const accepted = choice.independence === 'session-only' && cfg.judge.allow_same ? '; judge.allow_same accepts it' : '';
+    const apartOk = choice.independence === 'agent';
     checks.push({
       check: 'judge_choice',
-      status: choice.independence === 'session-only' && !accepted ? 'missing' : 'ok',
+      status: apartOk ? 'ok' : 'warn',
       detail: `${choice.route} (model ${choice.model}; ${choice.from === 'auto' ? 'judge.route auto' : 'from config'}) judges the author ${agent.agent} (model ${agent.model || 'none'}): ${apart}${accepted}`,
-      fix: choice.independence === 'session-only' && !accepted ? `Install another agent that can judge (${JUDGES.join(' or ')}), or accept it with judge.allow_same: true in ~/.done-done/config.yaml` : '',
+      fix: apartOk ? '' : `Install another agent that can judge (${JUDGES.join(' or ')}) so the judge is apart from the author`,
     });
   }
   if (values.probe && !agent) checks.push(unknownRow('probe'));

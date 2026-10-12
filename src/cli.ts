@@ -134,8 +134,8 @@ const COMMANDS: Record<string, { usage: [string, string][]; flags: string[]; mor
     more: [RUNS_TEXT],
   },
   rerun: {
-    usage: [['done-done rerun [--run <run-id>]', 'run again from the failed step, reusing steps whose inputs did not change']],
-    flags: ['--run <run-id>'],
+    usage: [['done-done rerun [--run <run-id>] [--wait | --no-wait]', 'run again from the failed step, reusing steps whose inputs did not change; wait (default) or return at once (exit 4)']],
+    flags: ['--run <run-id>', '--wait', '--no-wait'],
     more: [RUNS_TEXT],
   },
   abort: {
@@ -976,6 +976,10 @@ function showRun(dir: string, cfg: Config, command: string, gone = false): numbe
   return code;
 }
 
+async function waitRun(dir: string, pid: number): Promise<void> {
+  while (['pending', 'running'].includes(loadRun(dir).status) && alive(pid)) await new Promise((r) => setTimeout(r, 200));
+}
+
 async function cmdVerify(argv: string[]): Promise<number> {
   const { values, positionals } = parseArgs({
     args: argv,
@@ -1013,7 +1017,7 @@ async function cmdVerify(argv: string[]): Promise<number> {
     child.unref();
     closeSync(fd);
     // --wait (the default) holds this command until the run ends; --no-wait returns at once.
-    if (!values['no-wait']) while (['pending', 'running'].includes(loadRun(dir).status) && alive(child.pid!)) await new Promise((r) => setTimeout(r, 200));
+    if (!values['no-wait']) await waitRun(dir, child.pid!);
     return showRun(dir, cfg, 'verify', !alive(child.pid!));
   }
   return showRun(dir, cfg, 'verify');
@@ -1062,7 +1066,8 @@ function cmdLogs(argv: string[]): number {
 }
 
 async function cmdRerun(argv: string[]): Promise<number> {
-  const { values } = parseArgs({ args: argv, options: { run: { type: 'string' } } });
+  const { values } = parseArgs({ args: argv, options: { run: { type: 'string' }, wait: { type: 'boolean' }, 'no-wait': { type: 'boolean' } } });
+  if (values.wait && values['no-wait']) throw new UsageError('pass only one of --wait and --no-wait');
   const repo = repoRoot();
   const cfg = loadConfig(repo);
   const root = runsRoot(cfg.app);
@@ -1071,7 +1076,7 @@ async function cmdRerun(argv: string[]): Promise<number> {
   const open = shownStatus(src);
   if (open === 'pending' || open === 'running') throw new UsageError(`run ${srcId} is still ${open}, so it cannot be rerun while its runner lives`, `Read it: done-done status --run ${srcId}; stop it first: done-done abort --run ${srcId}`);
   const group = src.runner?.journey_pgid;
-  if (group && alive(-group)) throw new UsageError(`the journey of run ${srcId} is still running, so it cannot be rerun yet`, `Read it: done-done status --run ${srcId}`);
+  if (['pending', 'running'].includes(src.status) && group && alive(-group)) throw new UsageError(`the journey of run ${srcId} is still running, so it cannot be rerun yet`, `Read it: done-done status --run ${srcId}`);
   const inputs = inputsOf(src.repo, loadConfig(src.repo), src.journey);
   const id = newRunId(git(repo, 'rev-parse', 'HEAD'));
   const dir = join(root, id);
@@ -1090,7 +1095,7 @@ async function cmdRerun(argv: string[]): Promise<number> {
   const child = spawn(process.execPath, [CLI_PATH, '__runner', dir], { cwd: src.repo, detached: true, stdio: ['ignore', fd, fd] });
   child.unref();
   closeSync(fd);
-  while (['pending', 'running'].includes(loadRun(dir).status) && alive(child.pid!)) await new Promise((r) => setTimeout(r, 200));
+  if (!values['no-wait']) await waitRun(dir, child.pid!);
   return showRun(dir, cfg, 'rerun', !alive(child.pid!));
 }
 

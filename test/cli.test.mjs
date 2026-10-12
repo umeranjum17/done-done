@@ -1083,6 +1083,22 @@ test('init takes the readiness port only from the dev script', () => {
   assert.doesNotMatch(body, /localhost:5432/, 'a database URL in the README is not the app port');
 });
 
+test('init does not map README code samples as routes or commands', () => {
+  const { repo, dd } = shapeRepo('cli', 'notes');
+  writeFileSync(join(repo, 'README.md'), "# notes\n\n```js\napp.get('/docs-example');\nprogram.command('demo');\n```\n");
+  assert.equal(dd('init').code, 0);
+  assert.deepEqual(featureFiles(join(repo, '.agents', 'skills', 'verify-notes')), ['README.md', 'add.md', 'list.md'], 'only source and bin commands become features');
+});
+
+test('init keeps the config when the verify skill cannot be written', () => {
+  const { repo, dd } = shapeRepo('cli', 'notes');
+  writeFileSync(join(repo, '.agents'), 'not a directory\n');
+  const r = dd('init');
+  assert.equal(r.code, 0, r.out);
+  assert.match(toon(r).verify_skill, /^skipped, .*could not be written/, 'the scaffold is skipped with a reason');
+  assert.equal(existsSync(join(repo, '.done-done.yaml')), true, 'the config written before the scaffold is kept');
+});
+
 test('init reads a package.json larger than 20 KB', () => {
   const { repo, dd } = shapeRepo('web', 'shop');
   writeFileSync(join(repo, 'package.json'), JSON.stringify({ name: 'shop', scripts: { dev: 'vite --port 5173' }, dependencies: { react: '^19.0.0' }, description: 'x'.repeat(30000) }));

@@ -770,9 +770,8 @@ function detectApp(repo: string): Detected {
   const deps = Object.keys({ ...(pkg.dependencies ?? {}), ...(pkg.devDependencies ?? {}) });
   const has = (...names: string[]) => names.some((n) => deps.includes(n));
   const bins: string[] = typeof pkg.bin === 'string' ? [pkg.bin] : pkg.bin && typeof pkg.bin === 'object' ? Object.values(pkg.bin).filter((v): v is string => typeof v === 'string') : [];
-  const readme = headText(join(repo, 'README.md'));
   const make = headText(join(repo, 'Makefile'), 4000);
-  let text = `${scripts.dev ?? ''}\n${scripts.start ?? ''}\n${readme}\n${make}`;
+  let text = `${scripts.dev ?? ''}\n${scripts.start ?? ''}\n${make}`;
   for (const f of sourceFiles(repo, 40)) text += `\n${headText(f, 6000)}`;
   const routes = [...text.matchAll(/\b(app|router|server|api|fastify|routes|r)\.(get|post|put|patch|delete|del|use)\(\s*['"`](\/[^'"`\s]*)/g)]
     .map((m) => `${m[2].toUpperCase()} ${m[3]}`)
@@ -906,9 +905,12 @@ function scaffoldVerify(repo: string, cfg: Config): string {
   const link = targets.map(({ p }) => symlinkOnPath(repo, p)).find((l) => l !== undefined);
   if (link !== undefined) return `skipped, ${shown(repo, link)} is a symlink; write it by hand or remove the link`;
   for (const { p, body } of targets) {
-    if (!existsSync(p)) {
+    if (existsSync(p)) continue;
+    try {
       mkdirSync(dirname(p), { recursive: true });
       writeFileSync(p, body);
+    } catch (e) {
+      return `skipped, ${shown(repo, p)} could not be written (${(e as Error).message}); fix it and re-run init`;
     }
   }
   return 'written';

@@ -36,7 +36,7 @@ const DOCTOR_TEXT = `doctor changes nothing except the --probe call record (the 
   optional: verify_skill (.agents/skills/verify-<app>/), agent (the configured agent, or with agent: auto the first
   of claude, codex, opencode, pi, gemini on PATH that done-done can start, and its model), judge_choice (the claude judge, and whether it is
   apart from the author), judge (an executable claude binary, a sign-in folder and the judge kit; the model is never called), ffprobe (video evidence only).
-  --probe also asks the agent one JSON-schema question (one call at the agent's model, its cheap default unless you set agent_config.<agent>.model; its record goes to
+  --probe also asks the agent one JSON-schema question (one call at the agent's model: its cheap default where it has one, else its own; set agent_config.<agent>.model to choose; its record goes to
   $DONE_DONE_HOME/agents/) and then requires a valid answer.
   doctor lists every check; --full changes nothing. Missing optionals never fail the run.`;
 
@@ -57,7 +57,7 @@ const FLAGS: Record<string, string> = {
   '--no-wait': 'start the run and return at once (exit 4); read it later with done-done status',
   '--foreground': 'run every step in this process instead of a detached runner (use in CI)',
   '--run <run-id>': 'the run to show (default: the newest run of this checkout)',
-  '--probe': 'ask the configured agent one JSON-schema question and require a valid answer (one call at the agent\'s model, its cheap default unless you set agent_config.<agent>.model)',
+  '--probe': 'ask the configured agent one JSON-schema question and require a valid answer (one call at the agent\'s model: its cheap default where it has one, else its own; set agent_config.<agent>.model to choose)',
   '--step <name>': 'the step log to show (resolve, drive, check, receipt, report)',
   '--limit <n>': 'how many past runs to list (default all)',
   '--agent <agent>': 'also add a SessionStart hook to .claude/settings.json (claude) or .codex/hooks.json (codex) that shows `done-done` to each session, or a plugin to .opencode/plugins that adds it to the first message of each opencode session (opt-in)',

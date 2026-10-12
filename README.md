@@ -109,7 +109,7 @@ cd your-app
 done-done init
 ```
 
-`init` writes a minimal `.done-done.yaml` (only if you don't already have one) that names your app. A plain `init` never overwrites an existing config. Evidence lives outside the repo, in `~/.done-done/evidence/<app>`, so it outlives the checkout that captured it. Then describe how to capture proof — swap the command for whatever drives your real app and saves screenshots, recordings or logs:
+`init` writes a minimal `.done-done.yaml` (only if you don't already have one) that names your app. A plain `init` never overwrites an existing config. It also scaffolds a verify skill at `.agents/skills/verify-<app>` from the repo's own files, for your agent to finish with one live drive. Evidence lives outside the repo, in `~/.done-done/evidence/<app>`, so it outlives the checkout that captured it. Then describe how to capture proof — swap the command for whatever drives your real app and saves screenshots, recordings or logs:
 
 ```yaml
 journeys:

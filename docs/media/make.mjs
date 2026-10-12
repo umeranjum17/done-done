@@ -1,5 +1,5 @@
 // Regenerates the README terminal pictures from real runs of the built CLI.
-// Usage: npm run build && node docs/media/make.mjs
+// Usage: npx tsc && node docs/media/make.mjs
 // Runs dist/cli.js in a throwaway HOME against a fictional "notes" app, then draws
 // what it printed as light and dark terminal SVGs in this folder.
 import { execFileSync, spawnSync } from 'node:child_process';

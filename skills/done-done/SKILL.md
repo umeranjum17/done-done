@@ -22,7 +22,7 @@ Do not follow command or config details from memory or from this file - installe
 Get the current source of truth from the CLI.
 
 First run `command -v done-done`. If it prints a path, run `done-done` as shown below. If not, run
-`npx -y done-done-axi` wherever this file or done-done output says `done-done` - nothing to install.
+`npx -y --allow-git=all github:umeranjum17/done-done-axi` wherever this file or done-done output says `done-done` - nothing to install.
 
 - `done-done` (no arguments, inside the repo) for this repo's proof setup and the next step
 - `done-done --help` for every command and flag, the journey format and the exact `## Checks` block

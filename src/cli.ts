@@ -45,6 +45,7 @@ const COMMANDS: Record<string, { usage: [string, string][]; flags: string[]; mor
   init: {
     usage: [
       ['done-done init', 'write a minimal .done-done.yaml (evidence lives outside the repo)'],
+      ['done-done init', 'scaffold .agents/skills/verify-<app> from this repo (never overwrites)'],
       ['done-done init --agent claude', 'also show this repo\'s done-done state at each Claude Code session start'],
       ['done-done init --agent codex', 'also show this repo\'s done-done state at each Codex session start'],
       ['done-done init --agent opencode', 'also add this repo\'s done-done state to the first message of each opencode session'],
@@ -709,6 +710,177 @@ function ensureIgnored(repo: string, rel: string): boolean {
   return true;
 }
 
+// `init` also scaffolds the project's verify skill from the repo's own files: a port of the
+// fleet create-verification-skill interview (surface, run, drive, observe, isolate).
+// Scaffold only: where only a live drive can fill a blank, a TODO marker stands in place of
+// an invented command. An existing skill is never overwritten, so re-run is idempotent.
+function headText(p: string, max = 12000): string {
+  try {
+    if (!statSync(p).isFile()) return '';
+    return readFileSync(p, 'utf8').slice(0, max);
+  } catch {
+    return '';
+  }
+}
+
+type Detected = {
+  surface: string;
+  launch: string;
+  ready: string;
+  harness: string;
+  observe: string;
+  isolate: string;
+  features: { slug: string; title: string; reach: string }[];
+};
+
+const slug = (t: string) => t.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40) || 'feature';
+
+// Surface, run, drive, observe and features read from package.json, Makefile, routes,
+// CLI commands and docs: the repo's own files, never invention.
+function detectApp(repo: string): Detected {
+  let pkg: Record<string, any> = {};
+  try {
+    pkg = JSON.parse(headText(join(repo, 'package.json'), 20000) || '{}');
+  } catch {
+    pkg = {};
+  }
+  if (!pkg || typeof pkg !== 'object' || Array.isArray(pkg)) pkg = {};
+  const scripts: Record<string, string> = pkg.scripts && typeof pkg.scripts === 'object' ? pkg.scripts : {};
+  const deps = Object.keys({ ...(pkg.dependencies ?? {}), ...(pkg.devDependencies ?? {}) });
+  const has = (...names: string[]) => names.some((n) => deps.includes(n));
+  const bins: string[] = typeof pkg.bin === 'string' ? [pkg.bin] : pkg.bin && typeof pkg.bin === 'object' ? Object.values(pkg.bin).filter((v): v is string => typeof v === 'string') : [];
+  const readme = headText(join(repo, 'README.md'));
+  const make = headText(join(repo, 'Makefile'), 4000);
+  let text = `${scripts.dev ?? ''}\n${scripts.start ?? ''}\n${readme}\n${make}`;
+  try {
+    const files = readdirSync(repo, { recursive: true, withFileTypes: true })
+      .filter((e) => e.isFile() && /\.(m?[jt]sx?|py|go|rb|rs|php)$/.test(e.name))
+      .slice(0, 40);
+    for (const f of files) text += `\n${headText(join(f.parentPath, f.name), 6000)}`;
+  } catch {
+    // A repo that cannot be listed still scaffolds from package.json and docs.
+  }
+  const routes = [...text.matchAll(/\.(get|post|put|patch|delete|del|use)\(\s*['"`](\/[^'"`\s]*)/g)]
+    .map((m) => `${m[1].toUpperCase()} ${m[2]}`)
+    .filter((r, i, a) => a.indexOf(r) === i)
+    .slice(0, 5);
+  const commands = [...text.matchAll(/\.command\(\s*['"`]([^'"`\s\]]+)/g)]
+    .map((m) => m[1])
+    .filter((c, i, a) => a.indexOf(c) === i)
+    .slice(0, 5);
+  const headings = [...readme.matchAll(/^#{2,3}\s+(.+?)\s*$/gm)]
+    .map((m) => m[1].trim())
+    .filter((h) => h && !/^(install|getting started|usage|quick ?start|development|contributing|license|changelog|roadmap|api reference)\b/i.test(h))
+    .filter((h, i, a) => a.indexOf(h) === i)
+    .slice(0, 5);
+  const web = has('react', 'next', 'vue', 'nuxt', 'svelte', 'solid', 'vite', 'webpack', 'playwright', '@playwright/test', 'cypress', 'puppeteer');
+  const cliish = bins.length > 0 || commands.length > 0 || has('commander', 'yargs', 'oclif', 'cac');
+  const api = routes.length > 0 || has('express', 'fastify', 'koa', 'hono');
+  const surface = web ? 'web UI' : cliish ? 'CLI' : api ? 'API/service' : 'app (unrecognized surface)';
+  const launch =
+    scripts.dev ? `npm run dev (${scripts.dev})`
+    : scripts.start ? `npm start (${scripts.start})`
+    : bins.length ? `node ${bins[0]} --help`
+    : make ? 'TODO(live drive): pick the dev target from the Makefile and record it here'
+    : 'TODO(live drive): how the app starts locally (no npm script, bin or Makefile found)';
+  const port = text.match(/(?:localhost:|--port[= ])(\d{4,5})/)?.[1];
+  const ready = port
+    ? `http://localhost:${port} answers (TODO(live drive): confirm the ready log line)`
+    : web || api
+      ? 'TODO(live drive): the URL and ready log line the server prints'
+      : 'TODO(live drive): how to tell the app is ready (log line, port, prompt)';
+  const harness = has('playwright', '@playwright/test', 'cypress', 'puppeteer')
+    ? 'browser/CDP (Playwright)'
+    : cliish ? 'tmux/PTY'
+    : api ? 'plain HTTP (curl)'
+    : 'TODO(live drive)';
+  const observe = web
+    ? 'screenshots of the action and the resulting state, plus the console log'
+    : cliish
+      ? 'terminal transcripts, exit codes and side effects (files written, rows inserted)'
+      : api
+        ? 'response bodies, status codes and side effects (rows inserted, messages sent)'
+        : 'TODO(live drive): what evidence this surface can capture';
+  const isolate = web || port
+    ? 'TODO(live drive): confirm two instances run side by side (ports, data dirs, profiles); until then drive one instance at a time'
+    : 'each run uses its own invocation; never drive a shared session the user owns';
+  const features = [
+    ...routes.map((r) => ({ slug: slug(r), title: r, reach: `the ${r} route` })),
+    ...commands.map((c) => ({ slug: slug(c), title: `\`${c}\` command`, reach: `the CLI run with \`${c}\`` })),
+    ...headings.map((h) => ({ slug: slug(h), title: h, reach: `the ${h} flow described in README.md` })),
+  ].slice(0, 5);
+  return { surface, launch, ready, harness, observe, isolate, features };
+}
+
+function verifySkillMd(app: string, d: Detected): string {
+  const name = `verify-${app}`;
+  const found = d.features.length ? d.features.map((f) => `- ${f.title}: ${f.reach}`) : ['- TODO(live drive): no routes, commands or doc flows found; map the first feature on the first live drive'];
+  return `---
+name: ${name}
+description: Drive the ${app} ${d.surface} the way a user does and capture proof it works. Use when proving a ${app} change, capturing evidence, or keeping the feature map honest.
+---
+
+# ${name}
+
+Scaffolded by \`done-done init\` from this repo's own files (surface: ${d.surface}). Lines marked TODO need one live drive before they can be trusted.
+
+## Launch
+
+${d.launch}
+
+Ready when ${d.ready}. Tear down what you started; never kill by process name.
+
+## Doctor
+
+Read-only: is this instance worth driving? Process up, right build, port owned by us, auth valid. ${d.isolate}.
+
+## Drive
+
+Harness: ${d.harness}. Prefer the repo's real handles (routes, commands, labels) over coordinates:
+
+${found.join('\n')}
+
+## Evidence
+
+Capture ${d.observe}. Exercise the real user path, not internal setters; capture the action and the resulting state, not just the final screen; verify side effects alongside what is visible. Evidence goes to the run folder \`done-done run\` prints.
+
+## Cleanup
+
+Stop the instances this run started and remove scratch state. Evidence survives cleanup: never delete the run folder.
+`;
+}
+
+function verifyFeatureMd(app: string, d: Detected, f: Detected['features'][number]): string {
+  return `# ${f.title}\n\nPart of the ${app} verification map; reached at ${f.reach}.\n\n## Sub-features\n\nTODO(live drive): list what this covers.\n\n## How to get to it (user POV)\n\n${f.reach}.\n\n## Driving it with ${d.harness}\n\nTODO(live drive): the exact selectors or commands that drive it.\n\n## Gotchas\n\nTODO(live drive): what surprised the first live drive.\n`;
+}
+
+function verifyFeaturesMd(app: string, d: Detected): string {
+  const index = d.features.length
+    ? d.features.map((f) => `- [${f.title}](${f.slug}.md): ${f.reach}`).join('\n')
+    : 'TODO(live drive): no features found in source; map the first one here.';
+  return `# ${app} features\n\nThe repo's maintained verification map; a proof that drives one entry point is incomplete when this lists others.\n\n${index}\n`;
+}
+
+// Writes only missing files; an existing skill is left byte-identical.
+function scaffoldVerify(repo: string, cfg: Config): { status: string; features: string[] } {
+  const dir = join(repo, cfg.skill);
+  if (existsSync(join(dir, 'SKILL.md'))) return { status: 'unchanged', features: [] };
+  const d = detectApp(repo);
+  const files = new Map<string, string>([
+    ['SKILL.md', verifySkillMd(cfg.app, d)],
+    [join('features', 'README.md'), verifyFeaturesMd(cfg.app, d)],
+  ]);
+  for (const f of d.features) files.set(join('features', `${f.slug}.md`), verifyFeatureMd(cfg.app, d, f));
+  for (const [rel, body] of files) {
+    const p = join(dir, rel);
+    if (!existsSync(p)) {
+      mkdirSync(dirname(p), { recursive: true });
+      writeFileSync(p, body);
+    }
+  }
+  return { status: 'written', features: d.features.map((f) => f.slug) };
+}
+
 // The session-start hook `init --agent <agent>` adds; the agent shows its stdout to the session.
 // Without done-done on PATH it prints nothing and exits 0, so it never breaks a session.
 // Claude Code reads it from the repo's .claude/settings.json, Codex from the repo's .codex/hooks.json
@@ -846,6 +1018,7 @@ function cmdInit(argv: string[]): number {
     const added = !!rel && ensureIgnored(repo, rel);
     const root = shown(repo, fresh.evidence.root);
     const check = 'done-done check --outcome "<what you proved>" <files it recorded>';
+    const verify = scaffoldVerify(repo, fresh);
     emit({
       command: 'init',
       result: 'pass',
@@ -854,6 +1027,8 @@ function cmdInit(argv: string[]): number {
       app: fresh.app,
       evidence_root: root,
       gitignore: added ? `added ${rel!.replace(/\/+$/, '')}/` : 'unchanged',
+      verify_skill: verify.status,
+      ...(verify.features.length ? { features: verify.features } : {}),
       help: [`Capture proof: done-done run ${journey}, then: ${check}`],
     });
     return PASS;
@@ -875,6 +1050,7 @@ function cmdInit(argv: string[]): number {
   }
   const root = shown(repo, cfg.evidence.root);
   const check = 'done-done check --outcome "<what you proved>" <files it recorded>';
+  const verify = scaffoldVerify(repo, cfg);
   emit({
     command: 'init',
     result: 'pass',
@@ -882,6 +1058,8 @@ function cmdInit(argv: string[]): number {
     app: cfg.app,
     evidence_root: root,
     gitignore: added ? `added ${rel!.replace(/\/+$/, '')}/` : 'unchanged',
+    verify_skill: verify.status,
+    ...(verify.features.length ? { features: verify.features } : {}),
     ...(hook &&
       (values.agent === 'codex'
         ? { codex_hook: hook.text ? 'added to .codex/hooks.json' : 'unchanged' }

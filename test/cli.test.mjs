@@ -942,6 +942,79 @@ test('init --agent opencode refuses to overwrite a plugin file with other conten
   assert.equal(readFileSync(plugin, 'utf8'), 'export const Mine = async () => ({});\n', 'the existing file is kept');
 });
 
+// Fixture repos of two shapes for init's verify-skill scaffold: a web app and a CLI tool.
+function shapeRepo(kind, name) {
+  const dir = mkdtempSync(join(tmpdir(), 'done-done-shape-'));
+  after(() => rmSync(dir, { recursive: true, force: true }));
+  const repo = join(dir, name);
+  const env = { ...process.env, DONE_DONE_HOME: join(dir, 'home'), GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@example.com', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@example.com' };
+  mkdirSync(repo, { recursive: true });
+  if (kind === 'web') {
+    writeFileSync(join(repo, 'package.json'), JSON.stringify({ name, scripts: { dev: 'vite --port 5173' }, dependencies: { react: '^19.0.0' }, devDependencies: { '@playwright/test': '^1.0.0' } }));
+    mkdirSync(join(repo, 'src'));
+    writeFileSync(join(repo, 'src', 'App.jsx'), 'export const App = () => <h1>shop</h1>;\n');
+    writeFileSync(join(repo, 'README.md'), '# shop\n\n## Cart\n\n## Checkout\n');
+  } else {
+    writeFileSync(join(repo, 'package.json'), JSON.stringify({ name, bin: { [name]: 'bin/cli.js' }, dependencies: { commander: '^12.0.0' } }));
+    mkdirSync(join(repo, 'bin'));
+    writeFileSync(join(repo, 'bin', 'cli.js'), `#!/usr/bin/env node\nprogram.command('add').command('list');\n`);
+    writeFileSync(join(repo, 'README.md'), '# notes\n');
+  }
+  const sh = (...a) => execFileSync('git', a, { cwd: repo, env, stdio: 'pipe' });
+  sh('init', '-q', '-b', 'main');
+  sh('add', '-A');
+  sh('commit', '-qm', 'init');
+  const dd = (...args) => {
+    const r = spawnSync(process.execPath, [CLI, ...args], { cwd: repo, env, encoding: 'utf8' });
+    return { code: r.status, out: r.stdout + r.stderr };
+  };
+  return { dir, repo, env, dd };
+}
+
+test('init scaffolds a verify skill with real launch and features for a web app', () => {
+  const { repo, dd } = shapeRepo('web', 'shop');
+  const r = dd('init');
+  assert.equal(r.code, 0, r.out);
+  assert.equal(toon(r).verify_skill, 'written');
+  assert.deepEqual(toon(r).features, ['cart', 'checkout']);
+  const dir = join(repo, '.agents', 'skills', 'verify-shop');
+  const body = readFileSync(join(dir, 'SKILL.md'), 'utf8');
+  assert.match(body, /^name: verify-shop$/m, 'frontmatter registers the skill');
+  assert.match(body, /npm run dev \(vite --port 5173\)/, 'launch comes from the repo scripts');
+  assert.match(body, /localhost:5173/, 'the detected port becomes the readiness check');
+  assert.match(body, /browser\/CDP \(Playwright\)/, 'the harness comes from the repo deps');
+  for (const f of ['cart', 'checkout']) {
+    const feat = readFileSync(join(dir, 'features', `${f}.md`), 'utf8');
+    assert.match(feat, /## Driving it with/, 'each feature keeps the four-H2 shape');
+  }
+  assert.match(readFileSync(join(dir, 'features', 'README.md'), 'utf8'), /cart\.md/, 'the map indexes its features');
+  const before = body;
+  assert.equal(toon(dd('init')).verify_skill, 'unchanged');
+  assert.equal(readFileSync(join(dir, 'SKILL.md'), 'utf8'), before, 're-run is idempotent');
+});
+
+test('init scaffolds a verify skill with real bin and commands for a CLI tool', () => {
+  const { repo, dd } = shapeRepo('cli', 'notes');
+  assert.equal(dd('init').code, 0);
+  const dir = join(repo, '.agents', 'skills', 'verify-notes');
+  const body = readFileSync(join(dir, 'SKILL.md'), 'utf8');
+  assert.match(body, /^name: verify-notes$/m);
+  assert.match(body, /node bin\/cli\.js --help/, 'launch comes from package.json bin');
+  assert.match(body, /tmux\/PTY/, 'a CLI is driven over a PTY');
+  assert.ok(existsSync(join(dir, 'features', 'add.md')) && existsSync(join(dir, 'features', 'list.md')), 'subcommands become features');
+});
+
+test('init never overwrites an existing verify skill', () => {
+  const { repo, dd } = shapeRepo('cli', 'notes');
+  const skill = join(repo, '.agents', 'skills', 'verify-notes', 'SKILL.md');
+  mkdirSync(dirname(skill), { recursive: true });
+  writeFileSync(skill, '# hand-written\n');
+  const r = dd('init');
+  assert.equal(r.code, 0, r.out);
+  assert.equal(toon(r).verify_skill, 'unchanged');
+  assert.equal(readFileSync(skill, 'utf8'), '# hand-written\n', 'the existing file is kept');
+});
+
 test('init outside a git repository reports a clear usage error', () => {
   const dir = mkdtempSync(join(tmpdir(), 'done-done-nogit-'));
   after(() => rmSync(dir, { recursive: true, force: true }));

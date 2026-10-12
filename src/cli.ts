@@ -8,7 +8,7 @@ import { parseArgs } from 'node:util';
 import { encode } from '@toon-format/toon';
 import { Document, parseDocument } from 'yaml';
 import { type Config, home, loadConfig, UsageError } from './config.js';
-import { type Capture, judge, type Judged, quote } from './judge.js';
+import { type Capture, judge, type Judged } from './judge.js';
 import { checkMedia } from './media.js';
 
 const PASS = 0, FAIL = 1, USAGE = 2, INCONCLUSIVE = 3;
@@ -119,8 +119,6 @@ function emit(value: Record<string, unknown>): void {
 function cap<T>(items: T[]): { items: T[]; omitted: number } {
   return FULL || items.length <= COMPACT_LIST ? { items, omitted: 0 } : { items: items.slice(0, COMPACT_LIST), omitted: items.length - COMPACT_LIST };
 }
-
-const commandText = (argv: string[]) => (argv.length === 1 ? argv[0] : argv.map(quote).join(' '));
 
 // A hint that names the exact command that moves the work forward, naming the journey when there is one.
 function captureHint(cfg: Config): string {
@@ -278,7 +276,7 @@ function cmdRun(argv: string[]): number {
   }
   const journey = positionals[0] ?? null;
   if (positionals.length > 1) throw new UsageError('run takes at most one journey name');
-  let command = dash < 0 ? null : commandText(argv.slice(dash + 1));
+  let command = dash < 0 ? null : argv.slice(dash + 1).join(' ');
   if (journey && !command) {
     const j = cfg.journeys[journey];
     if (!j) throw new UsageError(`unknown journey ${journey}; .done-done.yaml defines: ${Object.keys(cfg.journeys).join(', ') || 'none'}`);
@@ -784,14 +782,14 @@ function cmdInit(argv: string[]): number {
   if (journey !== null) {
     // Record the capture recipe in the repo so any checkout can re-run the proof.
     // The command is stored verbatim; ${RUN_ID} in it becomes the run id, like a run -- command.
-    const command = commandText(parts);
+    const command = parts.join(' ');
     const doc = existed ? parseDocument(readFileSync(file, 'utf8')) : new Document({ app: cfg.app });
     const top = (doc.toJS() ?? {}) as Record<string, any>;
     if (typeof top !== 'object' || Array.isArray(top)) throw new UsageError(`${file}: top level must be a mapping`);
     const journeys = top.journeys ?? {};
     if (typeof journeys !== 'object' || Array.isArray(journeys)) throw new UsageError(`${file}: journeys must be a mapping`);
     if (top.journeys == null) doc.set('journeys', doc.createNode({}));
-    doc.setIn(['journeys', journey], { command });
+    doc.setIn(['journeys', journey, 'command'], command);
     writeFileSync(`${file}.tmp`, doc.toString({ lineWidth: 0 }));
     renameSync(`${file}.tmp`, file);
     const fresh = loadConfig(repo);

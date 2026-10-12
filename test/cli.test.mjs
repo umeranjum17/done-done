@@ -768,20 +768,27 @@ test('init --journey keeps the comments and formatting of an existing config', (
   assert.equal(readFileSync(join(repo, '.done-done.yaml'), 'utf8'), `${original}  smoke:\n    command: echo hi\n`);
 });
 
-test('init --journey stores an argv with spaces so the run gets the same arguments', () => {
+test('init --journey records the command a run executes, shell syntax included', () => {
   const { repo, sh, dd } = bareRepo();
-  writeFileSync(join(repo, 'argv.mjs'), "import { mkdirSync, writeFileSync } from 'node:fs';\nconst root = process.env.DONE_DONE_EVIDENCE_ROOT;\nmkdirSync(root, { recursive: true });\nwriteFileSync(`${root}/${process.env.DONE_DONE_RUN_ID}.json`, JSON.stringify(process.argv.slice(2)));\n");
-  assert.equal(dd('init', '--journey', 'unit', '--', 'node', 'argv.mjs', '--grep', 'login flow').code, 0);
-  assert.equal(parse(readFileSync(join(repo, '.done-done.yaml'), 'utf8')).journeys.unit.command, "node argv.mjs --grep 'login flow'");
+  assert.equal(dd('init', '--journey', 'unit', '--', 'echo', 'added', '>', '$DONE_DONE_EVIDENCE_ROOT/out.txt').code, 0);
+  assert.equal(parse(readFileSync(join(repo, '.done-done.yaml'), 'utf8')).journeys.unit.command, 'echo added > $DONE_DONE_EVIDENCE_ROOT/out.txt');
   sh('add', '-A');
   sh('commit', '-qm', 'recipe');
   const run = dd('run', 'unit');
   assert.equal(run.code, 0, run.out);
   const [file] = toon(run).evidence;
-  assert.deepEqual(JSON.parse(readFileSync(file, 'utf8')), ['--grep', 'login flow']);
-  const adhoc = dd('run', '--', 'node', 'argv.mjs', '--grep', 'login flow');
+  assert.equal(readFileSync(file, 'utf8'), 'added\n');
+  const adhoc = dd('run', '--', 'echo', 'added', '>', '$DONE_DONE_EVIDENCE_ROOT/out.txt');
   assert.equal(adhoc.code, 0, adhoc.out);
   assert.ok(!toon(adhoc).help.join('\n').includes('not in the repo'), 'the same command run ad hoc matches the recorded recipe');
+});
+
+test('re-recording a journey replaces only its command and keeps its other keys and comments', () => {
+  const { repo, dd } = bareRepo();
+  const original = 'app: notes\njourneys:\n  smoke:\n    command: old # keep\n    timeout: 60\n';
+  writeFileSync(join(repo, '.done-done.yaml'), original);
+  assert.equal(dd('init', '--journey', 'smoke', '--', 'echo new').code, 0);
+  assert.equal(readFileSync(join(repo, '.done-done.yaml'), 'utf8'), 'app: notes\njourneys:\n  smoke:\n    command: echo new # keep\n    timeout: 60\n');
 });
 
 test('the outside-repo hint never prints the ad-hoc command, so a secret in it is not suggested for commit', () => {

@@ -43,7 +43,7 @@ function onPath(name: string): string {
 }
 
 const KIT = '@byokit/decide@0.6.5';
-export const quote = (a: string) => (/^[\w@%+=:,./-]+$/.test(a) ? a : `'${a.replaceAll("'", `'\\''`)}'`);
+const quote = (a: string) => (/^[\w@%+=:,./-]+$/.test(a) ? a : `'${a.replaceAll("'", `'\\''`)}'`);
 
 // The kit is an optional peer dependency, so a plain install stays small; it loads only when a capture needs judging.
 async function kit() {

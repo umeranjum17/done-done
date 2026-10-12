@@ -133,6 +133,8 @@ A `run -- <command>` whose command matches no recorded journey still runs, but i
 
 At any point, `done-done doctor` checks the setup and changes nothing except the `--probe` call record: git, a valid `.done-done.yaml`, a writable evidence root (all required), plus the verify skill, your coding agent and its model (`agent:` in config, or the first agent on PATH that done-done can start; see [Agents](docs/reference.md#agents)), the judge setup and `ffprobe` (all optional). Each item reports `ok` or `missing` with the exact fix command (pi adds a `warning` row, see [Agents](docs/reference.md#agents)). `done-done doctor --probe` also asks the agent one question to prove it answers (the agent itself may keep its own session files).
 
+`done-done maintain` keeps the verify skill true and edits nothing: it checks the skill's links and feature index, checks that every `file:line` it cites exists, and has your coding agent read the source for each feature, read-only, to report drift. It ends `clean`, or `drift` with the findings to fix ([reference](docs/reference.md#keep-the-verify-skill-true)).
+
 **3. Run it, then check it**
 
 ```sh
@@ -162,7 +164,7 @@ Run `done-done` with no arguments to see the current config and the next step.
 - 👀 **Shows the outcome** (opt-in): `--judge` asks a model on your own Claude plan whether each screenshot is the right screen for the claim (cheap Haiku by default; set `judge.model` for another); a wrong screen fails.
 - 🔒 **Safe in CI**: `--trusted-ref origin/main` reads the rules from your main branch, so a pull request can't loosen them.
 
-Every answer is an exit code: **0** pass, **1** fail, **2** usage or config error, **3** can't tell either way, **4** a `verify` or `rerun` run is still running.
+Every answer is an exit code: **0** pass, **1** fail, **2** usage or config error, **3** can't tell either way, **4** a `verify`, `maintain` or `rerun` run is still running.
 
 ## Use with Firstmate or another agent fleet
 

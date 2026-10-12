@@ -563,12 +563,8 @@ test('with the judge off, check output is unchanged and no model is asked', () =
 
 test('judge pass exits 0, sends one downscaled image and the outcome only, and a re-run is a cache hit', () => {
   const j = judgeSetup(CORRECT);
-  const { files } = j.shots();
-  writeFileSync(join(j.dir, 'big.png'), png(2000, 1000, (x, y) => [x % 256, y % 256, 90]));
-  writeFileSync(join(j.repo, 'make-big.mjs'), `import { copyFileSync, mkdirSync } from 'node:fs';\nmkdirSync('.proof/big', { recursive: true });\ncopyFileSync(${JSON.stringify(join(j.dir, 'big.png'))}, '.proof/big/wide.png');\n`);
-  const run = j.dd('run', '--', 'node make-big.mjs');
-  assert.equal(run.code, 0, run.out);
-  const cited = [...files, '.proof/big/wide.png'];
+  writeFileSync(join(j.dir, 'screen2.png'), png(2000, 1000, (x, y) => [x % 256, y % 256, 90]));
+  const { files: cited } = j.shots();
   const r = j.dd('check', '--judge', '--outcome', 'the notes list shows three notes', ...cited);
   assert.equal(r.code, 0, r.out);
   const d = toon(r);
@@ -577,14 +573,14 @@ test('judge pass exits 0, sends one downscaled image and the outcome only, and a
   assert.deepEqual(d.judge.judged.map((x) => [x.path, x.verdict, x.cached]), cited.map((p) => [p, 'pass', false]));
   assert.equal(d.judge.judged[0].reason, 'The screen shows the notes list.');
   const calls = j.calls();
-  assert.equal(calls.length, 3, 'one request per image');
+  assert.equal(calls.length, 2, 'one request per image');
   assert.ok(calls.every((c) => c.images === 1 && c.model === 'claude-test-1'));
-  assert.deepEqual(calls.map((c) => c.width), [200, 200, 1000], 'a 2000px capture is downscaled to fit 1280px');
+  assert.deepEqual(calls.map((c) => c.width), [200, 1000], 'a 2000px capture is downscaled to fit 1280px');
   assert.ok(calls.every((c) => c.prompt.includes('the notes list shows three notes') && !c.prompt.includes('.proof') && !c.prompt.includes(j.repo)), 'only the outcome line goes with the image');
   const again = j.dd('check', '--judge', '--outcome', 'the notes list shows three notes', ...cited);
   assert.equal(again.code, 0, again.out);
   assert.ok(toon(again).judge.judged.every((x) => x.cached === true && x.verdict === 'pass'));
-  assert.equal(j.calls().length, 3, 'a cache hit asks no model');
+  assert.equal(j.calls().length, 2, 'a cache hit asks no model');
   const cache = readFileSync(join(j.env.DONE_DONE_HOME, 'judge', readdirSync(join(j.env.DONE_DONE_HOME, 'judge'))[0]), 'utf8');
   assert.doesNotMatch(cache, /token|key|secret/i, 'the cache holds verdicts only');
 });

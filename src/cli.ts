@@ -1393,7 +1393,7 @@ const HOOK_COMMAND = 'command -v done-done >/dev/null && done-done || true';
 // Gemini CLI reads a SessionStart hook from the repo's .gemini/settings.json (its hooks reference) but shows plain
 // stdout only to the person, so the state goes to the model as JSON hookSpecificOutput.additionalContext.
 // done-done runs on node, so node is on PATH whenever done-done is.
-const GEMINI_HOOK = `command -v done-done >/dev/null && done-done 2>/dev/null | node -e 'let s="";process.stdin.on("data",(d)=>s+=d).on("end",()=>s.trim()&&process.stdout.write(JSON.stringify({hookSpecificOutput:{additionalContext:s.trim()}})))' || true`;
+const GEMINI_HOOK = `command -v done-done >/dev/null && done-done 2>/dev/null | node -e 'process.stdin.setEncoding("utf8");let s="";process.stdin.on("data",(d)=>s+=d).on("end",()=>s.trim()&&process.stdout.write(JSON.stringify({hookSpecificOutput:{additionalContext:s.trim()}})))' || true`;
 
 // A repo settings file with a SessionStart hook running `command` merged in, keeping every other key and hook; no text when it is already there.
 function sessionStartSettings(repo: string, rel: string, command: string, agent: string): { file: string; text?: string } {

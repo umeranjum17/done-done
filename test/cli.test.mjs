@@ -1,7 +1,7 @@
 // End-to-end: drives the built CLI against throwaway git repos with fictional fixtures.
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { appendFileSync, mkdirSync, mkdtempSync, existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { after, test } from 'node:test';
@@ -64,13 +64,18 @@ function setup(projectYaml = 'app: notes\nevidence:\n  root: .proof\n  ignore_pa
     const r = spawnSync(process.execPath, [CLI, ...args], { cwd: repo, env, encoding: 'utf8' });
     return { code: r.status, out: r.stdout + r.stderr };
   };
+  const ddin = (input, ...args) => {
+    const r = spawnSync(process.execPath, [CLI, ...args], { cwd: repo, env, encoding: 'utf8', input });
+    return { code: r.status, out: r.stdout + r.stderr };
+  };
+  const head = () => sh('rev-parse', 'HEAD').toString().trim();
   const shots = () => {
     const r = dd('run', 'shots');
     assert.equal(r.code, 0, r.out);
     const id = toon(r).run_id;
     return { id, files: [`.proof/${id}/home.png`, `.proof/${id}/settings.png`] };
   };
-  return { dir, repo, env, sh, dd, shots };
+  return { dir, repo, env, sh, dd, ddin, head, shots };
 }
 
 test('a fresh run of the real journey passes the check', () => {
@@ -213,6 +218,100 @@ test('videos are probed for real frames', { skip: spawnSync('ffmpeg', ['-version
   const cut = dd('check', '--outcome', 'cut clip', '.proof/cut.mp4');
   assert.equal(cut.code, 1, cut.out);
   assert.match(cut.out, /does not decode/);
+});
+
+test('check reads the same Checks block from a file or from stdin', () => {
+  const { repo, dd, ddin, shots } = setup();
+  const { files } = shots();
+  const body = `# PR\n\n## Checks\noutcome: home and settings render\nrepro: n/a: no bug\nproof: no verify skill - \`done-done run shots\`\nevidence: ${files.join(', ')}\n`;
+  const p = join(repo, '..', 'pr.md');
+  writeFileSync(p, body);
+  const fromFile = dd('check', '--from', p);
+  assert.equal(fromFile.code, 0, fromFile.out);
+  const fromStdin = ddin(body, 'check', '--from', '-');
+  assert.equal(fromStdin.code, 0, fromStdin.out);
+  const a = toon(fromFile);
+  const b = toon(fromStdin);
+  assert.equal(b.source, '-');
+  assert.equal(a.result, 'pass');
+  assert.equal(b.result, 'pass');
+  assert.equal(a.claim, b.claim);
+  assert.equal(a.files, b.files);
+  assert.deepEqual(a.evidence, b.evidence, 'stdin and file parse the same block');
+});
+
+test('receipt records a passing check for the head, then verifies', () => {
+  const { repo, dd, head, shots } = setup();
+  const { files } = shots();
+  const h = head();
+  const r = dd('receipt', '--outcome', 'home and settings render', ...files);
+  assert.equal(r.code, 0, r.out);
+  const d = toon(r);
+  assert.equal(d.result, 'pass');
+  assert.equal(d.head, h);
+  assert.equal(d.files, 2);
+  const rec = JSON.parse(readFileSync(join(repo, d.receipt), 'utf8'));
+  assert.equal(rec.schema, 1);
+  assert.equal(rec.head, h);
+  assert.match(rec.tree, /^[0-9a-f]{40,64}$/);
+  assert.equal(rec.claim, 'home and settings render');
+  assert.equal(rec.result, 'pass');
+  assert.ok(rec.at && rec.repo, 'the record carries a timestamp and the repo');
+  assert.equal(rec.files.length, 2);
+  assert.ok(rec.files.every((f) => /^[0-9a-f]{64}$/.test(f.sha256)), 'every cited file carries its sha256');
+  const v = dd('receipt', '--verify', h);
+  assert.equal(v.code, 0, v.out);
+  assert.equal(toon(v).result, 'pass');
+});
+
+test('receipt is not written when the check fails', () => {
+  const { dd, head } = setup();
+  const r = dd('receipt', '--outcome', 'nothing here', '.proof/nope/session.log');
+  assert.equal(r.code, 1, r.out);
+  assert.equal(toon(r).result, 'fail');
+  assert.match(r.out, /did not pass/);
+  assert.equal(dd('receipt', '--verify', head()).code, 1, 'a refused write leaves no receipt');
+});
+
+test('receipt is refused when the head moved, and verify rejects a wrong head', () => {
+  const { repo, sh, dd, head, shots } = setup();
+  const { files } = shots();
+  const h = head();
+  assert.equal(dd('receipt', '--outcome', 'home and settings render', ...files).code, 0);
+  writeFileSync(join(repo, 'src', 'app.js'), 'export const app = 2;\n');
+  sh('commit', '-qam', 'move');
+  const again = dd('receipt', '--outcome', 'home and settings render', ...files);
+  assert.equal(again.code, 1, again.out);
+  assert.match(again.out, /did not pass/);
+  const v = dd('receipt', '--verify', h);
+  assert.equal(v.code, 1, v.out);
+  assert.match(v.out, /HEAD is/);
+});
+
+test('receipt refuses a dirty tracked tree', () => {
+  const { repo, dd, head, shots } = setup();
+  const { files } = shots();
+  const h = head();
+  writeFileSync(join(repo, 'src', 'app.js'), 'export const app = 7;\n');
+  const r = dd('receipt', '--outcome', 'home and settings render', ...files);
+  assert.equal(r.code, 1, r.out);
+  assert.match(r.out, /uncommitted changes/);
+  assert.equal(dd('receipt', '--verify', h).code, 1, 'refused write leaves no receipt');
+});
+
+test('receipt --verify fails on a changed file and on a missing receipt', () => {
+  const { repo, dd, head, shots } = setup();
+  const { files } = shots();
+  const h = head();
+  assert.equal(dd('receipt', '--outcome', 'home and settings render', ...files).code, 0);
+  assert.equal(dd('receipt', '--verify', h).code, 0, 'a clean receipt verifies');
+  appendFileSync(join(repo, files[0]), 'tampered');
+  const changed = dd('receipt', '--verify', h);
+  assert.equal(changed.code, 1, changed.out);
+  assert.match(changed.out, /hash changed/);
+  const missing = dd('receipt', '--verify', '0'.repeat(40));
+  assert.equal(missing.code, 1, missing.out);
+  assert.match(missing.out, /no receipt/);
 });
 
 // A bare git repo with no done-done config yet, for exercising `init`.

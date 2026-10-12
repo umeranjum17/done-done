@@ -17,7 +17,10 @@ const USAGE_TEXT = `usage:
   done-done run --open [<journey>]              open a run for a hand- or agent-driven proof; prints its id
   done-done run --close <run-id>                seal an open run
   done-done check --outcome "<claim>" <files...> [--trusted-ref <ref>]
-  done-done check --from <file | PR URL> [--trusted-ref <ref>]
+  done-done check --from <file | - | PR URL> [--trusted-ref <ref>]
+  done-done receipt --outcome "<claim>" <files...>   record a passing check for HEAD
+  done-done receipt --from <file | - | PR URL>       record from a claim's Checks block
+  done-done receipt --verify <head>                  read-only: verify a recorded receipt
 global flags: --json (JSON instead of TOON), --full (do not truncate lists)
 exit codes: 0 pass, 1 fail, 2 usage or config error, 3 inconclusive
 
@@ -233,6 +236,7 @@ function claimFromChecks(body: string, title: string, repo: string, cfg: Config,
 }
 
 function readSource(from: string): { body: string; title: string } {
+  if (from === '-') return { body: readFileSync(0, 'utf8'), title: '' };
   if (/^https?:\/\//.test(from)) {
     const r = spawnSync('gh', ['pr', 'view', from, '--json', 'body,title'], { encoding: 'utf8' });
     if (r.error || r.status !== 0) throw new UsageError(`gh pr view ${from} failed: ${(r.error?.message || r.stderr).trim()}`);
@@ -251,7 +255,17 @@ function loadRecords(cfg: Config): RunRecord[] {
   return readdirSync(dir).filter((n) => n.endsWith('.json')).map((n) => JSON.parse(readFileSync(join(dir, n), 'utf8')) as RunRecord).filter((r) => r.ended_at);
 }
 
-function cmdCheck(argv: string[]): number {
+type CheckOutcome = {
+  code: number;
+  result: Record<string, unknown>;
+  claim?: string;
+  files: string[];
+  cited: { path: string; sha256: string }[];
+  head: { commit: string; tree: string; dirty: boolean };
+};
+
+// Run a check and return its result without printing it, so `check` and `receipt` share one path.
+function runCheck(argv: string[]): CheckOutcome {
   const { values, positionals } = parseArgs({
     args: argv,
     options: { outcome: { type: 'string' }, from: { type: 'string' }, 'trusted-ref': { type: 'string' } },
@@ -271,6 +285,7 @@ function cmdCheck(argv: string[]): number {
     }
   }
   const cfg = loadConfig(repo, projectText);
+  const now = head(repo);
   const findings: Finding[] = [];
   let claim: Claim | undefined;
   if (values.outcome) {
@@ -282,18 +297,19 @@ function cmdCheck(argv: string[]): number {
   }
   if (claim?.notProven) {
     const allowed = cfg.checks.not_proven === 'allow' && cfg.trusted;
-    return report(
+    const rep = report(
       findings.concat(allowed ? [] : [{ level: 'inconclusive', why: `not proven: ${claim.notProven}` }]),
       [],
       { cfg, claim: claim.outcome, source: values.from, notProven: true },
       allowed ? 'not proven (allowed by trusted config)' : '',
     );
+    return { code: rep.code, result: rep.result, claim: claim?.outcome, files: [], cited: [], head: now };
   }
   const files = claim?.files ?? [];
-  const now = head(repo);
   const records = loadRecords(cfg);
   const seen = new Map<string, string>();
   const hashes: string[] = [];
+  const cited: { path: string; sha256: string }[] = [];
   for (const name of files) {
     const path = resolve(name);
     let bytes: Buffer;
@@ -308,6 +324,7 @@ function cmdCheck(argv: string[]): number {
     if (v.status !== 'ok') findings.push({ level: v.status === 'fail' ? 'fail' : 'inconclusive', why: `${name}: ${v.why}` });
     const hash = sha256(bytes);
     hashes.push(hash);
+    cited.push({ path: name, sha256: hash });
     if (seen.has(hash)) findings.push({ level: 'fail', why: `${name}: byte-identical to ${seen.get(hash)}` });
     seen.set(hash, name);
     if (v.status === 'fail') continue;
@@ -332,12 +349,115 @@ function cmdCheck(argv: string[]): number {
     }
   const reusedElsewhere = (h: string) => [...(used.get(h) ?? [])].some((k) => k !== key && k.startsWith(key.split(':')[0]));
   if (hashes.length && hashes.every(reusedElsewhere)) findings.push({ level: 'fail', why: 'every evidence file was already used as proof of a different claim' });
-  const code = report(findings, files, { cfg, claim: claim?.outcome, source: values.from });
-  if (code === PASS) {
+  const rep = report(findings, files, { cfg, claim: claim?.outcome, source: values.from });
+  if (rep.code === PASS) {
     mkdirSync(dirname(ledger), { recursive: true });
     appendFileSync(ledger, hashes.filter((h) => !used.get(h)?.has(key)).map((h) => `${h} ${key}\n`).join(''));
   }
-  return code;
+  return { code: rep.code, result: rep.result, claim: claim?.outcome, files, cited, head: now };
+}
+
+function cmdCheck(argv: string[]): number {
+  const r = runCheck(argv);
+  emit(r.result);
+  return r.code;
+}
+
+// A receipt ties one passing check to one commit and to the sha256 of every file it cited.
+type Receipt = {
+  schema: 1;
+  repo: string;
+  head: string;
+  tree: string;
+  claim: string;
+  result: 'pass';
+  at: string;
+  files: { path: string; sha256: string }[];
+};
+
+const receiptsDir = (cfg: Config) => join(cfg.evidence.root, '.done-done', 'receipts');
+
+function writeReceipt(cfg: Config, rec: Receipt): string {
+  const path = join(receiptsDir(cfg), `${rec.head}.json`);
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(`${path}.tmp`, `${JSON.stringify(rec, null, 2)}\n`, { mode: 0o600 });
+  renameSync(`${path}.tmp`, path);
+  return path;
+}
+
+// Verify a recorded receipt for `head`; read-only, so a missing or changed record is a failure, not a usage error.
+function verifyReceipt(repo: string, cfg: Config, headArg: string): number {
+  const short = headArg.slice(0, 12);
+  const path = join(receiptsDir(cfg), `${headArg}.json`);
+  const fail = (reason: string) => {
+    emit({ command: 'receipt', result: 'fail', head: headArg, reason, help: ['Record a passing check for this head: done-done receipt --from <file|->'] });
+    return FAIL;
+  };
+  if (!existsSync(path)) return fail(`no receipt for ${short}`);
+  let rec: Receipt;
+  try {
+    rec = JSON.parse(readFileSync(path, 'utf8'));
+  } catch (e) {
+    return fail(`receipt for ${short} is malformed (${(e as Error).message})`);
+  }
+  if (!rec || typeof rec !== 'object' || rec.schema !== 1 || rec.result !== 'pass' || !Array.isArray(rec.files)) return fail(`receipt for ${short} is malformed`);
+  if (rec.head !== headArg) return fail(`receipt records head ${String(rec.head).slice(0, 12)}, not ${short}`);
+  const now = head(repo);
+  if (now.commit !== headArg) return fail(`HEAD is ${now.commit.slice(0, 12)}, not ${short}`);
+  const bad: string[] = [];
+  for (const f of rec.files) {
+    let bytes: Buffer;
+    try {
+      bytes = readFileSync(resolve(repo, f.path));
+    } catch {
+      bad.push(`${f.path}: missing`);
+      continue;
+    }
+    if (sha256(bytes) !== f.sha256) bad.push(`${f.path}: hash changed`);
+  }
+  if (bad.length) return fail(`cited evidence no longer matches the receipt: ${bad.join('; ')}`);
+  emit({ command: 'receipt', result: 'pass', head: headArg, tree: rec.tree, claim: rec.claim, files: rec.files.length, at: rec.at, help: ['This receipt is valid for this head.'] });
+  return PASS;
+}
+
+function cmdReceipt(argv: string[]): number {
+  const vi = argv.indexOf('--verify');
+  let verifyHead: string | null = null;
+  let rest = argv;
+  if (vi >= 0) {
+    verifyHead = argv[vi + 1] ?? null;
+    if (!verifyHead || verifyHead.startsWith('--')) throw new UsageError('receipt --verify needs a head sha');
+    rest = [...argv.slice(0, vi), ...argv.slice(vi + 2)];
+  }
+  const repo = repoRoot();
+  const cfg = loadConfig(repo);
+  if (verifyHead) {
+    if (rest.length) throw new UsageError('receipt --verify takes no other arguments');
+    return verifyReceipt(repo, cfg, verifyHead);
+  }
+  if (!rest.length) throw new UsageError('receipt needs a claim (--outcome "<claim>" <files...> or --from <file|->) or --verify <head>');
+  const r = runCheck(rest);
+  if (r.code !== PASS) {
+    emit({ ...r.result, command: 'receipt', reason: 'the check did not pass, so no receipt was written' });
+    return r.code;
+  }
+  if (r.head.dirty) {
+    emit({ command: 'receipt', result: 'fail', head: r.head.commit, claim: r.claim, reason: 'tracked files have uncommitted changes; commit or revert them, then re-run receipt', help: ['Commit the tracked changes, then: done-done receipt --from <file|->'] });
+    return FAIL;
+  }
+  const rec: Receipt = { schema: 1, repo: cfg.app, head: r.head.commit, tree: r.head.tree, claim: r.claim ?? '', result: 'pass', at: new Date().toISOString(), files: r.cited };
+  const path = writeReceipt(cfg, rec);
+  emit({
+    command: 'receipt',
+    result: 'pass',
+    head: r.head.commit,
+    tree: r.head.tree,
+    claim: rec.claim,
+    files: rec.files.length,
+    receipt: relative(repo, path) || path,
+    help: [`Verify this receipt (CI or merge): done-done receipt --verify ${r.head.commit}`],
+  });
+  return PASS;
 }
 
 // Why evidence from `from` no longer proves `to`, or '' if it still does.
@@ -364,7 +484,7 @@ function checkHelp(cfg: Config, code: number, notProven = false): string[] {
   return [`Capture fresh proof, commit it, then re-run this check: ${capture}`];
 }
 
-function report(findings: Finding[], files: string[], ctx: ReportContext, note = ''): number {
+function report(findings: Finding[], files: string[], ctx: ReportContext, note = ''): { code: number; result: Record<string, unknown> } {
   const code = findings.some((f) => f.level === 'fail') ? FAIL : findings.length ? INCONCLUSIVE : PASS;
   const result: Record<string, unknown> = {
     command: 'check',
@@ -383,8 +503,7 @@ function report(findings: Finding[], files: string[], ctx: ReportContext, note =
   if (rows.items.length) result.findings = rows.items;
   if (rows.omitted) result.findings_omitted = rows.omitted;
   result.help = checkHelp(ctx.cfg, code, ctx.notProven);
-  emit(result);
-  return code;
+  return { code, result };
 }
 
 const INIT_EVIDENCE_ROOT = '.proof';
@@ -480,6 +599,7 @@ function main(argv: string[]): number {
     if (cmd === 'init') return cmdInit(rest);
     if (cmd === 'run') return cmdRun(rest);
     if (cmd === 'check') return cmdCheck(rest);
+    if (cmd === 'receipt') return cmdReceipt(rest);
     if (cmd === '--help' || cmd === '-h' || cmd === 'help') {
       console.log(USAGE_TEXT);
       return PASS;

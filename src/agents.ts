@@ -99,11 +99,11 @@ const ADAPTERS: Record<string, Adapter> = {
   },
   // gemini -p text is appended to stdin, so -p carries only a fixed trailer and the prompt goes on stdin;
   // -o json prints one object {response, stats, error?} (its headless.md). plan mode is read-only, so a
-  // headless call never blocks on an approval prompt; auto_edit (edits approved, shell still asks) is only for edit steps. --skip-trust is the
-  // CLI's own documented headless path (its trusted-folders.md): done-done never runs interactively, so
-  // the trust dialog could never be answered.
+  // headless call never blocks on an approval prompt; auto_edit (edits approved, shell still asks) is only for edit steps.
+  // --skip-trust is only for the tool-less probe in its scratch folder (the headless path in its trusted-folders.md): done-done
+  // never runs interactively, so the trust dialog could never be answered there. Repo calls keep Gemini's trust gate.
   gemini: {
-    argv: (c) => ['-p', 'Follow the instructions on stdin.', '-o', 'json', '-m', c.model, '--approval-mode', c.tools === 'edit' ? 'auto_edit' : 'plan', '--skip-trust'],
+    argv: (c) => ['-p', 'Follow the instructions on stdin.', '-o', 'json', '-m', c.model, '--approval-mode', c.tools === 'edit' ? 'auto_edit' : 'plan', ...(c.tools === 'none' ? ['--skip-trust'] : [])],
     answer: (out) => {
       const r = JSON.parse(out);
       if (!r.response && r.error) throw new ProviderError(JSON.stringify(r.error).slice(0, 500));

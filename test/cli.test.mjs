@@ -2354,6 +2354,7 @@ test('gemini edit steps run with auto_edit, never yolo, and read steps stay in p
   const [edit, read] = s.calls();
   assert.equal(edit.argv[edit.argv.indexOf('--approval-mode') + 1], 'auto_edit');
   assert.equal(read.argv[read.argv.indexOf('--approval-mode') + 1], 'plan');
+  assert.ok(!edit.argv.includes('--skip-trust') && !read.argv.includes('--skip-trust'), 'a repo step keeps Gemini trust gate');
 });
 
 test('braces in the prose before the JSON in the final answer do not break it', () => {

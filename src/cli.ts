@@ -579,7 +579,7 @@ function staleness(repo: string, cfg: Config, from: string, to: string): string 
 type ReportContext = { cfg: Config; repo: string; claim?: string; source?: string; notProven?: boolean; judge?: Record<string, unknown>; judgeLevel?: Finding['level'] };
 
 // Quote an argument only when a shell would split it.
-const arg = (a: string) => (/^[\w./@:+-]+$/.test(a) ? a : JSON.stringify(a));
+const arg = (a: string) => (/^[\w./@:+-]+$/.test(a) ? a : `'${a.replaceAll("'", `'\\''`)}'`);
 
 function checkHelp(code: number, files: string[], { cfg, repo, claim, source, notProven, judgeLevel }: ReportContext): string[] {
   if (notProven) return ['Capture real proof and replace "not proven:", or set checks.not_proven: allow and re-check from a trusted ref'];

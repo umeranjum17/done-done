@@ -90,14 +90,17 @@ test('a fresh run of the real journey passes the check', () => {
 });
 
 test('a pass with no origin remote points at a receipt; with one, at the CI gate', () => {
-  const { sh, dd, shots } = setup();
+  const { sh, dd, shots, repo, env } = setup();
   const { files } = shots();
-  const local = toon(dd('check', '--outcome', 'home and settings render', ...files));
-  assert.equal(local.help[0], `Record this pass for HEAD: done-done receipt --outcome "home and settings render" ${files.join(' ')}`);
-  const receipt = dd(...local.help[0].split(': ')[1].replace('done-done ', '').match(/"[^"]+"|\S+/g).map((a) => a.replace(/^"|"$/g, '')));
-  assert.equal(receipt.code, 0, `the suggested receipt command works: ${receipt.out}`);
+  const claim = 'home and settings render, costs $5';
+  const local = toon(dd('check', '--outcome', claim, ...files));
+  assert.equal(local.help[0], `Record this pass for HEAD: done-done receipt --outcome '${claim}' ${files.join(' ')}`);
+  const suggested = local.help[0].split(': ')[1].replace('done-done ', `${JSON.stringify(process.execPath)} ${JSON.stringify(CLI)} `);
+  execFileSync('sh', ['-c', suggested], { cwd: repo, env, stdio: 'pipe' });
+  const receipt = JSON.parse(readFileSync(join(repo, '.proof', '.done-done', 'receipts', `${sh('rev-parse', 'HEAD').toString().trim()}.json`), 'utf8'));
+  assert.equal(receipt.claim, claim);
   sh('remote', 'add', 'origin', 'https://example.com/notes.git');
-  assert.match(toon(dd('check', '--outcome', 'home and settings render', ...files)).help[0], /^Gate CI on this proof: done-done check --from <PR URL> --trusted-ref origin\/main$/);
+  assert.match(toon(dd('check', '--outcome', claim, ...files)).help[0], /^Gate CI on this proof: done-done check --from <PR URL> --trusted-ref origin\/main$/);
 });
 
 test('empty, truncated, blank, tiny and mislabelled images fail with the reason', () => {

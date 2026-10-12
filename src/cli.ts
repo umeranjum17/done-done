@@ -7,7 +7,7 @@ import { dirname, isAbsolute, join, matchesGlob, relative, resolve, sep } from '
 import { parseArgs } from 'node:util';
 import { encode } from '@toon-format/toon';
 import { Document, parseDocument } from 'yaml';
-import { askAgent, selectAgent, selectJudge, supported } from './agents.js';
+import { askAgent, selectAgent, supported } from './agents.js';
 import { AGENTS as ALL_AGENTS, type Config, defaultConfig, home, loadConfig, UsageError } from './config.js';
 import { backend, type Capture, judge, type Judged, onPath } from './judge.js';
 import { checkMedia } from './media.js';
@@ -1228,7 +1228,8 @@ async function cmdDoctor(argv: string[]): Promise<number> {
     agentCfg = defaultConfig(repo ?? process.cwd());
   }
   const agent = selectAgent(agentCfg);
-  const what = `${agent.agent} (model ${agent.model || 'none'}; ${agent.from === 'auto' ? 'agent: auto' : 'from config'})`;
+  const skipping = agent.skipped.map((a) => `; skipped ${a}: done-done cannot start it yet`).join('');
+  const what = `${agent.agent} (model ${agent.model || 'none'}; ${agent.from === 'auto' ? 'agent: auto' : 'from config'}${skipping})`;
   const startable = ALL_AGENTS.filter(supported).join(' and ');
   checks.push(
     !agent.path
@@ -1253,16 +1254,14 @@ async function cmdDoctor(argv: string[]): Promise<number> {
       ? { check: 'ffprobe', status: 'ok', detail: `found at ${ffprobe}`, fix: '' }
       : { check: 'ffprobe', status: 'missing', detail: 'no ffprobe on PATH; video evidence is unverified, never a pass', fix: 'Install ffprobe (ffmpeg) to verify video evidence' },
   );
-  // The judge --judge runs today is the claude judge; judge.route is recorded but not used until judge routes land.
-  const judging = selectJudge(agentCfg, agent.agent);
-  const planned = `claude judge (model ${judging.model || 'none'})`;
+  // The judge --judge runs today is the claude judge (judge.ts, at judge.model); judge.route is recorded but not used until judge routes land.
   const route = agentCfg.judge.route ? `; judge.route ${agentCfg.judge.route} is recorded, not used yet` : '';
+  const judgeChoice = (detail: string, ok: boolean, fix = ''): DoctorCheck => ({ check: 'judge_choice', status: ok ? 'ok' : 'missing', detail: `claude judge (model ${agentCfg.judge.model || 'none'})${detail}${route}`, fix });
+  const apart = agent.agent !== 'claude';
   checks.push(
-    judging.independence === 'other-agent'
-      ? { check: 'judge_choice', status: 'ok', detail: `${planned}, a different agent from the author (${agent.agent})${route}`, fix: '' }
-      : agentCfg.judge.allow_same
-        ? { check: 'judge_choice', status: 'ok', detail: `${planned} in a fresh session, the same agent as the author; judge.allow_same accepts it (session-only independence)${route}`, fix: '' }
-        : { check: 'judge_choice', status: 'missing', detail: `${planned} in a fresh session, the same agent as the author (session-only independence)${route}`, fix: 'Set agent: to an agent other than claude, or set judge.allow_same: true in the global config to accept it' },
+    apart ? judgeChoice(`, a different agent from the author (${agent.agent})`, true)
+      : agentCfg.judge.allow_same ? judgeChoice(' in a fresh session, the same agent as the author; judge.allow_same accepts it (session-only independence)', true)
+        : judgeChoice(' in a fresh session, the same agent as the author (session-only independence)', false, 'Set agent: to an agent other than claude, or set judge.allow_same: true in the global config to accept it'),
   );
   if (values.probe) {
     const record = join(home(), 'agents', `probe-${new Date().toISOString().replace(/[:.]/g, '-')}-${agent.agent}.json`);

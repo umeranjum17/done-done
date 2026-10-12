@@ -55,20 +55,15 @@ const ADAPTERS: Record<string, Adapter> = {
 // The author agent: the first of the configured list (or of AGENTS for auto) that is on PATH and that
 // done-done can start; the list moves on only when an agent is unavailable. Its model is
 // agent_config.<agent>.model, else the cheap default.
-export function selectAgent(cfg: Config): { agent: string; model: string; path: string; from: 'config' | 'auto' } {
+export function selectAgent(cfg: Config): { agent: string; model: string; path: string; from: 'config' | 'auto'; skipped: string[] } {
   const list = cfg.agent === 'auto' ? AGENTS : cfg.agent;
   const found = list.map((agent) => ({ agent, path: onPath(agent) })).filter((a) => a.path);
-  const pick = found.find((a) => supported(a.agent)) ?? found[0] ?? { agent: list[0], path: '' };
-  return { ...pick, model: modelFor(cfg, pick.agent), from: cfg.agent === 'auto' ? 'auto' : 'config' };
+  const first = found.findIndex((a) => supported(a.agent));
+  const pick = first >= 0 ? found[first] : found[0] ?? { agent: list[0], path: '' };
+  return { ...pick, model: modelFor(cfg, pick.agent), from: cfg.agent === 'auto' ? 'auto' : 'config', skipped: found.slice(0, Math.max(first, 0)).map((a) => a.agent) };
 }
 
 export const modelFor = (cfg: Config, agent: string) => cfg.agent_config[agent]?.model || CHEAP_MODELS[agent] || '';
-
-// The judge --judge runs until judge routes land: the claude judge in judge.ts at judge.model. It is apart
-// from the author unless the author is claude too, which is session-only independence.
-export function selectJudge(cfg: Config, author: string): { model: string; independence: 'other-agent' | 'session-only' } {
-  return { model: cfg.judge.model, independence: author === 'claude' ? 'session-only' : 'other-agent' };
-}
 
 export function supported(agent: string) {
   return Object.hasOwn(ADAPTERS, agent);

@@ -38,15 +38,11 @@ const ADAPTERS = {
 export function selectAgent(cfg) {
     const list = cfg.agent === 'auto' ? AGENTS : cfg.agent;
     const found = list.map((agent) => ({ agent, path: onPath(agent) })).filter((a) => a.path);
-    const pick = found.find((a) => supported(a.agent)) ?? found[0] ?? { agent: list[0], path: '' };
-    return { ...pick, model: modelFor(cfg, pick.agent), from: cfg.agent === 'auto' ? 'auto' : 'config' };
+    const first = found.findIndex((a) => supported(a.agent));
+    const pick = first >= 0 ? found[first] : found[0] ?? { agent: list[0], path: '' };
+    return { ...pick, model: modelFor(cfg, pick.agent), from: cfg.agent === 'auto' ? 'auto' : 'config', skipped: found.slice(0, Math.max(first, 0)).map((a) => a.agent) };
 }
 export const modelFor = (cfg, agent) => cfg.agent_config[agent]?.model || CHEAP_MODELS[agent] || '';
-// The judge --judge runs until judge routes land: the claude judge in judge.ts at judge.model. It is apart
-// from the author unless the author is claude too, which is session-only independence.
-export function selectJudge(cfg, author) {
-    return { model: cfg.judge.model, independence: author === 'claude' ? 'session-only' : 'other-agent' };
-}
 export function supported(agent) {
     return Object.hasOwn(ADAPTERS, agent);
 }

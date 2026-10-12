@@ -1676,10 +1676,11 @@ test('the agent comes from config (a fallback list moves past missing agents), a
     const r = doctorIn(repo, s.env, 'doctor', ...args);
     return { ...r, d: r.out.startsWith('command') ? toon(r) : undefined, by: (n) => toon(r).checks.find((c) => c.check === n) };
   };
-  // pi is listed first but not installed, so the list moves on to opencode at its configured model.
+  // pi is listed first and installed, but done-done cannot start it yet, so the list moves on to opencode at its configured model and doctor names pi.
+  writeFileSync(join(s.bin, 'pi'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
   const oc = doctor('agent: [pi, opencode]\n', '--probe');
   assert.equal(oc.code, 0, oc.out);
-  assert.match(oc.by('agent').detail, /^opencode \(model opencode-go\/test-model; from config\)/);
+  assert.match(oc.by('agent').detail, /^opencode \(model opencode-go\/test-model; from config; skipped pi: done-done cannot start it yet\)/);
   assert.match(oc.by('judge_choice').detail, /^claude judge \(model claude-haiku-5-5\), a different agent from the author \(opencode\)/);
   assert.equal(oc.by('probe').status, 'ok');
   const [call] = s.calls();
@@ -1709,7 +1710,6 @@ test('the agent comes from config (a fallback list moves past missing agents), a
   assert.equal(doctorIn(repo, bad.env, 'doctor').code, 0);
   assert.equal(bad.calls().length, 1);
   // An agent without an adapter yet, an explicit judge route, and bad values.
-  writeFileSync(join(s.bin, 'pi'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
   const pi = doctor('agent: pi\n', '--probe');
   assert.equal(pi.code, 2, pi.out);
   assert.match(pi.by('probe').detail, /cannot start pi yet/);

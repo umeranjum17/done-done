@@ -49,7 +49,14 @@ const repoState = (repo) => {
     const extra = [];
     for (const p of paths) {
         const abs = join(repo, p);
-        const st = lstatSync(abs, { throwIfNoEntry: false });
+        let st;
+        try {
+            st = lstatSync(abs, { throwIfNoEntry: false });
+        }
+        catch {
+            extra.push(`${p} unreadable`);
+            continue;
+        }
         if (st?.isSymbolicLink())
             extra.push(`${p} -> ${readlinkSync(abs)}`);
         else if (st?.isFile() && readable(abs))
@@ -72,10 +79,10 @@ function citeProblem(repo, file, line, end = line) {
     const r = relative(repo, p);
     if (!r || r.startsWith('..') || isAbsolute(r))
         return `${file} is outside the repository`;
-    if (!lstatSync(p, { throwIfNoEntry: false })?.isFile())
-        return `${file} is not a file in the repository`;
     let n;
     try {
+        if (!lstatSync(p, { throwIfNoEntry: false })?.isFile())
+            return `${file} is not a file in the repository`;
         const text = readFileSync(p, 'utf8');
         n = text.split('\n').length - (text.endsWith('\n') ? 1 : 0);
     }
@@ -84,10 +91,12 @@ function citeProblem(repo, file, line, end = line) {
     }
     return line < 1 || end < line || end > n ? `${file} has ${n} lines` : '';
 }
+// The tracked files a bare file name matches: each whose path ends with it.
+const trackedNamed = (tracked, name) => tracked.filter((p) => p === name || p.endsWith(`/${name}`));
 // Why the cited `name` (a repo-relative path or a bare file name) has no line `line` through `end`, or '' when a tracked
 // match has them. A bare name matches the tracked files whose path ends with it.
 function citeWhy(repo, tracked, name, line, end = line) {
-    const cited = name.includes('/') ? [name] : tracked.filter((p) => p === name || p.endsWith(`/${name}`));
+    const cited = name.includes('/') ? [name] : trackedNamed(tracked, name);
     if (!cited.length)
         return `no tracked file is named ${name}`;
     const whys = cited.map((p) => citeProblem(repo, p, line, end));
@@ -134,7 +143,7 @@ export async function maintainSteps(run, dir, cfg, h) {
         }
     };
     const linked = (p) => {
-        if (!lstatSync(p, { throwIfNoEntry: false })?.isSymbolicLink())
+        if (!tryRead(p, false, () => lstatSync(p, { throwIfNoEntry: false })?.isSymbolicLink()))
             return false;
         add({ kind: 'coverage', file: rel(p), what: 'a symlink on the skill path, so maintain does not read through it' });
         return true;
@@ -180,7 +189,7 @@ export async function maintainSteps(run, dir, cfg, h) {
     const featLinked = linked(featDir);
     const features = existsSync(featDir) && !featLinked ? tryRead(featDir, [], () => readdirSync(featDir)).filter((n) => n.endsWith('.md') && n !== 'README.md').sort() : [];
     if (!featLinked) {
-        if (!statSync(index, { throwIfNoEntry: false })?.isFile())
+        if (!tryRead(index, true, () => !!statSync(index, { throwIfNoEntry: false })?.isFile()))
             add({ kind: 'index', file: rel(index), what: 'the feature map has no index' });
         else if (!linked(index)) {
             const listed = new Map();
@@ -218,10 +227,13 @@ export async function maintainSteps(run, dir, cfg, h) {
         for (const m of text.matchAll(CITE)) {
             if (!m[1].includes('/') && !exts.has(extname(m[1])))
                 continue;
-            for (const p of tracked.filter((t) => (m[1].includes('/') ? t === m[1] : t === m[1] || t.endsWith(`/${m[1]}`)))) {
-                if (seen.has(p) || left.has(p) || !lstatSync(join(repo, p), { throwIfNoEntry: false })?.isFile())
+            for (const p of m[1].includes('/') ? tracked.filter((t) => t === m[1]) : trackedNamed(tracked, m[1])) {
+                if (seen.has(p) || left.has(p))
                     continue;
-                const body = tryRead(join(repo, p), '', () => readFileSync(join(repo, p), 'utf8'));
+                const abs = join(repo, p);
+                const body = tryRead(abs, undefined, () => (lstatSync(abs, { throwIfNoEntry: false })?.isFile() ? readFileSync(abs, 'utf8') : undefined));
+                if (body === undefined)
+                    continue;
                 const kept = body.length > FEATURE_CHARS ? `${body.slice(0, FEATURE_CHARS)}\n[truncated after ${FEATURE_CHARS} characters]` : body;
                 if (left.size || total + kept.length > CITED_CHARS) {
                     left.add(p);
@@ -318,7 +330,7 @@ ${text.slice(0, FEATURE_CHARS)}${toolless ? citedSource(rel(file), text) : ''}`;
         .sort();
     let recipes = [];
     const answered = readers.filter((r) => r.ok);
-    if (answered.length && calls < MAX_CALLS) {
+    if (answered.length) {
         const prompt = `You reconcile the source readers of done-done maintain for the verification skill of ${cfg.app}. Use no tools.
 - recipes: merge the readers' recipes below into as few app states as practical, each {state: what to set up once, features: the feature files it covers, steps: the drive steps in order}.
 - missing: from the recently changed files listed below, each one that is a user-facing surface no feature covers, as {file: the path exactly as listed, why}. Empty when none.

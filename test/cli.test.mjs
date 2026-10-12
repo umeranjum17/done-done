@@ -2743,6 +2743,50 @@ test('maintain caps the source a tool-less reader gets at 60,000 characters and 
   assert.match(reader.stdin, /so 1 cited files are left out/);
 });
 
+test('maintain blocks an unreadable features folder instead of failing the run', { skip: process.getuid?.() === 0 && 'root reads files whatever their mode' }, () => {
+  const { repo, env, sh } = setup();
+  const s = stubAgents(env, JSON.stringify({ drift: [], recipe: 'open it', recipes: [], missing: [] }));
+  const skill = join(repo, '.agents', 'skills', 'verify-notes');
+  mkdirSync(join(skill, 'features'), { recursive: true });
+  writeFileSync(join(skill, 'SKILL.md'), '# verify-notes\n');
+  writeFileSync(join(skill, 'features', 'README.md'), '# features\n\n- [Home](home.md)\n');
+  writeFileSync(join(skill, 'features', 'home.md'), '# Home\n');
+  sh('add', '-A');
+  sh('commit', '-qm', 'skill');
+  chmodSync(join(skill, 'features'), 0o000);
+  try {
+    const r = doctorIn(repo, s.env, 'maintain', '--foreground');
+    const m = toon(r);
+    assert.deepEqual([r.code, m.result], [3, 'blocked'], r.out);
+    assert.match(m.reason, /^coverage: /);
+  } finally {
+    chmodSync(join(skill, 'features'), 0o755);
+  }
+});
+
+test('maintain reports a citation under an unreadable folder as a citation finding, not a failed run', { skip: process.getuid?.() === 0 && 'root reads files whatever their mode' }, () => {
+  const { repo, env, sh } = setup();
+  const s = stubAgents(env, JSON.stringify({ drift: [], recipe: 'open it', recipes: [], missing: [] }));
+  mkdirSync(join(repo, 'locked'));
+  writeFileSync(join(repo, 'locked', 'x.js'), 'export const x = 1;\n');
+  const skill = join(repo, '.agents', 'skills', 'verify-notes');
+  mkdirSync(join(skill, 'features'), { recursive: true });
+  writeFileSync(join(skill, 'SKILL.md'), '# verify-notes\n\nSee locked/x.js:1.\n');
+  writeFileSync(join(skill, 'features', 'README.md'), '# features\n\n- [Home](home.md)\n');
+  writeFileSync(join(skill, 'features', 'home.md'), '# Home\n');
+  sh('add', '-A');
+  sh('commit', '-qm', 'skill');
+  chmodSync(join(repo, 'locked'), 0o000);
+  try {
+    const r = doctorIn(repo, s.env, 'maintain', '--foreground');
+    const m = toon(r);
+    assert.deepEqual([r.code, m.result], [1, 'drift'], r.out);
+    assert.ok(m.findings.some((f) => f.kind === 'citation' && /locked\/x\.js is not a file/.test(f.what)), r.out);
+  } finally {
+    chmodSync(join(repo, 'locked'), 0o755);
+  }
+});
+
 test('maintain fingerprints an untracked file whose name has a newline', () => {
   const { repo, env, sh } = setup();
   const s = stubAgents(env, JSON.stringify({ drift: [], recipe: 'open it', recipes: [], missing: [] }));

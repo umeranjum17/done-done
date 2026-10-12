@@ -68,7 +68,7 @@ The skill tells your agent to use `done-done` if it is on PATH and otherwise run
 npx -y done-done-axi --help
 ```
 
-<The skill stays a short stub and sends the agent to `--help` and the bare command for current instructions, so an installed copy cannot go stale against a newer CLI.
+The skill stays a short stub and sends the agent to `--help` and the bare command for current instructions, so an installed copy cannot go stale against a newer CLI.
 
 Then, in agents that expose skills as slash commands (Claude Code, for example), invoke it directly:
 
@@ -84,7 +84,7 @@ The skill is the recommended path, but it is not the only one.
 
 ### Manual CLI
 
-<**1. Install**
+**1. Install**
 
 ```sh
 npm install -g --prefix ~/.local done-done-axi
@@ -159,7 +159,7 @@ So far: `init`, `run`, `check`, `receipt` and the opt-in screenshot judge. Comin
 ## Develop
 
 ```sh
-<git clone https://github.com/umeranjum17/done-done-axi
+git clone https://github.com/umeranjum17/done-done-axi
 cd done-done-axi
 npm install
 npm install -g --prefix ~/.local .   # optional: links this checkout as done-done on your PATH
@@ -168,7 +168,7 @@ npm run build:skill              # regenerate skills/done-done/SKILL.md from src
 npm run build:skill -- --check   # fail if the committed skill is out of date (CI runs this)
 ```
 
-<To try an unreleased commit without cloning, run it straight from GitHub; the first run builds it (10 to 20 seconds), and npm 12 needs `--allow-git=all`:
+To try an unreleased commit without cloning, run it straight from GitHub (npm 12 needs `--allow-git=all`):
 
 ```sh
 npx -y --allow-git=all github:umeranjum17/done-done-axi --help

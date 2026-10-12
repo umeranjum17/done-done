@@ -30,7 +30,7 @@ const DOCTOR_TEXT = `doctor is read-only (--probe writes only its call record) a
   of claude, codex, opencode, pi, gemini on PATH that done-done can start, and its model), judge_choice (the claude judge, and whether it is
   apart from the author), judge (a claude binary, a Claude sign-in and the judge
   kit; the model is never called), ffprobe (video evidence only).
-  --probe also asks the agent one JSON-schema question (one cheap model call; its record goes to
+  --probe also asks the agent one JSON-schema question (one call at the agent's model, its cheap default unless you set agent_config.<agent>.model; its record goes to
   $DONE_DONE_HOME/agents/) and then requires a valid answer.
   doctor lists every check; --full changes nothing. Missing optionals never fail the run.`;
 // One table drives `--help` and every `<command> --help`: each command's usage lines and the flags it takes.
@@ -45,7 +45,7 @@ const FLAGS = {
     '--claim-id <id>': 'the claim the evidence proves; evidence already used for another claim id is reuse (default: the current branch, or the PR branch with --from <PR URL>; required on a detached HEAD)',
     '--judge': 'a model says whether each PNG/JPEG capture shows the outcome (off by default; or judge.enabled: true)',
     '--verify <head>': 'read-only: verify the receipt recorded for <head>',
-    '--probe': 'ask the configured agent one JSON-schema question and require a valid answer (one cheap model call)',
+    '--probe': 'ask the configured agent one JSON-schema question and require a valid answer (one call at the agent\'s model, its cheap default unless you set agent_config.<agent>.model)',
     '--agent <agent>': 'also add a SessionStart hook to .claude/settings.json (claude) or .codex/hooks.json (codex) that shows `done-done` to each session, or a plugin to .opencode/plugins that adds it to the first message of each opencode session (opt-in)',
 };
 // `more` is the reference text a command needs beyond its flags, shared with the top-level help.

@@ -6,7 +6,7 @@ import { homedir } from 'node:os';
 import { dirname, isAbsolute, join, matchesGlob, relative, resolve, sep } from 'node:path';
 import { parseArgs } from 'node:util';
 import { encode } from '@toon-format/toon';
-import { parse, stringify } from 'yaml';
+import { Document, parseDocument } from 'yaml';
 import { type Config, home, loadConfig, UsageError } from './config.js';
 import { type Capture, judge, type Judged, quote } from './judge.js';
 import { checkMedia } from './media.js';
@@ -783,15 +783,14 @@ function cmdInit(argv: string[]): number {
     // Record the capture recipe in the repo so any checkout can re-run the proof.
     // The command is stored verbatim; ${RUN_ID} in it becomes the run id, like a run -- command.
     const command = parts.join(' ');
-    let doc: Record<string, any> = {};
-    if (existed) doc = (parse(readFileSync(file, 'utf8')) ?? {}) as Record<string, any>;
-    else doc = { app: cfg.app };
-    if (typeof doc !== 'object' || Array.isArray(doc)) throw new UsageError(`${file}: top level must be a mapping`);
-    const journeys = (doc.journeys ?? {}) as Record<string, unknown>;
+    const doc = existed ? parseDocument(readFileSync(file, 'utf8')) : new Document({ app: cfg.app });
+    const top = (doc.toJS() ?? {}) as Record<string, any>;
+    if (typeof top !== 'object' || Array.isArray(top)) throw new UsageError(`${file}: top level must be a mapping`);
+    const journeys = top.journeys ?? {};
     if (typeof journeys !== 'object' || Array.isArray(journeys)) throw new UsageError(`${file}: journeys must be a mapping`);
-    journeys[journey] = { command };
-    doc.journeys = journeys;
-    writeFileSync(`${file}.tmp`, stringify(doc));
+    if (top.journeys == null) doc.set('journeys', doc.createNode({}));
+    doc.setIn(['journeys', journey], { command });
+    writeFileSync(`${file}.tmp`, doc.toString());
     renameSync(`${file}.tmp`, file);
     const fresh = loadConfig(repo);
     const rel = under(repo, fresh.evidence.root);

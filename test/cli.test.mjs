@@ -758,6 +758,15 @@ test('init --journey records the capture recipe and the journey re-runs from any
   assert.equal(dd('init', '--journey', 'smoke').code, 2, 'a journey with no command after -- is a usage error');
 });
 
+test('init --journey keeps the comments and formatting of an existing config', () => {
+  const { repo, dd } = bareRepo();
+  const original = '# team proof config\napp: notes\n\njourneys:\n  shots:\n    command: node make-shots.mjs ${RUN_ID}\n';
+  writeFileSync(join(repo, '.done-done.yaml'), original);
+  const r = dd('init', '--journey', 'smoke', '--', 'echo hi');
+  assert.equal(r.code, 0, r.out);
+  assert.equal(readFileSync(join(repo, '.done-done.yaml'), 'utf8'), `${original}  smoke:\n    command: echo hi\n`);
+});
+
 test('a run command outside the repo hints that its recipe is not recorded', () => {
   const { dd, shots } = setup();
   const adhoc = dd('run', '--', 'echo added: milk > $DONE_DONE_EVIDENCE_ROOT/adhoc.log');

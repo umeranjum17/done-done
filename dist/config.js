@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { basename, join } from 'node:path';
+import { basename, join, resolve } from 'node:path';
 import { parse } from 'yaml';
 export class UsageError extends Error {
     help;
@@ -110,6 +110,7 @@ export function loadConfig(repo, projectText) {
     const local = tilde(cfg.evidence.local_root);
     cfg.judge.bin = tilde(cfg.judge.bin);
     cfg.judge.config_dir = tilde(cfg.judge.config_dir);
-    cfg.evidence.root = cfg.evidence.root ? join(repo, cfg.evidence.root) : join(local, cfg.app);
+    // A relative root is under the repo (and dies with the checkout); an absolute one is used as-is.
+    cfg.evidence.root = cfg.evidence.root ? resolve(repo, cfg.evidence.root) : join(local, cfg.app);
     return cfg;
 }

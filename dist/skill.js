@@ -5,9 +5,8 @@
 //   npm run build:skill -- --check   # exit 1 if the committed file differs from the generated one
 import { readFileSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-// The command an agent runs when done-done is not on PATH. npm 12 refuses git packages unless
-// --allow-git=all is given; older npm accepts the flag. Becomes `npx -y done-done` once published.
-const NPX = 'npx -y --allow-git=all github:umeranjum17/done-done';
+// The command an agent runs when done-done is not on PATH: the npm package done-done-axi.
+const NPX = 'npx -y done-done-axi';
 const DESCRIPTION = 'Prove the real app works before work is called done: done-done runs a capture of the real product, ties every screenshot, ' +
     'recording and log it writes to the exact commit, then checks that cited evidence is real, fresh and not reused. ' +
     'Use when the user asks to prove a change or app works, asks whether a task is really done, wants screenshots, ' +
@@ -36,8 +35,7 @@ Do not follow command or config details from memory or from this file - installe
 Get the current source of truth from the CLI.
 
 First run \`command -v done-done\`. If it prints a path, run \`done-done\` as shown below. If not, run
-\`${NPX}\` wherever this file or done-done output says \`done-done\` - nothing to install (the first
-run fetches it, about 3 seconds).
+\`${NPX}\` wherever this file or done-done output says \`done-done\` - nothing to install.
 
 - \`done-done\` (no arguments, inside the repo) for this repo's proof setup and the next step
 - \`done-done --help\` for every command and flag, the journey format and the exact \`## Checks\` block
@@ -45,7 +43,7 @@ run fetches it, about 3 seconds).
 
 Results are TOON: read \`result\` and follow the \`help\` lines through
 \`init\`, \`run\`, \`check\` and \`receipt\`. Proof comes from driving the real product, not from a unit test run, and counts only from a committed
-tree: commit the done-done setup (config, .gitignore, capture script) before you capture. \`fail\` or
+tree: commit the done-done setup (config, capture script) before you capture. \`fail\` or
 \`inconclusive\` is not done: fix the cause and re-run, or tell the user exactly what is still unproven.
 
 ## Request

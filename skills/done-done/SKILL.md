@@ -33,8 +33,9 @@ done-done init
 ```
 
 `init` writes a minimal `.done-done.yaml` only when one does not exist, and adds the evidence root
-(`.proof/`) to `.gitignore`. It never overwrites an existing config: running it again changes
-nothing, and a malformed `.done-done.yaml` makes it exit 2 and leave the file untouched.
+(`.proof/`, or a config's existing `evidence.root`) to `.gitignore` when git does not already ignore
+it. It never overwrites an existing config: running it again changes nothing, and a malformed
+`.done-done.yaml` makes it exit 2 and leave the file untouched.
 
 Then describe how to capture proof in `.done-done.yaml`:
 

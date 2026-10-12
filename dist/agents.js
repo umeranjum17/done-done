@@ -8,6 +8,8 @@ import { onPath } from './judge.js';
 // An adapter with schema: true has the CLI enforce the schema itself (one call); without it done-done
 // parses the answer out of the model text, validates it, and asks again, at most ASK_ATTEMPTS calls.
 const ASK_ATTEMPTS = 3;
+class ProviderError extends Error {
+}
 // The one JSON object inside free model text (often fenced): shared by every adapter without a schema flag.
 export function extractJsonObject(text) {
     return JSON.parse(text.slice(text.indexOf('{'), text.lastIndexOf('}') + 1));
@@ -35,7 +37,7 @@ const ADAPTERS = {
             const events = out.split('\n').filter((l) => l.startsWith('{')).map((l) => JSON.parse(l));
             const error = events.find((e) => e.type === 'error');
             if (error)
-                throw new Error(JSON.stringify(error.error ?? error).slice(0, 500));
+                throw new ProviderError(JSON.stringify(error.error ?? error).slice(0, 500));
             const text = events.filter((e) => e.type === 'text').map((e) => e.part.text).join('');
             return extractJsonObject(text);
         },
@@ -66,7 +68,7 @@ const ADAPTERS = {
                     text += (e.message.content ?? []).filter((p) => p?.type === 'text').map((p) => p.text).join('');
             }
             if (!text && failure)
-                throw new Error(failure);
+                throw new ProviderError(failure);
             return extractJsonObject(text);
         },
     },
@@ -80,7 +82,7 @@ const ADAPTERS = {
         answer: (out) => {
             const r = JSON.parse(out);
             if (!r.response && r.error)
-                throw new Error(JSON.stringify(r.error).slice(0, 500));
+                throw new ProviderError(JSON.stringify(r.error).slice(0, 500));
             return extractJsonObject(String(r.response ?? ''));
         },
     },
@@ -146,9 +148,11 @@ export function askAgent(c) {
                 break;
             }
             catch (e) {
-                // A CLI that enforces the schema itself fails here for good; the rest get asked again.
+                if (e instanceof ProviderError)
+                    throw e;
+                // Only a tool-less call is asked again: an edit or read step may already have changed the repo or read it.
                 lastError = e.message;
-                if (adapter.schema || attempts >= ASK_ATTEMPTS)
+                if (adapter.schema || c.tools !== 'none' || attempts >= ASK_ATTEMPTS)
                     throw new Error(adapter.schema ? lastError : `the agent did not answer with valid JSON after ${attempts} ${attempts === 1 ? 'try' : 'tries'}: ${lastError}`);
             }
         }

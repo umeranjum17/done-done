@@ -26,6 +26,7 @@ export type AgentAnswer = { ok: boolean; answer?: Record<string, unknown>; error
 // An adapter with schema: true has the CLI enforce the schema itself (one call); without it done-done
 // parses the answer out of the model text, validates it, and asks again, at most ASK_ATTEMPTS calls.
 const ASK_ATTEMPTS = 3;
+class ProviderError extends Error {}
 type Adapter = { argv: (c: AgentCall, dir: string) => string[]; answer: (stdout: string) => unknown; file?: boolean; schema?: boolean; env?: (c: AgentCall) => Record<string, string> };
 
 // The one JSON object inside free model text (often fenced): shared by every adapter without a schema flag.
@@ -54,7 +55,7 @@ const ADAPTERS: Record<string, Adapter> = {
     answer: (out) => {
       const events = out.split('\n').filter((l) => l.startsWith('{')).map((l) => JSON.parse(l));
       const error = events.find((e) => e.type === 'error');
-      if (error) throw new Error(JSON.stringify(error.error ?? error).slice(0, 500));
+      if (error) throw new ProviderError(JSON.stringify(error.error ?? error).slice(0, 500));
       const text = events.filter((e) => e.type === 'text').map((e) => e.part.text).join('');
       return extractJsonObject(text);
     },
@@ -80,7 +81,7 @@ const ADAPTERS: Record<string, Adapter> = {
         if (e.type === 'error') failure = JSON.stringify(e.error ?? e).slice(0, 500);
         if (e.type === 'message_end' && e.message?.role === 'assistant') text += (e.message.content ?? []).filter((p: any) => p?.type === 'text').map((p: any) => p.text).join('');
       }
-      if (!text && failure) throw new Error(failure);
+      if (!text && failure) throw new ProviderError(failure);
       return extractJsonObject(text);
     },
   },
@@ -93,7 +94,7 @@ const ADAPTERS: Record<string, Adapter> = {
     argv: (c) => ['-p', 'Follow the instructions on stdin.', '-o', 'json', '-m', c.model, '--approval-mode', c.tools === 'edit' ? 'auto_edit' : 'plan', '--skip-trust'],
     answer: (out) => {
       const r = JSON.parse(out);
-      if (!r.response && r.error) throw new Error(JSON.stringify(r.error).slice(0, 500));
+      if (!r.response && r.error) throw new ProviderError(JSON.stringify(r.error).slice(0, 500));
       return extractJsonObject(String(r.response ?? ''));
     },
   },
@@ -155,9 +156,10 @@ export function askAgent(c: AgentCall): AgentAnswer {
         out = { ok: true, answer: answer as Record<string, unknown> };
         break;
       } catch (e) {
-        // A CLI that enforces the schema itself fails here for good; the rest get asked again.
+        if (e instanceof ProviderError) throw e;
+        // Only a tool-less call is asked again: an edit or read step may already have changed the repo or read it.
         lastError = (e as Error).message;
-        if (adapter.schema || attempts >= ASK_ATTEMPTS) throw new Error(adapter.schema ? lastError : `the agent did not answer with valid JSON after ${attempts} ${attempts === 1 ? 'try' : 'tries'}: ${lastError}`);
+        if (adapter.schema || c.tools !== 'none' || attempts >= ASK_ATTEMPTS) throw new Error(adapter.schema ? lastError : `the agent did not answer with valid JSON after ${attempts} ${attempts === 1 ? 'try' : 'tries'}: ${lastError}`);
       }
     }
   } catch (e) {

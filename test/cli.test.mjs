@@ -2354,3 +2354,22 @@ test('gemini edit steps run with auto_edit, never yolo, and read steps stay in p
   assert.equal(edit.argv[edit.argv.indexOf('--approval-mode') + 1], 'auto_edit');
   assert.equal(read.argv[read.argv.indexOf('--approval-mode') + 1], 'plan');
 });
+
+test('an edit step whose answer is not JSON is never asked again, while a tool-less probe is', async () => {
+  const { repo, env } = setup();
+  const s = stubPiGemini(env, '{"ok":true}', 'bad');
+  const { askAgent } = await import(pathToFileURL(join(dirname(fileURLToPath(import.meta.url)), '..', 'dist', 'agents.js')).href);
+  const call = { agent: 'pi', model: '', prompt: 'p', schema: { type: 'object', properties: { ok: { type: 'boolean' } }, required: ['ok'] }, cwd: repo, timeoutMs: 60_000, record: join(s.env.PATH, 'rec.json') };
+  const old = process.env.PATH;
+  process.env.PATH = s.env.PATH;
+  try {
+    const edit = askAgent({ ...call, tools: 'edit' });
+    assert.equal(edit.ok, false);
+    assert.equal(s.calls().length, 1, 'the edit step ran once');
+    const probe = askAgent({ ...call, tools: 'none' });
+    assert.equal(probe.ok, false);
+    assert.equal(s.calls().length, 4, 'the tool-less probe is asked again up to three tries');
+  } finally {
+    process.env.PATH = old;
+  }
+});

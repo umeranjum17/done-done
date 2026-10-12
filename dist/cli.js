@@ -1119,8 +1119,7 @@ function cmdAbort(argv) {
     const cfg = loadConfig(repo);
     const id = pickId(runsRoot(cfg.app), repo, 'abort', cfg, values.run);
     const dir = join(runsRoot(cfg.app), id);
-    const closed = (r) => {
-        const status = shownStatus(r);
+    const closed = (r, status = shownStatus(r)) => {
         if (status === 'pending' || status === 'running')
             return false;
         emit({ command: 'abort', run_id: id, status, reason: `run ${id} is already ${status}`, help: [`List past runs: done-done history`, `Start again: done-done rerun --run ${id}`] });
@@ -1137,7 +1136,7 @@ function cmdAbort(argv) {
         catch { /* exited since the check */ }
     }
     const latest = loadRun(dir);
-    if (closed(latest))
+    if (closed(latest, latest.status))
         return FAIL;
     if (ours && latest.runner?.journey_pgid)
         killGroup(latest.runner.journey_pgid);

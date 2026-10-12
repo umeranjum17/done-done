@@ -1100,8 +1100,7 @@ function cmdAbort(argv: string[]): number {
   const cfg = loadConfig(repo);
   const id = pickId(runsRoot(cfg.app), repo, 'abort', cfg, values.run);
   const dir = join(runsRoot(cfg.app), id);
-  const closed = (r: Run) => {
-    const status = shownStatus(r);
+  const closed = (r: Run, status = shownStatus(r)) => {
     if (status === 'pending' || status === 'running') return false;
     emit({ command: 'abort', run_id: id, status, reason: `run ${id} is already ${status}`, help: [`List past runs: done-done history`, `Start again: done-done rerun --run ${id}`] });
     return true;
@@ -1113,7 +1112,7 @@ function cmdAbort(argv: string[]): number {
     try { process.kill(run.runner!.pid, 'SIGKILL'); } catch { /* exited since the check */ }
   }
   const latest = loadRun(dir);
-  if (closed(latest)) return FAIL;
+  if (closed(latest, latest.status)) return FAIL;
   if (ours && latest.runner?.journey_pgid) killGroup(latest.runner.journey_pgid);
   latest.status = 'cancelled';
   latest.reason = latest.runner && !ours ? `aborted; pid ${latest.runner.pid} is not this run's runner, so nothing was killed` : 'aborted';

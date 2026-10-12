@@ -8,6 +8,8 @@ const MAX_CALLS = 30;
 const CALL_MS = 20 * 60_000;
 const CHURN_SINCE = '30.days.ago';
 const FEATURE_CHARS = 20_000;
+// ponytail: a bare name can match many tracked files, so one feature's cited source is capped at 60,000 characters; upgrade to ranking files by citation count when a repo needs more.
+const CITED_CHARS = 60_000;
 // Findings that mean the pass could not finish, so the result is blocked, not drift.
 const BLOCKING = new Set(['coverage', 'repo-changed']);
 // Notices are listed in the run but do not make the result drift.
@@ -70,6 +72,8 @@ function citeProblem(repo, file, line, end = line) {
     const r = relative(repo, p);
     if (!r || r.startsWith('..') || isAbsolute(r))
         return `${file} is outside the repository`;
+    if (!lstatSync(p, { throwIfNoEntry: false })?.isFile())
+        return `${file} is not a file in the repository`;
     let n;
     try {
         const text = readFileSync(p, 'utf8');
@@ -207,21 +211,34 @@ export async function maintainSteps(run, dir, cfg, h) {
     const tracked = git(repo, 'ls-files', '-z').split('\0').filter(Boolean);
     const exts = new Set(tracked.map((p) => extname(p)));
     // The text of each tracked file the feature file cites, for a reader with no tools. Only regular files are read, each capped.
-    const citedSource = (text) => {
+    const citedSource = (feature, text) => {
         const seen = new Map();
+        const left = new Set();
+        let total = 0;
         for (const m of text.matchAll(CITE)) {
             if (!m[1].includes('/') && !exts.has(extname(m[1])))
                 continue;
             for (const p of tracked.filter((t) => (m[1].includes('/') ? t === m[1] : t === m[1] || t.endsWith(`/${m[1]}`)))) {
-                if (seen.has(p) || !lstatSync(join(repo, p), { throwIfNoEntry: false })?.isFile())
+                if (seen.has(p) || left.has(p) || !lstatSync(join(repo, p), { throwIfNoEntry: false })?.isFile())
                     continue;
                 const body = tryRead(join(repo, p), '', () => readFileSync(join(repo, p), 'utf8'));
+                const kept = body.length > FEATURE_CHARS ? `${body.slice(0, FEATURE_CHARS)}\n[truncated after ${FEATURE_CHARS} characters]` : body;
+                if (left.size || total + kept.length > CITED_CHARS) {
+                    left.add(p);
+                    continue;
+                }
                 if (body.length > FEATURE_CHARS)
                     add({ kind: 'truncated', file: p, what: `the reader saw only the first ${FEATURE_CHARS} characters of this cited file` });
-                seen.set(p, body.length > FEATURE_CHARS ? `${body.slice(0, FEATURE_CHARS)}\n[truncated after ${FEATURE_CHARS} characters]` : body);
+                total += kept.length;
+                seen.set(p, kept);
             }
         }
-        return [...seen].map(([p, body]) => `\n\nCited source ${p}:\n${body}`).join('');
+        const parts = [...seen].map(([p, body]) => `\n\nCited source ${p}:\n${body}`);
+        if (left.size) {
+            add({ kind: 'truncated', file: feature, what: `the reader saw only ${CITED_CHARS} characters of the source it cites; ${left.size} cited files were left out` });
+            parts.push(`\n\n[truncated: the cited source for ${feature} is capped at ${CITED_CHARS} characters, so ${left.size} cited files are left out]`);
+        }
+        return parts.join('');
     };
     const agent = selectAgent(cfg);
     const toolless = TOOLLESS_READERS.has(agent.agent);
@@ -253,7 +270,7 @@ ${toolless ? 'Use the cited source, not the skill, and explain' : "Read the prod
 - recipe: one short recipe to verify the feature live, the way a user reaches it.
 
 Feature file ${rel(file)}:
-${text.slice(0, FEATURE_CHARS)}${toolless ? citedSource(text) : ''}`;
+${text.slice(0, FEATURE_CHARS)}${toolless ? citedSource(rel(file), text) : ''}`;
         const a = askAgent({ agent: agent.agent, model: agent.model, prompt, schema: READER_SCHEMA, cwd: repo, timeoutMs: CALL_MS, tools: toolless ? 'none' : 'read', record: record(`reader-${name.replace(/\.md$/, '')}`) });
         if (!a.ok)
             add({ kind: 'coverage', file: rel(file), what: `the reader did not answer: ${a.error}` });

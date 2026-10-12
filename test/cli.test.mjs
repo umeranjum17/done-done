@@ -2162,3 +2162,60 @@ test('attach streams a running run to its end', async () => {
   assert.match(err, /running/, 'events streamed to stderr');
   assert.equal(toon({ out }).result, 'pass');
 });
+
+test('history lists newest first and logs tails the step log', () => {
+  const { dd } = setup();
+  const a = toon(dd('verify', 'shots', '--outcome', 'home renders', '--foreground')).run_id;
+  const b = toon(dd('verify', 'shots', '--outcome', 'home renders', '--foreground')).run_id;
+  const h = toon(dd('history'));
+  assert.deepEqual(h.history.map((x) => x.run_id), [b, a]);
+  assert.equal(toon(dd('history', '--limit', '1')).history.length, 1);
+  assert.equal(dd('history', '--limit', '0').code, 2);
+  const l = toon(dd('logs', '--step', 'check'));
+  assert.equal(l.step, 'check');
+  assert.ok(l.log.join('\n').includes('pass'));
+  assert.equal(dd('logs', '--step', 'nope').code, 2);
+});
+
+test('abort stops a live run and status says cancelled', async () => {
+  const { dd, runningAt } = slowRepo();
+  assert.equal(dd('verify', 'slow', '--outcome', 'home renders', '--no-wait').code, 4);
+  const run = await runningAt('drive');
+  assert.equal(dd('abort', '--run', run.run_id).code, 0);
+  const s = toon(dd('status', '--run', run.run_id));
+  assert.equal(s.status, 'cancelled');
+  assert.equal(dd('status', '--run', run.run_id).code, 1);
+  assert.ok(await groupGone(run.runner.journey_pgid), 'journey group gone');
+  assert.equal(dd('abort', '--run', run.run_id).code, 1, 'second abort fails');
+});
+
+test('rerun after a killed runner reuses resolve and passes', async () => {
+  const { dd, runningAt, release, runs } = slowRepo();
+  assert.equal(dd('verify', 'slow', '--outcome', 'home renders', '--no-wait').code, 4);
+  const run = await runningAt('drive');
+  process.kill(run.runner.pid, 'SIGKILL');
+  let f;
+  for (let i = 0; i < 100 && (f = dd('status', '--run', run.run_id)).code === 4; i++) await new Promise((r) => setTimeout(r, 50));
+  assert.equal(f.code, 1, f.out);
+  writeFileSync(release, '');
+  const r = dd('rerun', '--run', run.run_id);
+  assert.equal(r.code, 0, r.out);
+  const s = toon(r);
+  assert.equal(s.result, 'pass');
+  assert.match(readFileSync(join(runs, s.run_id, 'events.jsonl'), 'utf8'), /reused/);
+});
+
+test('attach streams a running run to its end', async () => {
+  const { repo, env, release, dd } = slowRepo();
+  assert.equal(dd('verify', 'slow', '--outcome', 'home renders', '--no-wait').code, 4);
+  const child = spawn(process.execPath, [CLI, 'attach'], { cwd: repo, env, encoding: 'utf8' });
+  let out = '', err = '';
+  child.stdout.on('data', (d) => (out += d));
+  child.stderr.on('data', (d) => (err += d));
+  await new Promise((r) => setTimeout(r, 500));
+  writeFileSync(release, '');
+  const code = await new Promise((r) => child.on('close', r));
+  assert.equal(code, 0, out + err);
+  assert.match(err, /running/, 'events streamed to stderr');
+  assert.equal(toon({ out }).result, 'pass');
+});

@@ -9,7 +9,7 @@
   "bugs": { "url": "https://github.com/umeranjum17/done-done-axi/issues" },
   "keywords": ["axi", "done", "proof", "evidence", "screenshot", "verification", "cli", "agent"],
   "bin": { "done-done-axi": "dist/cli.js", "done-done": "dist/cli.js" },
-  "files": ["dist", "!dist/skill.js", "skills", "docs"],
+  "files": ["dist", "!dist/skill.js", "skills", "docs", "integrations"],
   "engines": { "node": ">=22.5" },
   "scripts": {
     "build": "tsc",

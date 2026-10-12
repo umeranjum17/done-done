@@ -463,6 +463,92 @@ function bareRepo(dirName = 'repo') {
   return { dir, repo, env, sh, dd };
 }
 
+test('the Firstmate merge gate passes fresh proof with a receipt, and refuses a missing receipt, stale proof or another PR head', () => {
+  const { dir, repo, env, sh, dd, head, shots } = setup();
+  // The default branch's rules are stricter than the branch's: a "feat" title needs a repro there.
+  const yaml = readFileSync(join(repo, '.done-done.yaml'), 'utf8');
+  writeFileSync(join(repo, '.done-done.yaml'), `${yaml}checks:\n  fix_title: "^feat"\n`);
+  sh('commit', '-qam', 'strict rules');
+  sh('update-ref', 'refs/remotes/origin/main', 'HEAD');
+  sh('symbolic-ref', 'refs/remotes/origin/HEAD', 'refs/remotes/origin/main');
+  writeFileSync(join(repo, '.done-done.yaml'), yaml);
+  sh('commit', '-qam', 'branch rules');
+  const bin = join(dir, 'bin');
+  mkdirSync(bin);
+  writeFileSync(join(bin, 'done-done'), `#!/bin/sh\nexec ${JSON.stringify(process.execPath)} ${JSON.stringify(CLI)} "$@"\n`, { mode: 0o755 });
+  // A stand-in `gh` that answers `gh pr view <url>` with the PR's head commit or its title and body.
+  writeFileSync(join(bin, 'gh'), `#!/bin/sh\ncase "$*" in *headRefOid*) cat ${JSON.stringify(join(dir, 'pr-head'))} ;; *) cat ${JSON.stringify(join(dir, 'pr.json'))} ;; esac\n`, { mode: 0o755 });
+  const fm = join(dir, 'fm');
+  const gate = (pr) => {
+    const r = spawnSync(join(dirname(CLI), '..', 'integrations', 'firstmate', 'merge-gate'), ['t1', repo, head(), pr], {
+      encoding: 'utf8', env: { ...env, FM_HOME: fm, PATH: `${bin}:${env.PATH}` },
+    });
+    return { code: r.status, out: r.stdout + r.stderr };
+  };
+  const { files } = shots();
+  const checks = `## Checks\noutcome: home and settings render\nrepro: n/a: no bug\nproof: no verify skill - \`done-done run shots\`\nevidence: ${files.join(', ')}\n`;
+  mkdirSync(join(fm, 'data', 't1'), { recursive: true });
+  writeFileSync(join(fm, 'data', 't1', 'checks.md'), checks);
+  const missing = gate('-');
+  assert.equal(missing.code, 1, missing.out);
+  assert.match(missing.out, /result: pass[\s\S]*no receipt for/, 'the check passes, then the missing receipt refuses');
+  assert.equal(dd('receipt', '--from', join(fm, 'data', 't1', 'checks.md')).code, 0);
+  const pass = gate('-');
+  assert.equal(pass.code, 0, pass.out);
+  assert.match(pass.out, /This receipt is valid for this head/);
+  const pr = (title, prHead) => {
+    writeFileSync(join(dir, 'pr.json'), JSON.stringify({ title, body: checks }));
+    writeFileSync(join(dir, 'pr-head'), `${prHead}\n`);
+    return gate('https://github.com/example/notes/pull/1');
+  };
+  const prPass = pr('docs: settings', head());
+  assert.equal(prPass.code, 0, prPass.out);
+  const strict = pr('feat: settings', head());
+  assert.equal(strict.code, 1, strict.out);
+  assert.match(strict.out, /a fix needs a repro/, 'the rules come from the default branch, not the PR');
+  const moved = pr('docs: settings', 'f'.repeat(40));
+  assert.equal(moved.code, 1, moved.out);
+  assert.match(moved.out, /is at f{40}, not /);
+  writeFileSync(join(repo, 'src', 'app.js'), 'export const app = 2;\n');
+  sh('commit', '-qam', 'change the app');
+  const stale = gate('-');
+  assert.equal(stale.code, 1, stale.out);
+  assert.match(stale.out, /evidence is for commit/);
+  assert.doesNotMatch(stale.out, /command: receipt/, 'a failed check refuses before the receipt is read');
+});
+
+for (const remote of [true, false]) test(`the Firstmate merge gate reads a local-only task's rules from the default branch${remote ? '' : ' (local main in a repo with no remote)'}, not the task branch`, () => {
+  const { dir, repo, env, sh, dd, head, shots } = setup();
+  if (remote) {
+    sh('update-ref', 'refs/remotes/origin/main', 'HEAD');
+    sh('symbolic-ref', 'refs/remotes/origin/HEAD', 'refs/remotes/origin/main');
+  } else sh('checkout', '-qb', 'fm/t2');
+  // The task branch ignores src/ so its own stale evidence would pass; the default branch does not.
+  writeFileSync(join(repo, '.done-done.yaml'), 'app: notes\nevidence:\n  root: .proof\n  ignore_paths: ["docs/**", "src/**"]\njourneys:\n  shots:\n    command: node make-shots.mjs ${RUN_ID}\n');
+  sh('commit', '-qam', 'branch loosens ignore_paths');
+  const bin = join(dir, 'bin');
+  mkdirSync(bin);
+  writeFileSync(join(bin, 'done-done'), `#!/bin/sh\nexec ${JSON.stringify(process.execPath)} ${JSON.stringify(CLI)} "$@"\n`, { mode: 0o755 });
+  const fm = join(dir, 'fm');
+  const gate = () => {
+    const r = spawnSync(join(dirname(CLI), '..', 'integrations', 'firstmate', 'merge-gate'), ['t2', repo, head(), '-'], {
+      encoding: 'utf8', env: { ...env, FM_HOME: fm, PATH: `${bin}:${env.PATH}` },
+    });
+    return { code: r.status, out: r.stdout + r.stderr };
+  };
+  const { files } = shots();
+  const checks = `## Checks\noutcome: home and settings render\nrepro: n/a: no bug\nproof: no verify skill - \`done-done run shots\`\nevidence: ${files.join(', ')}\n`;
+  mkdirSync(join(fm, 'data', 't2'), { recursive: true });
+  writeFileSync(join(fm, 'data', 't2', 'checks.md'), checks);
+  assert.equal(dd('receipt', '--from', join(fm, 'data', 't2', 'checks.md')).code, 0);
+  assert.equal(gate().code, 0, 'fresh proof passes');
+  writeFileSync(join(repo, 'src', 'app.js'), 'export const app = 2;\n');
+  sh('commit', '-qam', 'change the app');
+  const stale = gate();
+  assert.equal(stale.code, 1, stale.out);
+  assert.match(stale.out, /evidence is for commit/, 'the default branch\'s ignore_paths do not cover src/, so the change makes the proof stale');
+});
+
 test('init writes a minimal config that keeps evidence outside the repo, and is idempotent', () => {
   const { dir, repo, dd } = bareRepo();
   const r = dd('init');

@@ -1799,7 +1799,7 @@ async function cmdDoctor(argv) {
                 ? { check: 'agent', status: 'missing', detail: `${what} at ${agent.path}, but done-done cannot start ${agent.agent} yet (${startable} for now)`, fix: switchFix }
                 : { check: 'agent', status: 'ok', detail: `${what} at ${agent.path}`, fix: '' });
         if (agent.agent === 'pi')
-            checks.push({ check: 'tool_gate', status: 'warn', detail: 'pi has no permission gate: every pi tool runs without approval', fix: '' });
+            checks.push({ check: 'tool_gate', status: 'warning', detail: 'pi has no permission gate: every pi tool runs without approval', fix: '' });
     }
     // The judge --judge runs: judge.route, or with auto the first installed agent that can judge and is not the author.
     let choice;
@@ -1846,7 +1846,7 @@ async function cmdDoctor(argv) {
         const modelIgnored = cfg.judge.route === 'auto' && !!cfg.judge.model;
         checks.push({
             check: 'judge_choice',
-            status: apartOk && !modelIgnored ? 'ok' : 'warn',
+            status: apartOk && !modelIgnored ? 'ok' : 'warning',
             detail: `${choice.route} (model ${choice.model}; ${choice.from === 'auto' ? 'judge.route auto' : 'from config'}) judges the author ${choice.author.agent} (model ${choice.author.model || 'none'}): ${apart}${accepted}${modelIgnored ? `; judge.model ${cfg.judge.model} is ignored under judge.route auto` : ''}`,
             fix: !apartOk ? `Install another agent that can judge (${JUDGES.join(' or ')}) so the judge is apart from the author` : modelIgnored ? 'Set judge.route to claude-code or answerer:<agent> to use judge.model, or remove judge.model' : '',
         });

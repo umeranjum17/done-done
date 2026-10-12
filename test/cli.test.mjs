@@ -1968,7 +1968,7 @@ test('doctor finds agent, judge and ffprobe binaries from PATH; missing optional
   assert.match(codexOnly.checks[7].detail, /no installed agent can judge \(judge\.route auto looks for claude, opencode\)/);
   const two = toon(doctorIn(repo, pathEnv(env, ['codex', 'opencode']), 'doctor'));
   assert.match(two.checks[4].detail, /^opencode .* at /, 'auto skips an installed agent done-done cannot start');
-  assert.equal(two.checks[7].status, 'warn', 'the only agent that can judge is the author at its own model: a warning, and the run judges it');
+  assert.equal(two.checks[7].status, 'warning', 'the only agent that can judge is the author at its own model: a warning, and the run judges it');
   assert.match(two.checks[7].detail, /^answerer:opencode .* judges the author opencode .*: the author's agent and model in a fresh session \(session-only independence\)$/);
   assert.match(two.checks[7].fix, /Install another agent that can judge \(claude or opencode\) so the judge is apart from the author/);
   const none = doctorIn(repo, pathEnv(env, []), 'doctor');
@@ -1985,10 +1985,10 @@ test('doctor finds agent, judge and ffprobe binaries from PATH; missing optional
   assert.match(inRepo.checks[1].detail, /judge\.allow_same may only be set in the global config/, 'the project file cannot waive the judge');
   writeFileSync(join(repo, '.done-done.yaml'), repoYaml);
   const unwaived = toon(doctorIn(repo, claudeOnly, 'doctor'));
-  assert.equal(unwaived.checks[7].status, 'warn', 'auto runs a session-only judge without allow_same, so doctor warns, not missing');
+  assert.equal(unwaived.checks[7].status, 'warning', 'auto runs a session-only judge without allow_same, so doctor warns, not missing');
   writeFileSync(join(env.DONE_DONE_HOME, 'config.yaml'), 'judge:\n  allow_same: true\n');
   const same = toon(doctorIn(repo, claudeOnly, 'doctor'));
-  assert.deepEqual([same.checks[7].status, /judge\.allow_same accepts it/.test(same.checks[7].detail)], ['warn', true]);
+  assert.deepEqual([same.checks[7].status, /judge\.allow_same accepts it/.test(same.checks[7].detail)], ['warning', true]);
 });
 
 test('with no agent installed, the judge has no author to keep apart: doctor records none, the agent row still names the first agent', () => {
@@ -2012,7 +2012,7 @@ test('judge.route empty is auto, and a judge.model under auto is ignored with a 
   writeFileSync(join(env.DONE_DONE_HOME, 'config.yaml'), 'judge:\n  model: x\n');
   const d = toon(doctorIn(repo, pathEnv(env, ['claude']), 'doctor'));
   assert.equal(d.checks[1].status, 'ok');
-  assert.equal(d.checks[7].status, 'warn');
+  assert.equal(d.checks[7].status, 'warning');
   assert.match(d.checks[7].detail, /^claude-code \(model claude-haiku-5-5; judge\.route auto\)/, 'auto picks the cheap model, not judge.model');
   assert.match(d.checks[7].detail, /judge\.model x is ignored under judge\.route auto/);
 });
@@ -2141,7 +2141,7 @@ test('the agent comes from config (a fallback list moves past missing agents), a
   assert.match(same.by('judge_choice').detail, /judge\.route answerer:opencode at model opencode-go\/test-model is the author's own agent and model/);
   assert.match(same.by('judge_choice').fix, /judge\.allow_same: true/);
   routeCfg('  model: opencode-go/test-model\n  allow_same: true\n');
-  assert.equal(doctor('agent: opencode\n').by('judge_choice').status, 'warn', 'allow_same runs a session-only judge, and doctor says so');
+  assert.equal(doctor('agent: opencode\n').by('judge_choice').status, 'warning', 'allow_same runs a session-only judge, and doctor says so');
   routeCfg('');
   writeFileSync(join(env.DONE_DONE_HOME, 'config.yaml'), 'judge:\n  route: answerer:claude\n');
   assert.match(doctor('').out, /judge\.route must be auto, claude-code \(for claude\), or answerer:<agent> for one of opencode/, 'claude judges through claude-code');
@@ -2504,7 +2504,7 @@ test('agent auto picks pi over gemini, and doctor warns that pi has no permissio
   const d = toon(doctorIn(repo, s.env, 'doctor'));
   assert.match(d.checks.find((x) => x.check === 'agent').detail, /^pi \(its own default model; set agent_config\.pi\.model to choose one; agent: auto\) at /);
   const gate = d.checks.find((x) => x.check === 'tool_gate');
-  assert.equal(gate.status, 'warn');
+  assert.equal(gate.status, 'warning');
   assert.equal(gate.detail, 'pi has no permission gate: every pi tool runs without approval');
 });
 

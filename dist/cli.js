@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { execFileSync, spawnSync } from 'node:child_process';
 import { createHash, randomBytes } from 'node:crypto';
-import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, statSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, isAbsolute, join, matchesGlob, relative, resolve, sep } from 'node:path';
 import { parseArgs } from 'node:util';
@@ -709,7 +709,7 @@ function ensureIgnored(repo, rel) {
 // an invented command. An existing skill is never overwritten, so re-run is idempotent.
 function headText(p, max = 12000) {
     try {
-        if (!statSync(p).isFile())
+        if (!lstatSync(p).isFile())
             return '';
         return readFileSync(p, 'utf8').slice(0, max);
     }
@@ -718,6 +718,29 @@ function headText(p, max = 12000) {
     }
 }
 const slug = (t) => t.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40) || 'feature';
+const SKIP_DIRS = new Set(['node_modules', '.git', 'dist', 'build', 'out', 'vendor', 'coverage', 'target']);
+const SOURCE_FILE = /\.(m?[jt]sx?|py|go|rb|rs|php)$/;
+// Source files under `dir`, skipping dependency and build output. The cap applies while walking, so a large
+// vendored tree never fills the sample before the app's own files are reached.
+function sourceFiles(dir, max, out = []) {
+    try {
+        for (const e of readdirSync(dir, { withFileTypes: true })) {
+            if (out.length >= max)
+                break;
+            const p = join(dir, e.name);
+            if (e.isDirectory()) {
+                if (!SKIP_DIRS.has(e.name))
+                    sourceFiles(p, max, out);
+            }
+            else if (e.isFile() && SOURCE_FILE.test(e.name))
+                out.push(p);
+        }
+    }
+    catch {
+        // An unreadable directory contributes nothing; the scan runs on the rest.
+    }
+    return out;
+}
 // Surface, run, drive, observe and features read from package.json, Makefile, routes,
 // CLI commands and docs: the repo's own files, never invention.
 function detectApp(repo) {
@@ -737,16 +760,8 @@ function detectApp(repo) {
     const readme = headText(join(repo, 'README.md'));
     const make = headText(join(repo, 'Makefile'), 4000);
     let text = `${scripts.dev ?? ''}\n${scripts.start ?? ''}\n${readme}\n${make}`;
-    try {
-        const files = readdirSync(repo, { recursive: true, withFileTypes: true })
-            .filter((e) => e.isFile() && /\.(m?[jt]sx?|py|go|rb|rs|php)$/.test(e.name))
-            .slice(0, 40);
-        for (const f of files)
-            text += `\n${headText(join(f.parentPath, f.name), 6000)}`;
-    }
-    catch {
-        // A repo that cannot be listed still scaffolds from package.json and docs.
-    }
+    for (const f of sourceFiles(repo, 40))
+        text += `\n${headText(f, 6000)}`;
     const routes = [...text.matchAll(/\.(get|post|put|patch|delete|del|use)\(\s*['"`](\/[^'"`\s]*)/g)]
         .map((m) => `${m[1].toUpperCase()} ${m[2]}`)
         .filter((r, i, a) => a.indexOf(r) === i)
@@ -794,7 +809,7 @@ function detectApp(repo) {
         ...routes.map((r) => ({ slug: slug(r), title: r, reach: `the ${r} route` })),
         ...commands.map((c) => ({ slug: slug(c), title: `\`${c}\` command`, reach: `the CLI run with \`${c}\`` })),
         ...headings.map((h) => ({ slug: slug(h), title: h, reach: `the ${h} flow described in README.md` })),
-    ].slice(0, 5);
+    ].filter((f, i, a) => a.findIndex((g) => g.slug === f.slug) === i).slice(0, 5);
     return { surface, launch, ready, harness, observe, isolate, features };
 }
 function verifySkillMd(app, d) {
@@ -843,8 +858,20 @@ function verifyFeaturesMd(app, d) {
         : 'TODO(live drive): no features found in source; map the first one here.';
     return `# ${app} features\n\nThe repo's maintained verification map; a proof that drives one entry point is incomplete when this lists others.\n\n${index}\n`;
 }
+// The skill is config from the repo's own .done-done.yaml, so a cloned repo must not steer writes out of it:
+// no '..' segment, and the deepest existing ancestor (after symlinks) stays inside the repo.
+function skillInsideRepo(repo, skill) {
+    if (skill.split(/[\\/]/).includes('..'))
+        return false;
+    let p = join(repo, skill);
+    while (!existsSync(p))
+        p = dirname(p);
+    return !outside(relative(realpathSync(repo), realpathSync(p)));
+}
 // Writes only missing files; an existing skill is left byte-identical.
 function scaffoldVerify(repo, cfg) {
+    if (!skillInsideRepo(repo, cfg.skill))
+        throw new UsageError(`verify skill ${cfg.skill} must be a path inside the repo`, 'Set skill to a repo-relative path in .done-done.yaml');
     const dir = join(repo, cfg.skill);
     if (existsSync(join(dir, 'SKILL.md')))
         return { status: 'unchanged', features: [] };

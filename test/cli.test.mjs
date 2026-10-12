@@ -1015,6 +1015,41 @@ test('init never overwrites an existing verify skill', () => {
   assert.equal(readFileSync(skill, 'utf8'), '# hand-written\n', 'the existing file is kept');
 });
 
+test('init maps the app, not its dependencies, and lists each feature slug once', () => {
+  const { repo, dd } = shapeRepo('cli', 'notes');
+  mkdirSync(join(repo, 'node_modules', 'lib'), { recursive: true });
+  writeFileSync(join(repo, 'node_modules', 'lib', 'index.js'), "router.get('/vendored/route');\nprogram.command('vendored');\n");
+  writeFileSync(join(repo, 'README.md'), '# notes\n\n## Add\n');
+  const r = dd('init');
+  assert.equal(r.code, 0, r.out);
+  assert.deepEqual(toon(r).features, ['add', 'list'], 'node_modules is skipped and the README heading does not duplicate the add command');
+});
+
+test('init does not read a README that is a symlink out of the repo', () => {
+  const { dir, repo, dd } = shapeRepo('cli', 'notes');
+  writeFileSync(join(dir, 'secret.md'), '## Secret flow\n');
+  rmSync(join(repo, 'README.md'));
+  symlinkSync(join(dir, 'secret.md'), join(repo, 'README.md'));
+  const r = dd('init');
+  assert.equal(r.code, 0, r.out);
+  assert.deepEqual(toon(r).features, ['add', 'list'], 'the symlink target is not scanned');
+});
+
+test('init refuses a verify skill path that leaves the repo', () => {
+  const { dir, repo, dd } = shapeRepo('cli', 'notes');
+  writeFileSync(join(repo, '.done-done.yaml'), 'skill: ../escaped/verify\n');
+  const r = dd('init');
+  assert.notEqual(r.code, 0, r.out);
+  assert.match(r.out, /must be a path inside the repo/);
+  assert.equal(existsSync(join(dir, 'escaped')), false, 'nothing is written outside the repo');
+  rmSync(join(repo, '.done-done.yaml'));
+  mkdirSync(join(dir, 'elsewhere'));
+  symlinkSync(join(dir, 'elsewhere'), join(repo, '.agents'));
+  writeFileSync(join(repo, '.done-done.yaml'), 'skill: .agents/skills/verify-notes\n');
+  assert.notEqual(dd('init').code, 0, 'a symlinked ancestor cannot redirect the skill');
+  assert.equal(existsSync(join(dir, 'elsewhere', 'skills')), false, 'nothing is written through the symlink');
+});
+
 test('init outside a git repository reports a clear usage error', () => {
   const dir = mkdtempSync(join(tmpdir(), 'done-done-nogit-'));
   after(() => rmSync(dir, { recursive: true, force: true }));

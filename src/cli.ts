@@ -1111,7 +1111,11 @@ async function cmdRerun(argv: string[]): Promise<number> {
   return showRun(dir, cfg, 'rerun', !alive(child.pid!));
 }
 
-function cmdAbort(argv: string[]): number {
+async function waitGone(pid: number): Promise<void> {
+  for (let i = 0; i < 25 && alive(pid); i++) await new Promise((r) => setTimeout(r, 200));
+}
+
+async function cmdAbort(argv: string[]): Promise<number> {
   const { values } = parseArgs({ args: argv, options: { run: { type: 'string' } } });
   const repo = repoRoot();
   const cfg = loadConfig(repo);
@@ -1131,6 +1135,7 @@ function cmdAbort(argv: string[]): number {
   }
   if (latest.runner) {
     try { process.kill(latest.runner.pid, 'SIGKILL'); } catch { /* exited since the check */ }
+    await waitGone(latest.runner.pid);
   }
   const after = loadRun(dir);
   if (closed(after, after.status)) return FAIL;

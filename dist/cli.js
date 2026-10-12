@@ -1130,7 +1130,11 @@ async function cmdRerun(argv) {
         await waitRun(dir, child.pid);
     return showRun(dir, cfg, 'rerun', !alive(child.pid));
 }
-function cmdAbort(argv) {
+async function waitGone(pid) {
+    for (let i = 0; i < 25 && alive(pid); i++)
+        await new Promise((r) => setTimeout(r, 200));
+}
+async function cmdAbort(argv) {
     const { values } = parseArgs({ args: argv, options: { run: { type: 'string' } } });
     const repo = repoRoot();
     const cfg = loadConfig(repo);
@@ -1156,6 +1160,7 @@ function cmdAbort(argv) {
             process.kill(latest.runner.pid, 'SIGKILL');
         }
         catch { /* exited since the check */ }
+        await waitGone(latest.runner.pid);
     }
     const after = loadRun(dir);
     if (closed(after, after.status))

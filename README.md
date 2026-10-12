@@ -119,9 +119,9 @@ journeys:
 
 The command runs from the repo root with `DONE_DONE_EVIDENCE_ROOT` (a new folder for this run in the evidence root) and `DONE_DONE_RUN_ID` set, and `${RUN_ID}` in it is replaced. A run that writes nothing into its folder fails.
 
-Optional: `done-done init --agent claude` adds a Claude Code SessionStart hook to the repo's `.claude/settings.json` that shows each session the bare `done-done` state, `done-done init --agent codex` adds the same SessionStart hook to the repo's `.codex/hooks.json` for Codex, and `done-done init --agent opencode` adds a plugin to the repo's `.opencode/plugins/` that adds the state to the first message of each opencode session. See the [reference](docs/reference.md#set-up-a-repo).
+Optional: `done-done init --agent <claude|codex|opencode|gemini|pi>` adds a session hook or plugin to the repo that shows each session the bare `done-done` state. Each agent's file and behavior are in the [reference](docs/reference.md#set-up-a-repo).
 
-Record the recipe in the repo so anyone can re-run the proof, then commit it (and `.claude/settings.json`, `.codex/hooks.json`, or `.opencode/plugins/done-done.js` if you added a hook):
+Record the recipe in the repo so anyone can re-run the proof, then commit it (and `.claude/settings.json`, `.codex/hooks.json`, `.gemini/settings.json`, `.opencode/plugins/done-done.js` or `.pi/extensions/done-done.js` if you added a hook):
 
 ```sh
 done-done init --journey smoke -- 'npm test > $DONE_DONE_EVIDENCE_ROOT/${RUN_ID}.log'
@@ -191,7 +191,7 @@ Another fleet works the same way: add the include text to whatever your workers 
 
 ## What's next
 
-So far: `init`, `doctor`, `run`, `check`, `receipt`, the opt-in screenshot judge and the opt-in Claude Code, Codex and opencode session hooks. Coming next: help writing the proof steps for your app.
+So far: `init`, `doctor`, `run`, `check`, `receipt`, the opt-in screenshot judge and the opt-in session hooks for Claude Code, Codex, opencode, Gemini CLI and pi. Coming next: help writing the proof steps for your app.
 
 ## Develop
 

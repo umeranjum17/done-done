@@ -36,8 +36,6 @@ const KEYS = {
     'judge.allow_same': { scope: 'global', type: 'boolean' },
 };
 const SECTIONS = new Set(['evidence', 'checks', 'judge']);
-// The judge runs through the user's own `claude` binary until judge routes land, so its default is Claude's cheap model.
-export const DEFAULT_JUDGE_MODEL = CHEAP_MODELS.claude;
 export const home = () => process.env.DONE_DONE_HOME || join(homedir(), '.done-done');
 function flatten(doc, file) {
     const out = new Map();
@@ -117,7 +115,7 @@ export function defaultConfig(repo) {
         journeys: {},
         evidence: { local_root: join(home(), 'evidence'), root: '', allow_dirty: false, ignore_paths: [] },
         checks: { not_proven: 'inconclusive', fix_title: '^(fix|bugfix|hotfix)\\b' },
-        judge: { enabled: false, model: DEFAULT_JUDGE_MODEL, bin: '', config_dir: join(home(), 'claude'), route: '', allow_same: false },
+        judge: { enabled: false, model: CHEAP_MODELS.claude, bin: '', config_dir: join(home(), 'claude'), route: '', allow_same: false },
         trusted: false,
     };
 }

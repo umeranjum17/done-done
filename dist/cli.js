@@ -27,7 +27,7 @@ const AGENTS = ['claude', 'codex', 'opencode'];
 const DOCTOR_TEXT = `doctor is read-only (--probe writes only its call record) and exits 0 when every required item is ok, 2 otherwise.
   required: git (inside a repository), config (a valid .done-done.yaml), evidence_root (writable).
   optional: verify_skill (.agents/skills/verify-<app>/), agent (the configured agent, or with agent: auto the first
-  of claude, codex, opencode, pi, gemini on PATH, and its model), judge_choice (the claude judge, and whether it is
+  of claude, codex, opencode, pi, gemini on PATH that done-done can start, and its model), judge_choice (the claude judge, and whether it is
   apart from the author), judge (a claude binary, a Claude sign-in and the judge
   kit; the model is never called), ffprobe (video evidence only).
   --probe also asks the agent one JSON-schema question (one cheap model call; its record goes to
@@ -1269,9 +1269,10 @@ async function cmdDoctor(argv) {
     const route = agentCfg.judge.route ? `; judge.route ${agentCfg.judge.route} is recorded, not used yet` : '';
     const judgeChoice = (detail, ok, fix = '') => ({ check: 'judge_choice', status: ok ? 'ok' : 'missing', detail: `claude judge (model ${agentCfg.judge.model || 'none'})${detail}${route}`, fix });
     const apart = agent.agent !== 'claude';
-    checks.push(apart ? judgeChoice(`, a different agent from the author (${agent.agent})`, true)
-        : agentCfg.judge.allow_same ? judgeChoice(' in a fresh session, the same agent as the author; judge.allow_same accepts it (session-only independence)', true)
-            : judgeChoice(' in a fresh session, the same agent as the author (session-only independence)', false, 'Set agent: to an agent other than claude, or set judge.allow_same: true in the global config to accept it'));
+    checks.push(!agent.path ? judgeChoice(', and no author agent is installed, so there is no independence to check', false, 'Install an agent (see the agent check) so the judge can be checked against it')
+        : apart ? judgeChoice(`, a different agent from the author (${agent.agent})`, true)
+            : agentCfg.judge.allow_same ? judgeChoice(' in a fresh session, the same agent as the author; judge.allow_same accepts it (session-only independence)', true)
+                : judgeChoice(' in a fresh session, the same agent as the author (session-only independence)', false, 'Set agent: to an agent other than claude, or set judge.allow_same: true in the global config to accept it'));
     if (values.probe) {
         const record = join(home(), 'agents', `probe-${new Date().toISOString().replace(/[:.]/g, '-')}-${agent.agent}.json`);
         const probe = !agent.path ? { ok: false, error: `${agent.agent} is not on PATH` }

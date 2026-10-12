@@ -8,7 +8,8 @@ const ADAPTERS = {
     // claude -p: --json-schema puts the validated object in structured_output; --tools '' turns every tool off.
     claude: {
         argv: (c) => ['-p', '--output-format', 'json', '--json-schema', JSON.stringify(c.schema), '--model', c.model, '--no-session-persistence',
-            ...(c.tools === 'edit' ? ['--permission-mode', 'acceptEdits'] : ['--tools', c.tools === 'read' ? 'Read,Grep,Glob' : ''])],
+            ...(c.tools === 'edit' ? ['--permission-mode', 'acceptEdits'] : ['--tools', c.tools === 'read' ? 'Read,Grep,Glob' : '']),
+            ...(c.tools === 'none' ? ['--setting-sources', ''] : [])],
         answer: (out) => {
             const r = JSON.parse(out);
             if (r.is_error)
@@ -33,14 +34,15 @@ const ADAPTERS = {
     },
 };
 // The author agent: the first of the configured list (or of AGENTS for auto) that is on PATH and that
-// done-done can start; the list moves on only when an agent is unavailable. Its model is
-// agent_config.<agent>.model, else the cheap default.
+// done-done can start; the list moves on when an agent is not installed or done-done cannot start it yet.
+// Its model is agent_config.<agent>.model, else the cheap default. skipped names the installed agents passed over.
 export function selectAgent(cfg) {
     const list = cfg.agent === 'auto' ? AGENTS : cfg.agent;
     const found = list.map((agent) => ({ agent, path: onPath(agent) })).filter((a) => a.path);
     const first = found.findIndex((a) => supported(a.agent));
     const pick = first >= 0 ? found[first] : found[0] ?? { agent: list[0], path: '' };
-    return { ...pick, model: modelFor(cfg, pick.agent), from: cfg.agent === 'auto' ? 'auto' : 'config', skipped: found.slice(0, Math.max(first, 0)).map((a) => a.agent) };
+    const passed = first >= 0 ? found.slice(0, first) : found.slice(1);
+    return { ...pick, model: modelFor(cfg, pick.agent), from: cfg.agent === 'auto' ? 'auto' : 'config', skipped: passed.map((a) => a.agent) };
 }
 export const modelFor = (cfg, agent) => cfg.agent_config[agent]?.model || CHEAP_MODELS[agent] || '';
 export function supported(agent) {
@@ -49,6 +51,7 @@ export function supported(agent) {
 export function askAgent(c) {
     const adapter = ADAPTERS[c.agent];
     const dir = mkdtempSync(join(tmpdir(), 'done-done-agent-'));
+    const cwd = c.tools === 'none' ? dir : c.cwd;
     const started = Date.now();
     let res;
     let out;
@@ -59,7 +62,7 @@ export function askAgent(c) {
             throw new Error(`no model for ${c.agent}; set agent_config.${c.agent}.model`);
         if (adapter.file)
             writeFileSync(join(dir, 'prompt.md'), `${c.prompt}\n\nAnswer with only one JSON object that matches this JSON schema, and no other text:\n${JSON.stringify(c.schema)}\n`, { mode: 0o600 });
-        res = spawnSync(onPath(c.agent) || c.agent, adapter.argv(c, dir), { cwd: c.cwd, input: adapter.file ? '' : c.prompt, env: { ...process.env, ...adapter.env?.(c) }, encoding: 'utf8', timeout: c.timeoutMs, maxBuffer: 64 << 20 });
+        res = spawnSync(onPath(c.agent) || c.agent, adapter.argv(c, dir), { cwd, input: adapter.file ? '' : c.prompt, env: { ...process.env, ...adapter.env?.(c) }, encoding: 'utf8', timeout: c.timeoutMs, maxBuffer: 64 << 20 });
         if (res.error)
             throw res.error;
         if (res.status !== 0) {
@@ -91,7 +94,7 @@ export function askAgent(c) {
     // The record holds what ran and what came back, never the prompt text.
     const { prompt, ...call } = c;
     mkdirSync(dirname(c.record), { recursive: true });
-    const record = { ...call, prompt_bytes: Buffer.byteLength(prompt), argv: adapter?.argv(c, '<tmp>') ?? [], ms: Date.now() - started, exit: res?.status ?? null, ...out, stderr: String(res?.stderr ?? '').slice(-2000) };
+    const record = { ...call, cwd, prompt_bytes: Buffer.byteLength(prompt), argv: adapter?.argv(c, '<tmp>') ?? [], ms: Date.now() - started, exit: res?.status ?? null, ...out, stderr: String(res?.stderr ?? '').slice(-2000) };
     writeFileSync(c.record, `${JSON.stringify(record, null, 2)}\n`, { mode: 0o600 });
     return out;
 }

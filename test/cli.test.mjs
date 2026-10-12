@@ -10,7 +10,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { crc32, deflateSync } from 'node:zlib';
 import { parse } from 'yaml';
 import { decode } from '@toon-format/toon';
-import { CHEAP_MODELS, DEFAULT_JUDGE_MODEL, loadConfig } from '../dist/config.js';
+import { CHEAP_MODELS, loadConfig } from '../dist/config.js';
 
 const CLI = join(dirname(fileURLToPath(import.meta.url)), '..', 'dist', 'cli.js');
 
@@ -1494,7 +1494,7 @@ test('without the optional kit, --judge is a config error naming the npx command
   assert.equal(j.calls()[0].model, 'claude-haiku-5-5');
 });
 
-test('default models come only from the cheap-model table: no model id is written anywhere else in the code', () => {
+test('the default judge model is the cheap Claude model and agent defaults to auto', () => {
   const dir = mkdtempSync(join(tmpdir(), 'done-done-cheap-default-'));
   after(() => rmSync(dir, { recursive: true, force: true }));
   const repo = join(dir, 'repo');
@@ -1511,7 +1511,6 @@ test('default models come only from the cheap-model table: no model id is writte
     else process.env.DONE_DONE_HOME = prev;
   }
   assert.equal(cfg.judge.model, CHEAP_MODELS.claude, 'the judge default is Claude\'s cheap model');
-  assert.equal(DEFAULT_JUDGE_MODEL, CHEAP_MODELS.claude);
   assert.equal(cfg.agent, 'auto');
 });
 
@@ -1629,6 +1628,7 @@ test('doctor finds agent, judge and ffprobe binaries from PATH; missing optional
   assert.match(n.checks[4].fix, /Install claude, or set agent: to an installed one of claude, codex, opencode, pi, gemini/);
   assert.match(n.checks[5].fix, /judge\.bin/);
   assert.match(n.checks[6].fix, /ffprobe/);
+  assert.match(n.checks[7].detail, /^claude judge \(model claude-haiku-5-5\), and no author agent is installed/, 'with no author there is no same-agent claim');
   const repoYaml = readFileSync(join(repo, '.done-done.yaml'), 'utf8');
   const claudeOnly = pathEnv(env, ['claude']);
   writeFileSync(join(repo, '.done-done.yaml'), `${repoYaml}judge:\n  allow_same: true\n`);
@@ -1686,7 +1686,7 @@ test('the agent comes from config (a fallback list moves past missing agents), a
   const [call] = s.calls();
   assert.match(call.file, /connectivity probe[\s\S]*JSON schema[\s\S]*"required":\["ok"\]/, 'the prompt and schema go in the attached file');
   assert.ok(!call.argv.some((a) => a.includes('connectivity probe')) && call.stdin === '', 'never in argv');
-  assert.equal(call.cwd, repo);
+  assert.notEqual(call.cwd, repo, 'a tool-less probe runs in a scratch dir, never the repo');
   assert.deepEqual(call.argv.slice(0, 6), ['run', 'Follow the attached instructions.', '--format', 'json', '-m', 'opencode-go/test-model']);
   assert.deepEqual(JSON.parse(call.permission), { '*': 'deny' }, 'every tool is denied');
   const record = oc.by('probe').detail.match(/record (\S+)$/)[1];
@@ -1699,7 +1699,8 @@ test('the agent comes from config (a fallback list moves past missing agents), a
   assert.equal(claude.code, 0, claude.out);
   const c = s.calls()[1];
   assert.equal(c.agent, 'claude');
-  assert.deepEqual(['--model', '--tools'].map((f) => c.argv[c.argv.indexOf(f) + 1]), ['claude-haiku-5-5', '']);
+  assert.notEqual(c.cwd, repo, 'a tool-less probe runs in a scratch dir, never the repo');
+  assert.deepEqual(['--model', '--tools', '--setting-sources'].map((f) => c.argv[c.argv.indexOf(f) + 1]), ['claude-haiku-5-5', '', ''], 'no project or user settings load');
   assert.ok(c.argv.includes('-p') && c.argv.includes('--no-session-persistence') && JSON.parse(c.argv[c.argv.indexOf('--json-schema') + 1]).required[0] === 'ok');
   assert.match(c.stdin, /connectivity probe/);
   // A failed answer fails the probe, which --probe makes required; without --probe nothing is asked.
@@ -1713,6 +1714,10 @@ test('the agent comes from config (a fallback list moves past missing agents), a
   const pi = doctor('agent: pi\n', '--probe');
   assert.equal(pi.code, 2, pi.out);
   assert.match(pi.by('probe').detail, /cannot start pi yet/);
+  writeFileSync(join(s.bin, 'gemini'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+  const pg = doctor('agent: [pi, gemini]\n');
+  assert.equal(pg.by('agent').status, 'missing');
+  assert.match(pg.by('agent').detail, /^pi \(model none; from config; skipped gemini: done-done cannot start it yet\) at .*, but done-done cannot start pi yet/, 'gemini is installed too, so it is named');
   writeFileSync(join(env.DONE_DONE_HOME, 'config.yaml'), 'judge:\n  route: opencode:plan_key:opencode-go\n  model: muse-spark-1.3-contributor\n');
   assert.match(doctor('').by('judge_choice').detail, /^claude judge \(model muse-spark-1.3-contributor\) in a fresh session.*judge\.route opencode:plan_key:opencode-go is recorded, not used yet/);
   assert.match(doctor('agent: cursor\n').out, /agent must be auto, or one or a list of claude, codex, opencode, pi, gemini/);

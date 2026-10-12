@@ -144,7 +144,7 @@ done-done receipt --verify <head>         # read-only: check a recorded receipt
 
 ### Output
 
-`init`, `run`, `check` and `receipt` print one machine-readable result on stdout. By default it is [TOON](https://github.com/toon-format/spec) in the AXI convention (the shape `no-mistakes axi status` uses): scalar `key: value` lines, tabular arrays, and a `help` list that names the exact next command. `--json` prints the same result as JSON. `--full` lists every evidence file or finding; without it, lists longer than five rows are truncated and the count of dropped rows is reported (`evidence_omitted` or `findings_omitted`).
+`init`, `run`, `check` and `receipt` print one machine-readable result on stdout. By default it is [TOON](https://github.com/toon-format/spec) in the AXI convention (the shape `no-mistakes axi status` uses): scalar `key: value` lines, tabular arrays, and a `help` list that names the exact next command. `--json` prints the same result as JSON. `--full` lists every evidence file or finding; without it, lists longer than five rows are truncated and the count of dropped rows is reported (`evidence_omitted` or `findings_omitted`). `--version` prints the version.
 
 Running `done-done` with no subcommand prints the repo's config state (`config: present | missing | none`), its journeys and run count, and the next step. Usage and config errors also print one result: the `command` that failed, an `error` field and a `help` line with the recovery command (for example `done-done init` when no config exists, or the command's valid flags after an unknown one).
 

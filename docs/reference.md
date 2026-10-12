@@ -4,7 +4,7 @@ Everything `init`, `run`, `check`, `receipt` and the config files do. For the ov
 
 ## Install
 
-For the install steps, see the [README quick start](../README.md#quick-start). done-done needs Node 22.5 or later and git (the opt-in judge needs Node 22.18). `ffprobe` is optional. Without it, videos are reported as "not verified" and the check is inconclusive, never a pass.
+For the install steps, see the [README](../README.md#use-it-from-your-agent). done-done needs Node 22.5 or later and git (the opt-in judge needs Node 22.18). `ffprobe` is optional. Without it, videos are reported as "not verified" and the check is inconclusive, never a pass.
 
 ## Use
 
@@ -108,7 +108,7 @@ done-done receipt --judge --from pr-body.md
 - **Your own Claude plan, through BYOKit.** The judge uses [`@byokit/decide`](https://www.npmjs.com/package/@byokit/decide)'s Claude Code backend, which runs your own `claude` binary against a sign-in folder kept only for done-done. done-done never reads, copies or stores a credential. The kit is an optional peer dependency, so a plain install stays small; the judge needs it and Node 22.18 or later. Without it, `--judge` exits 2 with the command to run the same check with the kit:
 
   ```sh
-  npx -y -p done-done -p @byokit/decide@0.6.5 done-done check --judge --from pr-body.md
+  npx -y -p done-done-axi -p @byokit/decide@0.6.5 done-done-axi check --judge --from pr-body.md
   ```
 
   In a project that installs done-done, `npm install -D @byokit/decide@0.6.5` adds it for good. Sign in once:

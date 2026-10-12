@@ -2610,6 +2610,76 @@ test('maintain refuses a skill reached through a symlinked ancestor', () => {
   }
 });
 
+test('maintain blocks a symlinked features folder and never checks the index behind it', () => {
+  const { repo, env, sh } = setup();
+  const s = stubAgents(env, JSON.stringify({ drift: [], recipe: 'open it', recipes: [], missing: [] }));
+  const outside = mkdtempSync(join(tmpdir(), 'dd-features-'));
+  try {
+    writeFileSync(join(outside, 'README.md'), '# features\n\n- [Home](home.md)\n- [Home](home.md)\n');
+    writeFileSync(join(outside, 'home.md'), '# Home\n');
+    const skill = join(repo, '.agents', 'skills', 'verify-notes');
+    mkdirSync(skill, { recursive: true });
+    writeFileSync(join(skill, 'SKILL.md'), '# verify-notes\n');
+    symlinkSync(outside, join(skill, 'features'));
+    sh('add', '-A');
+    sh('commit', '-qm', 'skill');
+    const r = doctorIn(repo, s.env, 'maintain', '--foreground');
+    const m = toon(r);
+    assert.deepEqual([r.code, m.result], [3, 'blocked'], r.out);
+    assert.match(m.reason, /^coverage: .*features/);
+    assert.equal(m.findings.some((f) => f.kind === 'duplicate'), false, 'the index behind the link is not read');
+    assert.deepEqual(s.calls(), []);
+  } finally {
+    rmSync(outside, { recursive: true, force: true });
+  }
+});
+
+test('maintain blocks a symlinked CHECKLIST.md with a dead link and reads nothing through it', () => {
+  const { repo, env, sh } = setup();
+  const s = stubAgents(env, JSON.stringify({ drift: [], recipe: 'open it', recipes: [], missing: [] }));
+  const outside = mkdtempSync(join(tmpdir(), 'dd-checklist-'));
+  try {
+    writeFileSync(join(outside, 'CHECKLIST.md'), '# Checklist\n\n- [Gone](gone.md)\n');
+    const skill = join(repo, '.agents', 'skills', 'verify-notes');
+    mkdirSync(join(skill, 'features'), { recursive: true });
+    writeFileSync(join(skill, 'SKILL.md'), '# verify-notes\n');
+    writeFileSync(join(skill, 'features', 'README.md'), '# features\n\n- [Home](home.md)\n');
+    writeFileSync(join(skill, 'features', 'home.md'), '# Home\n');
+    symlinkSync(join(outside, 'CHECKLIST.md'), join(skill, 'CHECKLIST.md'));
+    sh('add', '-A');
+    sh('commit', '-qm', 'skill');
+    const r = doctorIn(repo, s.env, 'maintain', '--foreground');
+    const m = toon(r);
+    assert.deepEqual([r.code, m.result], [3, 'blocked'], r.out);
+    assert.match(m.reason, /^coverage: .*CHECKLIST\.md/);
+    assert.equal(m.findings.some((f) => f.kind === 'dead-link'), false, 'nothing is read through the link');
+  } finally {
+    rmSync(outside, { recursive: true, force: true });
+  }
+});
+
+test('maintain gives a pi reader no tools and puts the cited source in its prompt', () => {
+  const { repo, env, sh } = setup();
+  const s = stubPiGemini(env, JSON.stringify({ drift: [], recipe: 'open it', recipes: [], missing: [] }));
+  mkdirSync(env.DONE_DONE_HOME, { recursive: true });
+  writeFileSync(join(env.DONE_DONE_HOME, 'config.yaml'), 'agent: pi\n');
+  const skill = join(repo, '.agents', 'skills', 'verify-notes');
+  mkdirSync(join(skill, 'features'), { recursive: true });
+  mkdirSync(join(repo, 'src'), { recursive: true });
+  writeFileSync(join(repo, 'src', 'app.js'), 'export const app = 1; // CITED-SOURCE-LINE\n');
+  writeFileSync(join(skill, 'SKILL.md'), '# verify-notes\n');
+  writeFileSync(join(skill, 'features', 'README.md'), '# features\n\n- [Home](home.md)\n');
+  writeFileSync(join(skill, 'features', 'home.md'), '# Home\n\nThe app starts at src/app.js:1.\n');
+  sh('add', '-A');
+  sh('commit', '-qm', 'skill');
+  const r = doctorIn(repo, s.env, 'maintain', '--foreground');
+  assert.equal(r.code, 0, r.out);
+  const reader = s.calls().find((c) => c.stdin.includes('Feature file'));
+  assert.ok(reader.argv.includes('--no-tools'), reader.argv.join(' '));
+  assert.ok(!reader.argv.includes('-t'), 'no read tools for pi');
+  assert.match(reader.stdin, /Cited source src\/app\.js:\nexport const app = 1; \/\/ CITED-SOURCE-LINE/);
+});
+
 test('maintain fingerprints an untracked file whose name has a newline', () => {
   const { repo, env, sh } = setup();
   const s = stubAgents(env, JSON.stringify({ drift: [], recipe: 'open it', recipes: [], missing: [] }));

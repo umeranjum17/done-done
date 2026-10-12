@@ -1625,7 +1625,7 @@ test('doctor finds agent, judge and ffprobe binaries from PATH; missing optional
   assert.equal(none.code, 0, 'missing optionals still exit 0 when every required item is ok');
   const n = toon(none);
   assert.deepEqual(n.checks.slice(4).map((c) => c.status), ['missing', 'missing', 'missing', 'missing']);
-  assert.match(n.checks[4].fix, /Install claude, or set agent: to an installed one of claude, codex, opencode, pi, gemini/);
+  assert.match(n.checks[4].fix, /Install claude and opencode, or set agent: to an installed one of claude, codex, opencode, pi, gemini/);
   assert.match(n.checks[5].fix, /judge\.bin/);
   assert.match(n.checks[6].fix, /ffprobe/);
   assert.match(n.checks[7].detail, /^claude judge \(model claude-haiku-5-5\), and no author agent is installed/, 'with no author there is no same-agent claim');

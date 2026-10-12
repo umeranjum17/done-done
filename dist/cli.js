@@ -1245,7 +1245,7 @@ async function cmdDoctor(argv) {
     const what = `${agent.agent} (model ${agent.model || 'none'}; ${agent.from === 'auto' ? 'agent: auto' : 'from config'}${skipping})`;
     const startable = ALL_AGENTS.filter(supported).join(' and ');
     checks.push(!agent.path
-        ? { check: 'agent', status: 'missing', detail: `${what} is not on PATH`, fix: `Install ${agent.agent}, or set agent: to an installed one of ${ALL_AGENTS.join(', ')}` }
+        ? { check: 'agent', status: 'missing', detail: `${what} is not on PATH`, fix: `Install ${startable}, or set agent: to an installed one of ${ALL_AGENTS.join(', ')}` }
         : !supported(agent.agent)
             ? { check: 'agent', status: 'missing', detail: `${what} at ${agent.path}, but done-done cannot start ${agent.agent} yet (${startable} for now)`, fix: `Set agent: to ${startable}` }
             : { check: 'agent', status: 'ok', detail: `${what} at ${agent.path}`, fix: '' });

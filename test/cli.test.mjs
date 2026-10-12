@@ -1818,6 +1818,25 @@ test('a rerun refused by the judge preflight exits 2 and creates no run folder',
   assert.deepEqual(readdirSync(runs).sort(), before, 'the refused rerun leaves no new run folder');
 });
 
+test('auto judge skips a claude judge with no sign-in folder, so doctor and verify judge through opencode', () => {
+  const t = setup();
+  mkdirSync(t.env.DONE_DONE_HOME, { recursive: true });
+  writeFileSync(join(t.env.DONE_DONE_HOME, 'config.yaml'), 'agent: [opencode, claude]\n');
+  const verdict = JSON.stringify({ relevance: { probabilities: CORRECT, rationale: 'The list shows the notes.', personReason: 'The list shows the notes.' } });
+  const s = stubAgents(t.env, verdict);
+  symlinkSync(process.execPath, join(s.bin, 'node'));
+  const d = toon(doctorIn(t.repo, s.env, 'doctor'));
+  const choice = d.checks.find((c) => c.check === 'judge_choice');
+  assert.match(choice.detail, /^answerer:opencode /, choice.detail);
+  assert.doesNotMatch(choice.detail, /claude-code/);
+  const v = spawnSync(process.execPath, [CLI, 'verify', 'shots', '--outcome', 'home and settings render', '--judge', '--foreground'], { cwd: t.repo, env: s.env, encoding: 'utf8' });
+  assert.equal(v.status, 0, v.stdout + v.stderr);
+  assert.equal(toon({ out: v.stdout }).result, 'pass');
+  const calls = s.calls();
+  assert.equal(calls.length, 2, 'one judge request per capture');
+  assert.ok(calls.every((c) => c.agent === 'opencode'), 'no request goes to claude');
+});
+
 // doctor: read-only health check. Required items (git, config, evidence root) gate
 // exit 0/2; the skill, agent, judge and ffprobe items are optional and never fail it.
 // An isolated PATH holding only git plus the named stub binaries, so agent/judge/ffprobe
@@ -2102,7 +2121,7 @@ test('the agent comes from config (a fallback list moves past missing agents), a
   const oc = doctor('agent: [codex, opencode]\n', '--probe');
   assert.equal(oc.code, 0, oc.out);
   assert.match(oc.by('agent').detail, /^opencode \(model opencode-go\/test-model; from config; skipped codex: done-done cannot start it yet\)/);
-  assert.match(oc.by('judge_choice').detail, /^claude-code \(model claude-haiku-5-5; judge\.route auto\) judges the author opencode \(model opencode-go\/test-model\): a different agent/);
+  assert.match(oc.by('judge_choice').detail, /^answerer:opencode \(model opencode-go\/muse-spark-1\.3-contributor; judge\.route auto\) judges the author opencode \(model opencode-go\/test-model\): the author's agent at a different model/);
   assert.equal(oc.by('probe').status, 'ok');
   const [call] = s.calls();
   assert.match(call.file, /connectivity probe[\s\S]*JSON schema[\s\S]*"required":\["ok"\]/, 'the prompt and schema go in the attached file');

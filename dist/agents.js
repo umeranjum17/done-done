@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { stripVTControlCharacters } from 'node:util';
@@ -135,6 +135,7 @@ export function supported(agent) {
     return Object.hasOwn(ADAPTERS, agent);
 }
 export const claudeBin = (cfg) => cfg.judge.claude_code.bin || onPath('claude');
+const claudeSignedIn = (cfg) => existsSync(cfg.judge.claude_code.config_dir);
 const routeOf = (agent) => (agent === 'claude' ? 'claude-code' : `answerer:${agent}`);
 const canJudge = (agent) => agent === 'claude' || ANSWERER_JUDGES.includes(agent);
 export const JUDGES = AGENTS.filter(canJudge);
@@ -147,11 +148,11 @@ export function selectJudge(cfg, found) {
     const route = cfg.judge.route;
     if (route === 'auto') {
         // The first installed agent that can judge and is not the author, at its cheap model; else the author's agent.
-        const ready = AGENTS.filter((a) => canJudge(a) && (a === 'claude' ? claudeBin(cfg) : onPath(a)));
-        const other = ready.find((a) => a !== author.agent);
+        const installed = AGENTS.filter((a) => canJudge(a) && (a === 'claude' ? claudeBin(cfg) : onPath(a)));
+        const other = installed.find((a) => a !== author.agent && (a !== 'claude' || claudeSignedIn(cfg)));
         if (other)
             return pick(other, CHEAP_MODELS[other], 'auto');
-        if (ready.includes(author.agent))
+        if (installed.includes(author.agent))
             return pick(author.agent, CHEAP_MODELS[author.agent], 'auto');
         throw new UsageError(`judge: no installed agent can judge (judge.route auto looks for ${JUDGES.join(', ')})`, 'Install one of them, or set judge.route in ~/.done-done/config.yaml');
     }

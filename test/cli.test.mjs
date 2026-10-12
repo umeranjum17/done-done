@@ -1288,6 +1288,11 @@ test('every command has its own --help, and a usage error names the command and 
     assert.equal(toon(bad).command, cmd, 'the error names the subcommand');
     assert.match(toon(bad).help[0], new RegExp(`done-done ${cmd} --help`));
   }
+  const doctorBad = dd('doctor', 'extra');
+  assert.equal(doctorBad.code, 2, doctorBad.out);
+  assert.equal(toon(doctorBad).command, 'doctor', 'the error names the subcommand');
+  assert.equal(toon(doctorBad).help[0], 'Run `done-done doctor` (or `done-done doctor --probe`) with no other arguments');
+  assert.equal(dd('doctor', '--bogus').code, 2, 'an unknown doctor flag is a usage error too');
   assert.match(toon(dd('check', '--outcome', 'x', '--bogus.yaml')).help[0], /^Valid flags for check: /, 'a .yaml-looking flag is still a flag error');
   assert.match(toon(dd('check', '--from', 'missing.yaml')).help[0], /done-done check --help/, 'a missing claim file is not a config error');
   assert.match(dd('receipt', '--help').out, /done-done receipt --outcome .*\[--trusted-ref <ref>\]/);

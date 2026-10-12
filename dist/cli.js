@@ -1432,7 +1432,13 @@ const unknownRow = (check) => ({ check, status: 'missing', detail: 'unknown with
 // required; the verify skill, an agent CLI, the judge binary and ffprobe are optional.
 // Read-only: a missing repo or config is a finding, never a crash, and nothing is created.
 async function cmdDoctor(argv) {
-    const { values } = parseArgs({ args: argv, options: { probe: { type: 'boolean' } }, allowPositionals: false });
+    let values;
+    try {
+        ({ values } = parseArgs({ args: argv, options: { probe: { type: 'boolean' } }, allowPositionals: false }));
+    }
+    catch (e) {
+        throw new UsageError(e.message, 'Run `done-done doctor` (or `done-done doctor --probe`) with no other arguments');
+    }
     let repo = null;
     try {
         repo = git(process.cwd(), 'rev-parse', '--show-toplevel');

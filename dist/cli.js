@@ -30,7 +30,7 @@ const AGENTS = ['claude', 'codex', 'opencode'];
 const DOCTOR_TEXT = `doctor is read-only and exits 0 when every required item is ok, 2 otherwise.
   required: git (inside a repository), config (a valid .done-done.yaml), evidence_root (writable).
   optional: verify_skill (.agents/skills/verify-<app>/), agent (claude, codex or opencode on PATH),
-  judge (a claude binary, a Claude sign-in and the judge kit; the model is never called), ffprobe (video evidence only).
+  judge (a claude binary, a sign-in folder and the judge kit; the model is never called), ffprobe (video evidence only).
   doctor lists every check; --full changes nothing. Missing optionals never fail the run.`;
 // One table drives `--help` and every `<command> --help`: each command's usage lines and the flags it takes.
 const FLAGS = {
@@ -1441,13 +1441,16 @@ async function cmdDoctor(argv) {
     if (!repo) {
         checks.push({ check: 'config', status: 'missing', detail: 'unknown without a git repository', fix: 'Run done-done from inside a git repository' });
     }
-    else if (!existsSync(join(repo, '.done-done.yaml'))) {
-        checks.push({ check: 'config', status: 'missing', detail: 'no .done-done.yaml', fix: 'Run `done-done init` to write a minimal .done-done.yaml' });
-    }
     else {
         try {
-            cfg = loadConfig(repo);
-            checks.push({ check: 'config', status: 'ok', detail: `.done-done.yaml is valid (app ${cfg.app})`, fix: '' });
+            const loaded = loadConfig(repo);
+            if (existsSync(join(repo, '.done-done.yaml'))) {
+                cfg = loaded;
+                checks.push({ check: 'config', status: 'ok', detail: `.done-done.yaml is valid (app ${loaded.app})`, fix: '' });
+            }
+            else {
+                checks.push({ check: 'config', status: 'missing', detail: 'no .done-done.yaml', fix: 'Run `done-done init` to write a minimal .done-done.yaml' });
+            }
         }
         catch (e) {
             checks.push({ check: 'config', status: 'missing', detail: e.message, fix: 'Fix the config file named above, then re-run: done-done doctor' });
@@ -1488,7 +1491,7 @@ async function cmdDoctor(argv) {
     else {
         try {
             const { bin } = await backend(cfg);
-            checks.push({ check: 'judge', status: 'ok', detail: `claude binary at ${bin} with a Claude sign-in and the judge kit; the model is never called`, fix: '' });
+            checks.push({ check: 'judge', status: 'ok', detail: `claude binary at ${bin}, a sign-in folder and the judge kit are present (login is checked only when a capture is judged); the model is never called`, fix: '' });
         }
         catch (e) {
             checks.push({ check: 'judge', status: 'missing', detail: e.message, fix: e.help ?? 'Re-run done-done doctor after fixing the error above' });

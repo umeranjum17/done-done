@@ -1750,6 +1750,16 @@ test('doctor passes in a set-up repo and lists every check', () => {
   assert.equal(j.checks.length, 7);
 });
 
+test('doctor does not send a repo with a malformed global config to init', () => {
+  const b = bareRepo();
+  mkdirSync(b.env.DONE_DONE_HOME, { recursive: true });
+  writeFileSync(join(b.env.DONE_DONE_HOME, 'config.yaml'), 'app: [unclosed\n');
+  const d = toon(b.dd('doctor'));
+  assert.equal(d.checks[1].status, 'missing');
+  assert.match(d.checks[1].detail, /config\.yaml/);
+  assert.ok(!d.help.some((h) => h.includes('done-done init')), 'init would read the same malformed global config and fail');
+});
+
 test('doctor reports a present verify skill as ok', () => {
   const { repo, dd } = setup();
   mkdirSync(join(repo, '.agents', 'skills', 'verify-notes'), { recursive: true });

@@ -22,7 +22,7 @@ const USAGE_TEXT = `usage:
   done-done receipt --outcome "<claim>" <files...> [--judge]   record a passing check for HEAD
   done-done receipt --from <file | - | PR URL> [--judge]       record from a claim's Checks block
   done-done receipt --verify <head>                  read-only: verify a recorded receipt
-global flags: --json (JSON instead of TOON), --full (do not truncate lists)
+global flags: --json (JSON instead of TOON), --full (do not truncate lists), --version
 --judge (or judge.enabled: true): a model on your Claude plan, through BYOKit, says whether each PNG/JPEG
   capture shows the outcome; a wrong screen fails, an unsure answer is inconclusive. Off by default.
 exit codes: 0 pass, 1 fail, 2 usage or config error, 3 inconclusive
@@ -654,6 +654,10 @@ async function main(argv: string[]): Promise<number> {
     if (cmd === 'receipt') return await cmdReceipt(rest);
     if (cmd === '--help' || cmd === '-h' || cmd === 'help') {
       console.log(USAGE_TEXT);
+      return PASS;
+    }
+    if (cmd === '--version') {
+      console.log(JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version);
       return PASS;
     }
     if (cmd === undefined) return cmdBare();

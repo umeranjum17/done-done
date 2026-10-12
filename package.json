@@ -10,10 +10,8 @@
   "files": ["dist", "!dist/skill.js", "skills", "docs"],
   "engines": { "node": ">=22.5" },
   "scripts": {
-    "build": "tsc",
-    "prepare": "npm run build",
     "build:skill": "tsc && node dist/skill.js",
-    "test": "tsc && node --test"
+    "test": "tsc && node --test && git diff --exit-code --stat -- dist"
   },
   "dependencies": { "@toon-format/toon": "^4.4.0", "yaml": "^2.9.1" },
   "peerDependencies": { "@byokit/decide": "0.6.5" },

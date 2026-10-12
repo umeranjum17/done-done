@@ -23,7 +23,7 @@ Get the current source of truth from the CLI.
 
 First run `command -v done-done`. If it prints a path, run `done-done` as shown below. If not, run
 `npx -y --allow-git=all github:umeranjum17/done-done` wherever this file or done-done output says `done-done` - nothing to install (the first
-run builds it, about 20 seconds).
+run fetches it, about 3 seconds).
 
 - `done-done` (no arguments, inside the repo) for this repo's proof setup and the next step
 - `done-done --help` for every command and flag, the journey format and the exact `## Checks` block

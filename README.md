@@ -71,7 +71,7 @@ done-done is not on npm yet, so today the skill runs it straight from GitHub. Th
 npx -y --allow-git=all github:umeranjum17/done-done --help
 ```
 
-The first run builds it: 10 to 20 seconds cold (measured with npm 10, 11 and 12, and in a clean `node:22` container); later runs take about 2 seconds. npm 12 refuses GitHub packages without `--allow-git=all`. Once done-done is on npm, the switch is one line in `src/skill.ts`: `const NPX = 'npx -y done-done';`.
+The first run fetches it, with nothing to build: about 3 seconds cold (measured with npm 10 in a clean `node:22` container and with npm 12); later runs take about 1 second. npm 12 refuses GitHub packages without `--allow-git=all`. Once done-done is on npm, the switch is one line in `src/skill.ts`: `const NPX = 'npx -y done-done';`.
 
 Then, in agents that expose skills as slash commands (Claude Code, for example), invoke it directly:
 
@@ -87,15 +87,15 @@ The skill is the recommended path, but it is not the only one.
 
 ### Manual CLI
 
-Install it from source:
+Install it from GitHub:
 
 **1. Install**
 
 ```sh
-git clone https://github.com/umeranjum17/done-done
-cd done-done
-npm install && npm run build && npm link
+npm install -g --prefix ~/.local --allow-git=all github:umeranjum17/done-done
 ```
+
+`--prefix ~/.local` installs into your home folder, so it needs no `sudo`. `--allow-git=all` is needed on npm 12, which blocks installs from GitHub by default. If `done-done --version` then says "command not found", add `~/.local/bin` to your `PATH`: `export PATH="$HOME/.local/bin:$PATH"`.
 
 **2. Set it up in your app's repo**
 
@@ -164,10 +164,15 @@ So far: `init`, `run`, `check`, `receipt` and the opt-in screenshot judge. Comin
 ## Develop
 
 ```sh
+git clone https://github.com/umeranjum17/done-done
+cd done-done
 npm install
+npm install -g --prefix ~/.local .   # optional: links this checkout as done-done on your PATH
 npm test   # builds, then runs the end-to-end tests against throwaway git repos
 npm run build:skill              # regenerate skills/done-done/SKILL.md from src/skill.ts
 npm run build:skill -- --check   # fail if the committed skill is out of date (CI runs this)
 ```
 
-The terminal pictures (hero, run, pass, reasons, config) are real output from the current build; redraw them with `npm run build && node docs/media/make.mjs`. The wordmark and the flow picture are hand-made SVGs.
+`dist/` is committed, so installing from GitHub needs no build step. `npm test` rebuilds it and fails while the rebuilt `dist/` differs from the commit, so commit `dist/` with your change.
+
+The terminal pictures (hero, run, pass, reasons, config) are real output from the current build; redraw them with `npx tsc && node docs/media/make.mjs`. The wordmark and the flow picture are hand-made SVGs.

@@ -21,7 +21,7 @@ class ProviderError extends Error {
     detail;
     constructor(text, prefix = '', suffix = '') {
         super(`${prefix}${errorLine(text)}${suffix}`);
-        this.detail = `${prefix}${text}${suffix}`;
+        this.detail = `${prefix}${text.slice(0, 500)}${suffix}`;
     }
 }
 // The one JSON object inside free model text (often fenced): shared by the adapters that answer in text.

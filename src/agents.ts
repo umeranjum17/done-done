@@ -39,7 +39,7 @@ class ProviderError extends Error {
   readonly detail: string;
   constructor(text: string, prefix = '', suffix = '') {
     super(`${prefix}${errorLine(text)}${suffix}`);
-    this.detail = `${prefix}${text}${suffix}`;
+    this.detail = `${prefix}${text.slice(0, 500)}${suffix}`;
   }
 }
 type Adapter = { argv: (c: AgentCall, dir: string) => string[]; answer: (stdout: string) => unknown; file?: boolean; hint?: string; env?: (c: AgentCall) => Record<string, string> };

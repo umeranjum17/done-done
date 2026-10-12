@@ -38,7 +38,7 @@ const FLAGS: Record<string, string> = {
   '--claim-id <id>': 'the claim the evidence proves; evidence already used for another claim id is reuse (default: the current branch, or the PR branch with --from <PR URL>; required on a detached HEAD)',
   '--judge': 'a model says whether each PNG/JPEG capture shows the outcome (off by default; or judge.enabled: true)',
   '--verify <head>': 'read-only: verify the receipt recorded for <head>',
-  '--agent <agent>': 'also add a SessionStart hook to .claude/settings.json (claude) or .codex/hooks.json (codex) that shows `done-done` to each session (opt-in)',
+  '--agent <agent>': 'also add a SessionStart hook to .claude/settings.json (claude) or .codex/hooks.json (codex), or a plugin to .opencode/plugins (opencode), that shows `done-done` to each session (opt-in)',
 };
 // `more` is the reference text a command needs beyond its flags, shared with the top-level help.
 const COMMANDS: Record<string, { usage: [string, string][]; flags: string[]; more: string[] }> = {
@@ -47,6 +47,7 @@ const COMMANDS: Record<string, { usage: [string, string][]; flags: string[]; mor
       ['done-done init', 'write a minimal .done-done.yaml (evidence lives outside the repo)'],
       ['done-done init --agent claude', 'also show this repo\'s done-done state at each Claude Code session start'],
       ['done-done init --agent codex', 'also show this repo\'s done-done state at each Codex session start'],
+      ['done-done init --agent opencode', 'also add this repo\'s done-done state to the first message of each opencode session'],
       ['done-done init --journey <name> -- <command...>', "record a journey's capture recipe in .done-done.yaml"],
     ],
     flags: ['--agent <agent>', '--journey <name>', '-- <command...>'],
@@ -760,6 +761,42 @@ function codexSettings(repo: string): { file: string; text?: string } {
   return { file, text: `${JSON.stringify(settings, null, 2)}\n` };
 }
 
+// The opencode session plugin `init --agent opencode` adds: a project-scope file in
+// .opencode/plugins/ (auto-loaded; the home config is never touched) whose chat.message
+// hook runs the session command below on the first message of each session and appends
+// the bare `done-done` state to the message parts. Without done-done on PATH it appends
+// nothing and never throws, so it never breaks a session.
+function opencodePlugin(repo: string): { file: string; text?: string } {
+  const file = join(repo, '.opencode', 'plugins', 'done-done.js');
+  const text = `// Written by \`done-done init --agent opencode\`: shows this repo's bare \`done-done\`
+// state to each opencode session. On the first message of a session the chat.message
+// hook runs \`${CLAUDE_HOOK}\` and appends its output to the message parts.
+// Without done-done on PATH it appends nothing and never throws, so it never breaks
+// a session. Other files in .opencode/plugins/ are untouched; delete this file to opt out.
+import { execFileSync } from "node:child_process";
+
+const COMMAND = "${CLAUDE_HOOK}";
+
+export const DoneDonePlugin = async ({ directory }) => {
+  const seen = new Set();
+  return {
+    "chat.message": async (input, output) => {
+      if (seen.has(input.sessionID)) return;
+      seen.add(input.sessionID);
+      try {
+        const state = execFileSync("sh", ["-c", COMMAND], { cwd: directory, encoding: "utf8", timeout: 30000 }).trim();
+        if (state) output.parts.push({ type: "text", text: state });
+      } catch {
+        // Silent: a missing done-done or a slow run must never break the session.
+      }
+    },
+  };
+};
+`;
+  if (existsSync(file) && readFileSync(file, 'utf8') === text) return { file };
+  return { file, text };
+}
+
 function cmdInit(argv: string[]): number {
   const dash = argv.indexOf('--');
   const { values } = parseArgs({
@@ -769,8 +806,8 @@ function cmdInit(argv: string[]): number {
   });
   const parts = dash < 0 ? [] : argv.slice(dash + 1);
   const journey = values.journey ?? null;
-  if (values.agent !== undefined && values.agent !== 'claude' && values.agent !== 'codex')
-    throw new UsageError(`--agent ${values.agent} is not supported; the supported values are claude, codex`, 'Run: done-done init --agent <claude|codex>');
+  if (values.agent !== undefined && values.agent !== 'claude' && values.agent !== 'codex' && values.agent !== 'opencode')
+    throw new UsageError(`--agent ${values.agent} is not supported; the supported values are claude, codex, opencode`, 'Run: done-done init --agent <claude|codex|opencode>');
   if (journey === null && parts.length) throw new UsageError('init needs --journey <name> to record a command after --');
   if (journey !== null && !parts.some((p) => p.trim())) throw new UsageError(`init --journey ${journey} needs a command after --`);
   if (journey !== null && !/^[A-Za-z0-9][A-Za-z0-9_-]*$/.test(journey)) throw new UsageError(`invalid journey name ${journey}; use letters, digits, - or _`);
@@ -778,7 +815,7 @@ function cmdInit(argv: string[]): number {
   const file = join(repo, '.done-done.yaml');
   const existed = existsSync(file);
   const cfg = loadConfig(repo); // validates the existing project config; malformed -> exit 2, no writes
-  const hook = values.agent === 'claude' ? claudeSettings(repo) : values.agent === 'codex' ? codexSettings(repo) : undefined; // likewise validated before any write
+  const hook = values.agent === 'claude' ? claudeSettings(repo) : values.agent === 'codex' ? codexSettings(repo) : values.agent === 'opencode' ? opencodePlugin(repo) : undefined; // likewise validated before any write
   if (journey !== null) {
     // Record the capture recipe in the repo so any checkout can re-run the proof.
     // The command is stored verbatim; ${RUN_ID} in it becomes the run id, like a run -- command.
@@ -836,7 +873,9 @@ function cmdInit(argv: string[]): number {
     ...(hook &&
       (values.agent === 'codex'
         ? { codex_hook: hook.text ? 'added to .codex/hooks.json' : 'unchanged' }
-        : { claude_hook: hook.text ? 'added to .claude/settings.json' : 'unchanged' })),
+        : values.agent === 'opencode'
+          ? { opencode_plugin: hook.text ? 'added to .opencode/plugins/done-done.js' : 'unchanged' }
+          : { claude_hook: hook.text ? 'added to .claude/settings.json' : 'unchanged' })),
     help: [
       ...(Object.keys(cfg.journeys).length
         ? [`Capture proof: ${captureHint(cfg)}, then: ${check}`]
@@ -844,7 +883,9 @@ function cmdInit(argv: string[]): number {
       ...(hook?.text
         ? values.agent === 'codex'
           ? ['Commit .codex/hooks.json: each Codex session in this repo then starts with `done-done` output (it needs done-done on PATH)']
-          : ['Commit .claude/settings.json: each Claude Code session in this repo then starts with `done-done` output (it needs done-done on PATH)']
+          : values.agent === 'opencode'
+            ? ['Commit .opencode/plugins/done-done.js: the first message of each opencode session in this repo then gets `done-done` output added (it needs done-done on PATH)']
+            : ['Commit .claude/settings.json: each Claude Code session in this repo then starts with `done-done` output (it needs done-done on PATH)']
         : []),
     ],
   });

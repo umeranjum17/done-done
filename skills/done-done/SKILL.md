@@ -8,7 +8,7 @@ user-invocable: false
 
 "No proof, no done." done-done runs your capture command and ties every file it writes to the exact
 commit, then checks that the evidence a claim points to is really there, is a real image/video/log,
-comes from the current commit, and is new. It is deterministic, offline and model-free.
+comes from the current commit, and is new. The core checks are deterministic, offline and model-free; the opt-in `--judge` flag asks a model through BYOKit whether each screenshot shows the outcome.
 
 The CLI is the source of truth. Run `done-done --help` for the current commands and flags.
 

@@ -162,6 +162,7 @@ Running `done-done` with no subcommand prints the repo's config state (`config: 
 ### In CI or a merge gate
 
 ```sh
+PR_BRANCH="$(gh pr view "$PR_URL" --json headRefName --jq .headRefName)"
 done-done check --from "$PR_URL" --trusted-ref origin/main
 done-done receipt --from - --trusted-ref origin/main --claim-id "$PR_BRANCH" < pr-body.md   # record the pass
 done-done receipt --verify "$HEAD"                                   # re-verify later

@@ -1572,6 +1572,7 @@ test('doctor in a bare repo fails with the init fix; a malformed config names th
   const r2 = b.dd('doctor');
   assert.equal(r2.code, 2, r2.out);
   assert.match(toon(r2).checks[1].detail, /\.done-done\.yaml/);
+  assert.ok(!toon(r2).help.some((h) => h.includes('done-done init')), 'init cannot read a malformed config, so it is never the fix');
   const outside = doctorIn(b.dir, b.env, 'doctor');
   assert.equal(outside.code, 2, outside.out);
   assert.equal(toon(outside).checks[0].status, 'missing');
@@ -1589,6 +1590,17 @@ test('doctor reports the judge missing when claude has no sign-in or judge.bin i
   const relative = toon(dd('doctor'));
   assert.equal(relative.checks[5].status, 'missing');
   assert.match(relative.checks[5].detail, /must be absolute paths \(got claude/);
+});
+
+test('doctor reports the judge missing when its sign-in folder is a ~/.claude', () => {
+  const { repo, env } = setup();
+  const userHome = join(env.DONE_DONE_HOME, 'userhome');
+  const claudeDir = join(userHome, '.claude');
+  mkdirSync(claudeDir, { recursive: true });
+  writeFileSync(join(env.DONE_DONE_HOME, 'config.yaml'), `judge:\n  config_dir: ${JSON.stringify(claudeDir)}\n`);
+  const j = toon(doctorIn(repo, { ...pathEnv(env, ['claude']), HOME: userHome }, 'doctor'));
+  assert.equal(j.checks[5].status, 'missing');
+  assert.match(j.checks[5].fix, /not your ~\/\.claude/);
 });
 
 test('doctor finds agent, judge and ffprobe binaries from PATH; missing optionals never fail it', () => {

@@ -50,7 +50,7 @@ async function kit() {
         throw new UsageError(`judge: the judge needs the optional ${KIT} kit, which is not installed`, `Run this check with the kit: npx -y --allow-git=all -p github:umeranjum17/done-done-axi -p ${KIT} done-done-axi ${process.argv.slice(2).map(quote).join(' ')}`);
     }
 }
-async function backend(cfg) {
+export async function backend(cfg) {
     const bin = cfg.judge.bin || onPath('claude');
     const dir = cfg.judge.config_dir;
     const signIn = `CLAUDE_CONFIG_DIR=${dir} ${bin || 'claude'} auth login`;
@@ -78,7 +78,7 @@ async function backend(cfg) {
         }
     };
     try {
-        return { ask: claudeCode({ bin, configDir: real, model: cfg.judge.model, timeoutMs: TIMEOUT_MS }).ask, resolve, signIn, signedIn };
+        return { bin, ask: claudeCode({ bin, configDir: real, model: cfg.judge.model, timeoutMs: TIMEOUT_MS }).ask, resolve, signIn, signedIn };
     }
     catch (e) {
         throw new UsageError(`judge: ${e.message} (judge.bin ${bin}, judge.config_dir ${dir})`, 'Set judge.config_dir to a folder of its own, not your ~/.claude');

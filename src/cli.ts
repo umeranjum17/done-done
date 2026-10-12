@@ -333,12 +333,13 @@ async function runCheck(argv: string[]): Promise<CheckOutcome> {
     if (seen.has(hash)) findings.push({ level: 'fail', why: `${name}: byte-identical to ${seen.get(hash)}` });
     seen.set(hash, name);
     if (v.status === 'fail') continue;
-    if (v.status === 'ok') captures.push({ name, bytes, sha256: hash, media: v });
     const rec = records.filter((r) => r.files.some((f) => f.sha256 === hash)).sort((a, b) => b.started_at.localeCompare(a.started_at))[0];
     if (!rec) {
       findings.push({ level: 'inconclusive', why: `${name}: not in any done-done run record, so it is not tied to a commit` });
       continue;
     }
+    // Only a capture tied to a run record can reach the judge, so a stray cited file is never sent.
+    if (v.status === 'ok') captures.push({ name, bytes, sha256: hash, media: v });
     const stale = staleness(repo, cfg, rec.commit, now.commit);
     if (stale) findings.push({ level: 'fail', why: `${name}: ${stale} (run ${rec.run_id})` });
     if (rec.dirty && !cfg.evidence.allow_dirty) findings.push({ level: 'fail', why: `${name}: captured from a tree with uncommitted changes (run ${rec.run_id})` });

@@ -104,14 +104,14 @@ done-done receipt --judge --from pr-body.md
 ```
 
 - **Off by default.** Turn it on per run with `--judge`, or for a project with `judge.enabled: true`. With it off, nothing changes and no model is asked.
-- **One question per capture.** Each cited PNG or JPEG goes to the model with the claim's `outcome:` line and nothing else: no repo, no paths, no other files. Text, log and video evidence are not judged, and the result says so.
+- **One question per capture.** Each cited PNG or JPEG that is in a done-done run record goes to the model with the claim's `outcome:` line and nothing else: no repo, no paths, no other files. Text, log and video evidence are not judged, and the result says so.
 - **Your own Claude plan, through BYOKit.** The judge uses [`@byokit/decide`](https://www.npmjs.com/package/@byokit/decide)'s Claude Code backend, which runs your own `claude` binary against a sign-in folder kept only for done-done. done-done never reads, copies or stores a credential. Sign in once:
 
   ```sh
   mkdir -p ~/.done-done/claude && CLAUDE_CONFIG_DIR=~/.done-done/claude claude auth login
   ```
 
-- **Bounded.** Captures longer than 1280 px on their long side are downscaled first (8-bit PNG; a larger JPEG is reported unsure). One request per capture, a 120-second timeout, no retries.
+- **Bounded.** Captures longer than 1280 px on their long side are downscaled first (8-bit PNG; a larger JPEG is reported unsure). One request per capture, at most 10 requests per check (later captures are unsure), a 120-second timeout, no retries.
 - **Cached.** Verdicts are kept in `$DONE_DONE_HOME/judge/`, keyed by the capture's sha256, the outcome text and the model, so a re-run asks no model.
 - **Only runs on a passing check.** When the deterministic checks already fail, no capture is judged.
 
@@ -119,9 +119,9 @@ done-done receipt --judge --from pr-body.md
 |---|---|---|
 | `pass`: the capture shows the outcome | pass | 0 |
 | `fail`: wrong screen | fail | 1 |
-| `unsure`: the model said it cannot tell, or was less than 80% sure, or did not answer | inconclusive | 3 |
+| `unsure`: the model said it cannot tell, was less than 80% sure, or did not answer (a model error or a used-up plan) | inconclusive | 3 |
 
-The result gains a `judge` block with the model and, for each judged file, its verdict, a short reason and whether it came from the cache. A missing sign-in, a sign-in that is not a Claude subscription, a bad model id or a missing `claude` binary is a config error (exit 2) whose `help` line is the command to fix it. The judge's confidence is the model's own estimate, not a calibrated score.
+The result gains a `judge` block with the model and, for each judged file, its verdict, a short reason and whether it came from the cache. A missing or signed-out sign-in folder, a sign-in that is not a Claude subscription, a sign-in folder that is (or links to) your own `~/.claude`, or a missing `claude` binary is a config error (exit 2) whose `help` line is the command to fix it. The kit cannot tell a bad `judge.model` from a used-up plan, so both are `unsure` with a reason naming each. The judge's confidence is the model's own estimate, not a calibrated score.
 
 ### Record a receipt
 

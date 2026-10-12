@@ -534,6 +534,7 @@ const images = content.filter((c) => c.type === 'image');
 const img = Buffer.from(images[0].source.data, 'base64');
 appendFileSync(dir + '/calls.jsonl', JSON.stringify({ model: process.argv[process.argv.indexOf('--model') + 1], images: images.length, width: img.readUInt32BE(16), prompt: content.at(-1).text }) + '\\n');
 const p = stub.answer;
+if (p === 'error') process.exit(process.stdout.write(JSON.stringify({ type: 'result', subtype: 'success', is_error: true, result: 'usage limit reached' })) && 0);
 const pick = Object.keys(p).sort((a, b) => p[b] - p[a])[0];
 process.stdout.write(JSON.stringify({ type: 'result', subtype: 'success', is_error: false, result: '', structured_output: { relevance: { probabilities: p, pick, personReason: stub.reason } } }));
 `,
@@ -608,6 +609,11 @@ test('judge wrong screen fails with exit 1, unsure and low confidence are inconc
   assert.equal(low.code, 3, low.out);
   assert.match(toon(low).judge.judged[0].reason, /not confident enough \(confidence 0.6 below floor 0.8\)/);
   assert.equal(j.calls().length, 3);
+  j.stub('error');
+  const err = j.dd('check', '--judge', '--outcome', 'the home screen shows the sync banner', files[0]);
+  assert.equal(err.code, 3, 'a model error while signed in is inconclusive, not a sign-in error');
+  assert.match(toon(err).judge.judged[0].reason, /did not answer.*judge.model claude-test-1 and your plan's usage limit/);
+  assert.doesNotMatch(err.out, /auth login/);
 });
 
 test('judge.enabled turns the judge on; text evidence is not judged; a failed check is not judged', () => {
@@ -623,6 +629,10 @@ test('judge.enabled turns the judge on; text evidence is not judged; a failed ch
   const bad = j.dd('check', '--outcome', 'three notes are saved', '.proof/mixed/home.png', '.proof/nope.png');
   assert.equal(bad.code, 1, bad.out);
   assert.match(toon(bad).judge.skipped, /already failed/);
+  writeFileSync(join(j.repo, 'stray.png'), screen(11));
+  const stray = j.dd('check', '--outcome', 'three notes are saved', 'stray.png');
+  assert.equal(stray.code, 3, stray.out);
+  assert.deepEqual(toon(stray).judge.judged, [], 'a capture with no run record is never sent');
   assert.equal(j.calls().length, 1);
 });
 

@@ -148,6 +148,7 @@ export function downscalePng(b: Buffer, max: number): Buffer | undefined {
   if (!px) return undefined;
   const k = Math.ceil(Math.max(px.w, px.h) / max);
   const w = Math.floor(px.w / k), h = Math.floor(px.h / k);
+  if (!w || !h) return undefined;
   const raw = Buffer.alloc(h * (w * 3 + 1));
   for (let y = 0; y < h; y++)
     for (let x = 0; x < w; x++)

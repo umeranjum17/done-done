@@ -2243,7 +2243,7 @@ test('a runner started for an aborted run exits without running the journey', ()
   assert.equal(existsSync(join(t.repo, '.proof', id)), false, 'the journey never ran');
 });
 
-test('a run that fails before any step begins is reported as failing at setup', () => {
+test('a reused drive whose record cannot be read fails the drive step', () => {
   const t = setup();
   const { dir } = pendingRun(t, (run) => {
     run.steps[0].status = 'completed';
@@ -2254,7 +2254,9 @@ test('a run that fails before any step begins is reported as failing at setup', 
   assert.equal(r.status, 0, r.stderr);
   const run = JSON.parse(readFileSync(join(dir, 'run.json'), 'utf8'));
   assert.equal(run.status, 'failed');
-  assert.match(run.reason, /^setup: /);
+  assert.match(run.reason, /^drive: /);
+  assert.equal(run.steps[0].status, 'completed');
+  assert.equal(run.steps[1].status, 'failed');
 });
 
 test('abort does not signal a pid that is not this run\'s runner', async () => {

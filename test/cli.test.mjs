@@ -2263,6 +2263,7 @@ test('doctor --probe asks pi on stdin (never in argv) with tools off and a scrat
   const [call] = s.calls();
   assert.equal(call.agent, 'pi');
   assert.match(call.stdin, /connectivity probe/, 'the prompt goes on stdin (the schema is enforced by done-done, then asked again)');
+  assert.match(call.stdin, /"required":\["ok"\]/, 'the first try already states the schema');
   assert.ok(!call.argv.some((a) => a.includes('connectivity probe')), 'never in argv');
   assert.deepEqual(call.argv, ['-p', '--mode', 'json', '--no-session', '--no-tools'], 'no model is passed, so pi runs its own default');
   assert.notEqual(call.cwd, repo, 'a tool-less probe runs in a scratch dir, never the repo');

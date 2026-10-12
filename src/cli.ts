@@ -1069,9 +1069,10 @@ function cmdLogs(argv: string[]): number {
   return PASS;
 }
 
-const drivesClean = (record?: string) => {
+const drivesClean = (record: string | undefined, head: string | undefined) => {
   try {
-    return !!record && JSON.parse(readFileSync(record, 'utf8')).dirty === false;
+    const rec = record && JSON.parse(readFileSync(record, 'utf8'));
+    return !!rec && rec.dirty === false && rec.commit === head;
   } catch {
     return false;
   }
@@ -1091,7 +1092,7 @@ async function cmdRerun(argv: string[]): Promise<number> {
   if (['pending', 'running'].includes(src.status) && group && alive(-group)) throw new UsageError(`the journey of run ${srcId} is still running, so it cannot be rerun yet`, `Read it: done-done status --run ${srcId}`);
   const inputs = inputsOf(src.repo, loadConfig(src.repo), src.journey);
   const same = !!src.inputs && (['head', 'journey', 'skill'] as const).every((k) => src.inputs![k] === inputs[k]);
-  const driveReuse = same && drivesClean(src.record);
+  const driveReuse = same && drivesClean(src.record, src.inputs?.head);
   const reused = (name: string) => (name === 'resolve' && same) || (name === 'drive' && driveReuse);
   const id = newRunId(git(repo, 'rev-parse', 'HEAD'));
   const dir = join(root, id);

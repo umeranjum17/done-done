@@ -1083,9 +1083,10 @@ function cmdLogs(argv) {
     emit({ command: 'logs', run_id: id, step: values.step, lines: items.length, log: items, ...(all.length > items.length && { log_omitted: all.length - items.length }), help: FULL ? [`Read the run: done-done status --run ${id}`] : [`Read the full log: done-done logs --step ${values.step} --run ${id} --full`] });
     return PASS;
 }
-const drivesClean = (record) => {
+const drivesClean = (record, head) => {
     try {
-        return !!record && JSON.parse(readFileSync(record, 'utf8')).dirty === false;
+        const rec = record && JSON.parse(readFileSync(record, 'utf8'));
+        return !!rec && rec.dirty === false && rec.commit === head;
     }
     catch {
         return false;
@@ -1108,7 +1109,7 @@ async function cmdRerun(argv) {
         throw new UsageError(`the journey of run ${srcId} is still running, so it cannot be rerun yet`, `Read it: done-done status --run ${srcId}`);
     const inputs = inputsOf(src.repo, loadConfig(src.repo), src.journey);
     const same = !!src.inputs && ['head', 'journey', 'skill'].every((k) => src.inputs[k] === inputs[k]);
-    const driveReuse = same && drivesClean(src.record);
+    const driveReuse = same && drivesClean(src.record, src.inputs?.head);
     const reused = (name) => (name === 'resolve' && same) || (name === 'drive' && driveReuse);
     const id = newRunId(git(repo, 'rev-parse', 'HEAD'));
     const dir = join(root, id);

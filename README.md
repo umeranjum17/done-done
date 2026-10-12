@@ -119,7 +119,7 @@ journeys:
 
 The command runs from the repo root with `DONE_DONE_EVIDENCE_ROOT` (a new folder for this run in the evidence root) and `DONE_DONE_RUN_ID` set, and `${RUN_ID}` in it is replaced. A run that writes nothing into its folder fails.
 
-Optional: run `done-done init --agent claude` so every Claude Code session in this repo starts knowing its proof state. It adds a SessionStart hook to the repo's `.claude/settings.json` (merged into an existing file, never twice) that prints the bare `done-done` output at session start, and prints nothing when done-done is not on PATH. Codex and opencode are not supported yet.
+Optional: `done-done init --agent claude` adds a Claude Code SessionStart hook to the repo's `.claude/settings.json` that shows each session the bare `done-done` state. See the [reference](docs/reference.md#set-up-a-repo). Codex and opencode are not supported yet.
 
 Commit the config (and `.claude/settings.json` if you added the hook), because proof only counts from a clean tree:
 

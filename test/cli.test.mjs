@@ -1429,11 +1429,15 @@ test('status shows the newest run of this checkout and names its repo', () => {
 });
 
 test('status shows the run that started last, whatever its id sorts as', () => {
-  const { dd } = setup();
-  const first = toon(dd('verify', 'shots', '--outcome', 'home and settings render', '--foreground')).run_id;
-  const second = toon(dd('verify', 'shots', '--outcome', 'home and settings render', '--foreground')).run_id;
-  assert.notEqual(first, second);
-  assert.equal(toon(dd('status')).run_id, second);
+  const { dd, env } = setup();
+  const a = toon(dd('verify', 'shots', '--outcome', 'home and settings render', '--foreground')).run_id;
+  const b = toon(dd('verify', 'shots', '--outcome', 'home and settings render', '--foreground')).run_id;
+  const early = [a, b].sort()[0];
+  const file = join(env.DONE_DONE_HOME, 'runs', 'notes', early, 'run.json');
+  const run = JSON.parse(readFileSync(file, 'utf8'));
+  run.created = '2099-01-01T00:00:00.000Z';
+  writeFileSync(file, JSON.stringify(run));
+  assert.equal(toon(dd('status')).run_id, early);
 });
 
 test('a journey past its timeout is killed and the run ends inconclusive', async () => {

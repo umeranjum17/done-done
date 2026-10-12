@@ -84,7 +84,9 @@ done-done run smoke
 done-done check --outcome "it starts" .proof/*.log
 ```
 
-You should see `result: PASS` twice. After later runs, use the run id that `done-done run` prints in place of `*`.
+Each command prints one machine-readable result. By default it is [TOON](https://github.com/toon-format/spec) (the compact AXI convention), and a passing check shows `result: pass`. Add `--json` for JSON, or `--full` to list every evidence file or finding instead of the first few. After later runs, use the `run_id` the result prints in place of `*`.
+
+Run `done-done` with no arguments to see the current config and the next step.
 
 ## What it checks
 

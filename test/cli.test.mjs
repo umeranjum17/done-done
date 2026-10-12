@@ -8,8 +8,13 @@ import { after, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { crc32, deflateSync } from 'node:zlib';
 import { parse } from 'yaml';
+import { decode } from '@toon-format/toon';
 
 const CLI = join(dirname(fileURLToPath(import.meta.url)), '..', 'dist', 'cli.js');
+
+// CLI results default to TOON; parse that (the AXI convention) or JSON with --json.
+const toon = (r) => decode(r.out);
+const json = (r) => JSON.parse(r.out);
 
 const isIgnored = (repo, path) => spawnSync('git', ['check-ignore', '--no-index', '-q', '--', path], { cwd: repo }).status === 0;
 
@@ -62,7 +67,7 @@ function setup(projectYaml = 'app: notes\nevidence:\n  root: .proof\n  ignore_pa
   const shots = () => {
     const r = dd('run', 'shots');
     assert.equal(r.code, 0, r.out);
-    const id = r.out.match(/^run: (\S+)/m)[1];
+    const id = toon(r).run_id;
     return { id, files: [`.proof/${id}/home.png`, `.proof/${id}/settings.png`] };
   };
   return { dir, repo, env, sh, dd, shots };
@@ -73,7 +78,10 @@ test('a fresh run of the real journey passes the check', () => {
   const { files } = shots();
   const r = dd('check', '--outcome', 'home and settings render', ...files);
   assert.equal(r.code, 0, r.out);
-  assert.match(r.out, /result: PASS \(2 evidence files\)/);
+  const d = toon(r);
+  assert.equal(d.result, 'pass');
+  assert.equal(d.files, 2);
+  assert.deepEqual(d.evidence, files);
 });
 
 test('empty, truncated, blank, tiny and mislabelled images fail with the reason', () => {
@@ -121,7 +129,7 @@ test('files outside any run record are inconclusive; a failed or dirty run fails
   const run = dd('run', 'broken');
   assert.equal(run.code, 1, run.out);
   assert.match(run.out, /exited 4/);
-  const id = run.out.match(/^run: (\S+)/m)[1];
+  const id = toon(run).run_id;
   assert.match(dd('check', '--outcome', 'broken run', `.proof/${id}/home.png`).out, /its run command exited 4/);
   writeFileSync(join(repo, 'src', 'app.js'), 'export const app = 3;\n');
   const dirty = dd('run', '--', `node make-shots.mjs dirty`);
@@ -135,7 +143,7 @@ test('open and close a hand-driven run', () => {
   const { repo, dd } = setup();
   const open = dd('run', '--open');
   assert.equal(open.code, 0, open.out);
-  const id = open.out.match(/^run: (\S+)/m)[1];
+  const id = toon(open).run_id;
   mkdirSync(join(repo, '.proof', 'manual'), { recursive: true });
   writeFileSync(join(repo, '.proof', 'manual', 'cli.log'), '$ notes add milk\nadded: milk\nexit 0\n');
   const close = dd('run', '--close', id);
@@ -194,7 +202,7 @@ test('config is strict and scoped', () => {
 test('videos are probed for real frames', { skip: spawnSync('ffmpeg', ['-version']).error && 'ffmpeg not installed' }, () => {
   const { repo, dd } = setup('app: notes\nevidence:\n  root: .proof\n');
   const open = dd('run', '--open');
-  const id = open.out.match(/^run: (\S+)/m)[1];
+  const id = toon(open).run_id;
   const out = join(repo, '.proof', 'clip.mp4');
   mkdirSync(dirname(out), { recursive: true });
   execFileSync('ffmpeg', ['-v', 'error', '-f', 'lavfi', '-i', 'testsrc=size=128x96:rate=10', '-t', '1', '-pix_fmt', 'yuv420p', out]);
@@ -275,6 +283,7 @@ test('init refuses a malformed config with a clear error and no rewrite', () => 
   const r = dd('init');
   assert.equal(r.code, 2, r.out);
   assert.match(r.out, /\.done-done\.yaml/);
+  assert.match(toon(r).help[0], /done-done init/, 'a config error names the recovery command');
   assert.deepEqual(readFileSync(join(repo, '.done-done.yaml')), before, 'the bad file is not rewritten');
   writeFileSync(join(repo, '.done-done.yaml'), 'unknown_key: 1\n');
   assert.equal(dd('init').code, 2, 'an invalid key is refused too');
@@ -304,7 +313,7 @@ test('a repo set up by init captures and checks real evidence, then catches stal
   sh('commit', '-qm', 'config and capture script');
   const r = dd('run', '--', 'node make-log.mjs ${RUN_ID}');
   assert.equal(r.code, 0, r.out);
-  const id = r.out.match(/^run: (\S+)/m)[1];
+  const id = toon(r).run_id;
   assert.equal(dd('check', '--outcome', 'notes add works', `.proof/${id}/session.log`).code, 0);
   assert.equal(dd('check', '--outcome', 'gone', `.proof/${id}/missing.log`).code, 1, 'a missing file fails');
   writeFileSync(join(repo, 'app.js'), 'export const app = 2;\n');
@@ -312,4 +321,62 @@ test('a repo set up by init captures and checks real evidence, then catches stal
   const stale = dd('check', '--outcome', 'notes add works', `.proof/${id}/session.log`);
   assert.equal(stale.code, 1, stale.out);
   assert.match(stale.out, /evidence is for commit/);
+});
+
+test('a result is one TOON document by default, and --json is the same data as JSON', () => {
+  const { dd, shots } = setup();
+  const { files } = shots();
+  const r = dd('check', '--outcome', 'home renders', ...files);
+  assert.equal(r.code, 0, r.out);
+  const d = toon(r); // decode() throws unless stdout is exactly one TOON document
+  assert.equal(d.command, 'check');
+  assert.equal(d.result, 'pass');
+  assert.equal(d.files, 2);
+  const j = dd('check', '--json', '--outcome', 'home renders', ...files);
+  assert.equal(j.code, 0, j.out);
+  assert.deepEqual(json(j), d);
+});
+
+test('--full lists every finding; the compact default truncates and says how many it dropped', () => {
+  const { dd } = setup();
+  const missing = ['a.png', 'b.png', 'c.png', 'd.png', 'e.png', 'f.png', 'g.png'];
+  const compact = dd('check', '--outcome', 'many missing', ...missing);
+  assert.equal(compact.code, 1, compact.out);
+  const c = toon(compact);
+  assert.equal(c.evidence.length, 5, 'compact shows the first five evidence files');
+  assert.equal(c.evidence_omitted, 2);
+  assert.equal(c.findings.length, 5, 'compact shows the first five findings');
+  assert.equal(c.findings_omitted, 2);
+  const f = toon(dd('check', '--full', '--outcome', 'many missing', ...missing));
+  assert.equal(f.evidence.length, 7, '--full shows every evidence file');
+  assert.equal(f.findings.length, 7, '--full shows every finding');
+  assert.equal(f.findings_omitted, undefined);
+  assert.equal(f.evidence_omitted, undefined);
+});
+
+test('a failing check points at the exact command that produces the proof', () => {
+  const { dd } = setup();
+  const r = dd('check', '--outcome', 'nothing captured yet', '.proof/nope/session.log');
+  assert.equal(r.code, 1, r.out);
+  assert.match(toon(r).help[0], /done-done run shots/);
+});
+
+test('bare done-done orients with the config state and the next step', () => {
+  const { dd } = setup();
+  const r = dd();
+  assert.equal(r.code, 0, r.out);
+  const b = toon(r);
+  assert.equal(b.command, 'done-done');
+  assert.equal(b.config, 'present');
+  assert.deepEqual(b.journeys, ['shots']);
+  assert.match(b.help[0], /done-done run shots/);
+});
+
+test('bare done-done in a repo with no config points at init', () => {
+  const { dd } = bareRepo();
+  const r = dd();
+  assert.equal(r.code, 0, r.out);
+  const b = toon(r);
+  assert.equal(b.config, 'missing');
+  assert.match(b.help[0], /done-done init/);
 });

@@ -6,7 +6,7 @@ import { homedir } from 'node:os';
 import { dirname, isAbsolute, join, matchesGlob, relative, resolve, sep } from 'node:path';
 import { parseArgs } from 'node:util';
 import { encode } from '@toon-format/toon';
-import { type Config, home, loadConfig, UsageError } from './config.js';
+import { type Config, loadConfig, UsageError } from './config.js';
 import { type Capture, judge, type Judged } from './judge.js';
 import { checkMedia } from './media.js';
 
@@ -33,6 +33,7 @@ const FLAGS: Record<string, string> = {
   '--outcome "<claim>"': 'the outcome the evidence files prove; the files follow as arguments',
   '--from <file | - | PR URL>': 'read the claim from the newest "## Checks" block of a file, stdin or a PR body',
   '--trusted-ref <ref>': 'read .done-done.yaml from this git ref instead of the working tree (use in CI)',
+  '--claim-id <id>': 'the claim the evidence proves; evidence already used for another claim id is reuse (default: the current branch, or the outcome on a detached HEAD)',
   '--judge': 'a model says whether each PNG/JPEG capture shows the outcome (off by default; or judge.enabled: true)',
   '--verify <head>': 'read-only: verify the receipt recorded for <head>',
 };
@@ -50,19 +51,19 @@ const COMMANDS: Record<string, { usage: [string, string][]; flags: string[]; mor
   },
   check: {
     usage: [
-      ['done-done check --outcome "<claim>" <files...> [--trusted-ref <ref>] [--judge]', 'check evidence files against a claim'],
-      ['done-done check --from <file | - | PR URL> [--trusted-ref <ref>] [--judge]', "check a claim's Checks block"],
+      ['done-done check --outcome "<claim>" <files...> [--claim-id <id>] [--trusted-ref <ref>] [--judge]', 'check evidence files against a claim'],
+      ['done-done check --from <file | - | PR URL> [--claim-id <id>] [--trusted-ref <ref>] [--judge]', "check a claim's Checks block"],
     ],
-    flags: ['--outcome "<claim>"', '--from <file | - | PR URL>', '--trusted-ref <ref>', '--judge'],
+    flags: ['--outcome "<claim>"', '--from <file | - | PR URL>', '--claim-id <id>', '--trusted-ref <ref>', '--judge'],
     more: [CHECKS_TEXT],
   },
   receipt: {
     usage: [
-      ['done-done receipt --outcome "<claim>" <files...> [--trusted-ref <ref>] [--judge]', 'record a passing check for HEAD'],
-      ['done-done receipt --from <file | - | PR URL> [--trusted-ref <ref>] [--judge]', "record from a claim's Checks block"],
+      ['done-done receipt --outcome "<claim>" <files...> [--claim-id <id>] [--trusted-ref <ref>] [--judge]', 'record a passing check for HEAD'],
+      ['done-done receipt --from <file | - | PR URL> [--claim-id <id>] [--trusted-ref <ref>] [--judge]', "record from a claim's Checks block"],
       ['done-done receipt --verify <head>', 'read-only: verify a recorded receipt'],
     ],
-    flags: ['--outcome "<claim>"', '--from <file | - | PR URL>', '--trusted-ref <ref>', '--judge', '--verify <head>'],
+    flags: ['--outcome "<claim>"', '--from <file | - | PR URL>', '--claim-id <id>', '--trusted-ref <ref>', '--judge', '--verify <head>'],
     more: [CHECKS_TEXT],
   },
 };
@@ -349,11 +350,12 @@ type CheckOutcome = {
 async function runCheck(argv: string[]): Promise<CheckOutcome> {
   const { values, positionals } = parseArgs({
     args: argv,
-    options: { outcome: { type: 'string' }, from: { type: 'string' }, 'trusted-ref': { type: 'string' }, judge: { type: 'boolean' } },
+    options: { outcome: { type: 'string' }, from: { type: 'string' }, 'claim-id': { type: 'string' }, 'trusted-ref': { type: 'string' }, judge: { type: 'boolean' } },
     allowPositionals: true,
   });
   if (!!values.outcome === !!values.from) throw new UsageError('check needs exactly one of --outcome or --from');
   if (values.from && positionals.length) throw new UsageError('--from takes no file arguments; the Checks block names them');
+  if (values['claim-id'] !== undefined && !values['claim-id'].trim()) throw new UsageError('--claim-id needs a non-empty id');
   const repo = repoRoot();
   let projectText: string | null = null;
   if (values['trusted-ref']) {
@@ -437,17 +439,19 @@ async function runCheck(argv: string[]): Promise<CheckOutcome> {
     if (rec.dirty && !cfg.evidence.allow_dirty) findings.push({ level: 'fail', why: `${name}: captured from a tree with uncommitted changes (run ${rec.run_id})` });
     if (rec.exit !== null && rec.exit !== 0) findings.push({ level: 'fail', why: `${name}: its run command exited ${rec.exit} (run ${rec.run_id})` });
   }
-  // Reuse: fail only when every cited file was already used for a different claim in this repo.
-  const ledger = join(home(), 'hashes');
-  const key = `${sha256(Buffer.from(repo)).slice(0, 12)}:${sha256(Buffer.from(claim?.outcome ?? '')).slice(0, 12)}`;
+  // Reuse: fail only when every cited file was already used for a different claim id. The ledger lives in the
+  // evidence root next to the run records it guards: one per repo, shared by every checkout of it, never in git.
+  const ledger = join(cfg.evidence.root, '.done-done', 'ledger');
+  const claimId = (values['claim-id'] ?? (git(repo, 'branch', '--show-current') || claim?.outcome) ?? '').replace(/\s+/g, ' ').trim();
   const used = new Map<string, Set<string>>();
   if (existsSync(ledger))
     for (const line of readFileSync(ledger, 'utf8').split('\n')) {
-      const [h, k] = line.split(' ');
-      if (h && k) used.set(h, (used.get(h) ?? new Set()).add(k));
+      const [h, k] = [line.slice(0, 64), line.slice(65)];
+      if (k) used.set(h, (used.get(h) ?? new Set()).add(k));
     }
-  const reusedElsewhere = (h: string) => [...(used.get(h) ?? [])].some((k) => k !== key && k.startsWith(key.split(':')[0]));
-  if (hashes.length && hashes.every(reusedElsewhere)) findings.push({ level: 'fail', why: 'every evidence file was already used as proof of a different claim' });
+  const others = (h: string) => [...(used.get(h) ?? [])].filter((k) => k !== claimId);
+  if (hashes.length && hashes.every((h) => others(h).length))
+    findings.push({ level: 'fail', why: `every evidence file was already used as proof of a different claim (claim id ${[...new Set(hashes.flatMap(others))].join(', ')}), not this one (claim id ${claimId})` });
   let judged: Record<string, unknown> | undefined;
   let judgeLevel: Finding['level'] | undefined;
   if ((values.judge || cfg.judge.enabled) && claim) {
@@ -469,7 +473,7 @@ async function runCheck(argv: string[]): Promise<CheckOutcome> {
   const rep = report(findings, files, { cfg, repo, claim: claim?.outcome, source: values.from, judge: judged, judgeLevel });
   if (rep.code === PASS) {
     mkdirSync(dirname(ledger), { recursive: true });
-    appendFileSync(ledger, hashes.filter((h) => !used.get(h)?.has(key)).map((h) => `${h} ${key}\n`).join(''));
+    appendFileSync(ledger, hashes.filter((h) => !used.get(h)?.has(claimId)).map((h) => `${h} ${claimId}\n`).join(''));
   }
   return { code: rep.code, result: rep.result, judge: judged, claim: claim?.outcome, files, cited, head: now };
 }

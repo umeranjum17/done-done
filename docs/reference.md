@@ -4,7 +4,7 @@ Everything `init`, `run`, `check`, `receipt` and the config files do. For the ov
 
 ## Install
 
-For the install steps, see the [README quick start](../README.md#quick-start). done-done needs Node 22.5 or later and git (the opt-in judge needs Node 22.18). `ffprobe` is optional. Without it, videos are reported as "not verified" and the check is inconclusive, never a pass.
+For the install steps, see the [README Manual CLI](../README.md#manual-cli). done-done needs Node 22.5 or later and git (the opt-in judge needs Node 22.18). `ffprobe` is optional. Without it, videos are reported as "not verified" and the check is inconclusive, never a pass.
 
 ## Use
 
@@ -144,7 +144,7 @@ done-done receipt --verify <head>         # read-only: check a recorded receipt
 
 ### Output
 
-`run`, `check` and `receipt` print one machine-readable result on stdout. By default it is [TOON](https://github.com/toon-format/spec) in the AXI convention (the shape `no-mistakes axi status` uses): scalar `key: value` lines, tabular arrays, and a `help` list that names the exact next command. `--json` prints the same result as JSON. `--full` lists every evidence file or finding; without it, lists longer than five rows are truncated and the count of dropped rows is reported (`evidence_omitted` or `findings_omitted`).
+`run`, `check` and `receipt` print one machine-readable result on stdout. By default it is [TOON](https://github.com/toon-format/spec) in the AXI convention (the shape `no-mistakes axi status` uses): scalar `key: value` lines, tabular arrays, and a `help` list that names the exact next command. `--json` prints the same result as JSON. `--full` lists every evidence file or finding; without it, lists longer than five rows are truncated and the count of dropped rows is reported (`evidence_omitted` or `findings_omitted`). `--version` prints the version.
 
 Running `done-done` with no subcommand prints the repo's config state (`config: present | missing | none`), its journeys and run count, and the next step. Usage and config errors also print one result: an `error` field and a `help` line with the recovery command (for example `done-done init` when no config exists).
 

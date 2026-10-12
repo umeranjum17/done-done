@@ -1,12 +1,14 @@
 {
-  "name": "done-done",
+  "name": "done-done-axi",
   "version": "0.1.0",
   "license": "Apache-2.0",
   "description": "Proof that the real product works before a task is called done: commit-bound evidence runs and evidence checks.",
   "type": "module",
-  "repository": { "type": "git", "url": "git+https://github.com/umeranjum17/done-done.git" },
-  "keywords": ["done", "proof", "evidence", "screenshot", "verification", "cli", "agent"],
-  "bin": { "done-done": "dist/cli.js" },
+  "repository": { "type": "git", "url": "git+https://github.com/umeranjum17/done-done-axi.git" },
+  "homepage": "https://github.com/umeranjum17/done-done-axi#readme",
+  "bugs": { "url": "https://github.com/umeranjum17/done-done-axi/issues" },
+  "keywords": ["axi", "done", "proof", "evidence", "screenshot", "verification", "cli", "agent"],
+  "bin": { "done-done-axi": "dist/cli.js", "done-done": "dist/cli.js" },
   "files": ["dist", "!dist/skill.js", "skills", "docs"],
   "engines": { "node": ">=22.5" },
   "scripts": {

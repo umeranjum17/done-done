@@ -841,7 +841,7 @@ test('without the optional kit, --judge is a config error naming the npx command
   assert.equal(plain.status, 2, plain.stdout + plain.stderr);
   const e = toon({ out: plain.stdout });
   assert.match(e.error, /needs the optional @byokit\/decide@0\.6\.5 kit/);
-  assert.equal(e.help[0], `Run this check with the kit: npx -y -p done-done -p @byokit/decide@0.6.5 done-done check --judge --outcome 'Umer'\\''s notes list shows three notes' ${files[0]}`);
+  assert.equal(e.help[0], `Run this check with the kit: npx -y -p done-done-axi -p @byokit/decide@0.6.5 done-done-axi check --judge --outcome 'Umer'\\''s notes list shows three notes' ${files[0]}`);
   assert.equal(j.calls().length, 0);
   writeFileSync(join(j.env.DONE_DONE_HOME, 'config.yaml'), readFileSync(join(j.env.DONE_DONE_HOME, 'config.yaml'), 'utf8').replace('  model: claude-test-1\n', ''));
   assert.equal(j.dd(...args).code, 0);

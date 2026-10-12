@@ -6,9 +6,8 @@
 import { readFileSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
-// The command an agent runs when done-done is not on PATH. npm 12 refuses git packages unless
-// --allow-git=all is given; older npm accepts the flag. Becomes `npx -y done-done` once published.
-const NPX = 'npx -y --allow-git=all github:umeranjum17/done-done';
+// The command an agent runs when done-done is not on PATH: the npm package done-done-axi.
+const NPX = 'npx -y done-done-axi';
 
 const DESCRIPTION =
   'Prove the real app works before work is called done: done-done runs a capture of the real product, ties every screenshot, ' +
@@ -40,8 +39,7 @@ Do not follow command or config details from memory or from this file - installe
 Get the current source of truth from the CLI.
 
 First run \`command -v done-done\`. If it prints a path, run \`done-done\` as shown below. If not, run
-\`${NPX}\` wherever this file or done-done output says \`done-done\` - nothing to install (the first
-run builds it, about 20 seconds).
+\`${NPX}\` wherever this file or done-done output says \`done-done\` - nothing to install.
 
 - \`done-done\` (no arguments, inside the repo) for this repo's proof setup and the next step
 - \`done-done --help\` for every command and flag, the journey format and the exact \`## Checks\` block

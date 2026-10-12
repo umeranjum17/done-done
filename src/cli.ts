@@ -68,7 +68,7 @@ const COMMANDS: Record<string, { usage: [string, string][]; flags: string[]; mor
 };
 
 const rows = (pairs: [string, string][], width = Math.max(...pairs.map(([a]) => a.length)) + 3) => pairs.map(([a, b]) => `  ${a}${' '.repeat(Math.max(3, width - a.length))}${b}`).join('\n');
-const GLOBAL_TEXT = `global flags: --json (JSON instead of TOON), --full (do not truncate lists), --help (this command's usage)
+const GLOBAL_TEXT = `global flags: --json (JSON instead of TOON), --full (do not truncate lists), --version, --help (this command's usage)
 exit codes: 0 pass, 1 fail, 2 usage or config error, 3 inconclusive`;
 
 const USAGE_TEXT = `install: npm install -g done-done-axi (installs done-done-axi and done-done), or run npx -y done-done-axi <command>
@@ -775,6 +775,10 @@ async function main(argv: string[]): Promise<number> {
     if (cmd === 'receipt') return await cmdReceipt(rest);
     if (cmd === '--help' || cmd === '-h' || cmd === 'help') {
       console.log(USAGE_TEXT);
+      return PASS;
+    }
+    if (cmd === '--version') {
+      console.log(JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version);
       return PASS;
     }
     if (cmd === undefined) return cmdBare();

@@ -49,7 +49,7 @@ run builds it, about 20 seconds).
 
 Results are TOON: read \`result\` and follow the \`help\` lines through
 \`init\`, \`run\`, \`check\` and \`receipt\`. Proof comes from driving the real product, not from a unit test run, and counts only from a committed
-tree: commit the done-done setup (config, .gitignore, capture script) before you capture. \`fail\` or
+tree: commit the done-done setup (config, capture script) before you capture. \`fail\` or
 \`inconclusive\` is not done: fix the cause and re-run, or tell the user exactly what is still unproven.
 
 ## Request

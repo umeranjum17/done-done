@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { execFileSync, spawnSync } from 'node:child_process';
-import { createHash } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, isAbsolute, join, matchesGlob, relative, resolve, sep } from 'node:path';
@@ -13,11 +13,11 @@ import { checkMedia } from './media.js';
 const PASS = 0, FAIL = 1, USAGE = 2, INCONCLUSIVE = 3;
 
 // The shape of a journey, so a new user or agent can write one without opening the reference.
-// done-done sets DONE_DONE_EVIDENCE_ROOT and replaces ${RUN_ID}, so the example works for any evidence root.
+// done-done sets DONE_DONE_EVIDENCE_ROOT (the run's own folder) and replaces ${RUN_ID}, so the example works for any evidence root.
 const journeyExample = 'journeys: { smoke: { command: "<drive the real app> > $DONE_DONE_EVIDENCE_ROOT/${RUN_ID}.log" } }';
 
-const JOURNEYS_TEXT = `journeys (.done-done.yaml): the command runs with DONE_DONE_EVIDENCE_ROOT (the evidence root) and DONE_DONE_RUN_ID
-  set, and \${RUN_ID} in it is replaced; it must write its files under the evidence root, e.g.
+const JOURNEYS_TEXT = `journeys (.done-done.yaml): the command runs with DONE_DONE_EVIDENCE_ROOT (this run's own new folder in the evidence
+  root) and DONE_DONE_RUN_ID set, and \${RUN_ID} in it is replaced; it must write its files into that folder, e.g.
   ${journeyExample}`;
 const CHECKS_TEXT = `Checks block (--from): the newest "## Checks" heading, then these four keys, each at the start of a line:
   outcome: <what a user can now do>
@@ -28,8 +28,8 @@ const CHECKS_TEXT = `Checks block (--from): the newest "## Checks" heading, then
 // One table drives `--help` and every `<command> --help`: each command's usage lines and the flags it takes.
 const FLAGS: Record<string, string> = {
   '-- <command...>': 'run this command instead of a journey; ${RUN_ID} in it becomes the run id',
-  '--open': 'open a run for a hand- or agent-driven proof; prints its id',
-  '--close <run-id>': 'seal an open run and record the files written since it opened',
+  '--open': 'open a run for a hand- or agent-driven proof; prints its id and folder',
+  '--close <run-id>': 'seal an open run and record the files in its folder',
   '--outcome "<claim>"': 'the outcome the evidence files prove; the files follow as arguments',
   '--from <file | - | PR URL>': 'read the claim from the newest "## Checks" block of a file, stdin or a PR body',
   '--trusted-ref <ref>': 'read .done-done.yaml from this git ref instead of the working tree (use in CI)',
@@ -38,11 +38,11 @@ const FLAGS: Record<string, string> = {
 };
 // `more` is the reference text a command needs beyond its flags, shared with the top-level help.
 const COMMANDS: Record<string, { usage: [string, string][]; flags: string[]; more: string[] }> = {
-  init: { usage: [['done-done init', 'write a minimal .done-done.yaml and ignore the evidence root']], flags: [], more: [JOURNEYS_TEXT] },
+  init: { usage: [['done-done init', 'write a minimal .done-done.yaml (evidence lives outside the repo)']], flags: [], more: [JOURNEYS_TEXT] },
   run: {
     usage: [
       ['done-done run [<journey>] [-- <command...>]', 'run a journey (or command) and record the evidence it writes'],
-      ['done-done run --open [<journey>]', 'open a run for a hand- or agent-driven proof; prints its id'],
+      ['done-done run --open [<journey>]', 'open a run for a hand- or agent-driven proof; prints its id and folder'],
       ['done-done run --close <run-id>', 'seal an open run'],
     ],
     flags: ['-- <command...>', '--open', '--close <run-id>'],
@@ -127,7 +127,6 @@ type RunRecord = {
   ended_at: string | null;
   exit: number | null;
   files: { path: string; sha256: string; bytes: number }[];
-  before?: Record<string, string>;
 };
 
 // A path as the user should see it: repo-relative inside the repo, else with the home directory as ~.
@@ -142,6 +141,16 @@ const shown = (repo: string, p: string) => {
 
 const git = (cwd: string, ...args: string[]) => execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
 const sha256 = (b: Buffer) => createHash('sha256').update(b).digest('hex');
+
+// `p` relative to `base` when it lies under it, else null.
+function under(base: string, p: string): string | null {
+  const r = relative(base, p);
+  return r && !outside(r) ? r : null;
+}
+
+// A path to pass back to done-done (an evidence file to cite, a folder to capture into): exact, so no shell
+// needs to expand `~`. Repo-relative inside the repo, absolute outside it (the default evidence root).
+const citable = (repo: string, p: string) => under(repo, p) ?? p;
 
 function repoRoot(): string {
   try {
@@ -161,19 +170,17 @@ function head(repo: string) {
 
 const recordsDir = (cfg: Config) => join(cfg.evidence.root, '.done-done', 'runs');
 
-// Every file under the evidence root (except done-done's own records), keyed by path, valued by mtime+size.
-function snapshot(root: string): Record<string, string> {
-  const out: Record<string, string> = {};
-  if (!existsSync(root)) return out;
-  for (const entry of readdirSync(root, { recursive: true, withFileTypes: true })) {
-    if (!entry.isFile()) continue;
-    const path = join(entry.parentPath, entry.name);
-    const rel = relative(root, path);
-    if (rel.startsWith('.done-done')) continue;
-    const s = statSync(path);
-    out[rel] = `${s.mtimeMs}:${s.size}`;
-  }
-  return out;
+// Each run captures into its own new folder in the evidence root. Every checkout of a repo shares that root,
+// so a run records only its own folder and never claims a file another, overlapping run wrote.
+const runDir = (cfg: Config, runId: string) => join(cfg.evidence.root, runId);
+
+// Every file in a run's folder, relative to the evidence root.
+function captured(cfg: Config, runId: string): string[] {
+  const dir = runDir(cfg, runId);
+  if (!existsSync(dir)) return [];
+  return readdirSync(dir, { recursive: true, withFileTypes: true })
+    .filter((e) => e.isFile())
+    .map((e) => relative(cfg.evidence.root, join(e.parentPath, e.name)));
 }
 
 function writeRecord(cfg: Config, rec: RunRecord) {
@@ -187,20 +194,16 @@ function writeRecord(cfg: Config, rec: RunRecord) {
 function openRun(repo: string, cfg: Config, journey: string | null, command: string | null): RunRecord {
   const h = head(repo);
   const stamp = new Date().toISOString().replace(/[-:]/g, '').replace(/\.\d+Z$/, 'Z');
+  // The random suffix keeps two runs in the same second at one commit apart; mkdir without recursive refuses a reused id.
+  const runId = `${stamp}-${h.commit.slice(0, 8)}-${randomBytes(3).toString('hex')}`;
   mkdirSync(cfg.evidence.root, { recursive: true });
-  return {
-    schema: 1, run_id: `${stamp}-${h.commit.slice(0, 8)}`, journey, command, ...h,
-    started_at: new Date().toISOString(), ended_at: null, exit: null, files: [], before: snapshot(cfg.evidence.root),
-  };
+  mkdirSync(runDir(cfg, runId));
+  return { schema: 1, run_id: runId, journey, command, ...h, started_at: new Date().toISOString(), ended_at: null, exit: null, files: [] };
 }
 
 function closeRun(repo: string, cfg: Config, rec: RunRecord): number {
   const now = head(repo);
-  const after = snapshot(cfg.evidence.root);
-  const before = rec.before ?? {};
-  delete rec.before;
-  rec.files = Object.keys(after)
-    .filter((p) => before[p] !== after[p])
+  rec.files = captured(cfg, rec.run_id)
     .sort()
     .map((p) => {
       const b = readFileSync(join(cfg.evidence.root, p));
@@ -208,11 +211,11 @@ function closeRun(repo: string, cfg: Config, rec: RunRecord): number {
     });
   rec.ended_at = new Date().toISOString();
   const record = writeRecord(cfg, rec);
-  const rel = (p: string) => relative(repo, join(cfg.evidence.root, p));
+  const rel = (p: string) => citable(repo, join(cfg.evidence.root, p));
   let reason = '';
   if (now.commit !== rec.commit) reason = `HEAD moved from ${rec.commit} to ${now.commit} during the run; evidence is not tied to one commit`;
   else if (rec.exit !== null && rec.exit !== 0) reason = `the run command exited ${rec.exit}`;
-  else if (!rec.files.length) reason = `the run wrote no files under ${shown(repo, cfg.evidence.root)}; the command gets it as $DONE_DONE_EVIDENCE_ROOT and its run id as $DONE_DONE_RUN_ID (or \${RUN_ID} in the command)`;
+  else if (!rec.files.length) reason = `the run wrote no files into its folder ${shown(repo, runDir(cfg, rec.run_id))}; the command gets it as $DONE_DONE_EVIDENCE_ROOT and its run id as $DONE_DONE_RUN_ID (or \${RUN_ID} in the command)`;
   const evidence: unknown[] = FULL ? rec.files.map((f) => ({ path: rel(f.path), sha256: f.sha256, bytes: f.bytes })) : rec.files.map((f) => rel(f.path));
   const rows = cap(evidence);
   const result: Record<string, unknown> = {
@@ -267,8 +270,8 @@ function cmdRun(argv: string[]): number {
       result: 'open',
       run_id: rec.run_id,
       commit: rec.commit,
-      evidence_root: shown(repo, cfg.evidence.root),
-      help: [`Capture into the evidence root, then seal the run: done-done run --close ${rec.run_id}`],
+      evidence_root: citable(repo, runDir(cfg, rec.run_id)),
+      help: [`Capture into evidence_root (this run's own folder), then seal the run: done-done run --close ${rec.run_id}`],
     });
     return PASS;
   }
@@ -277,7 +280,7 @@ function cmdRun(argv: string[]): number {
   rec.command = expanded;
   const r = spawnSync(expanded, {
     cwd: repo, shell: true, stdio: 'inherit',
-    env: { ...process.env, DONE_DONE_RUN_ID: rec.run_id, DONE_DONE_EVIDENCE_ROOT: cfg.evidence.root },
+    env: { ...process.env, DONE_DONE_RUN_ID: rec.run_id, DONE_DONE_EVIDENCE_ROOT: runDir(cfg, rec.run_id) },
   });
   rec.exit = r.status ?? 1;
   return closeRun(repo, cfg, rec);
@@ -400,15 +403,23 @@ async function runCheck(argv: string[]): Promise<CheckOutcome> {
     if (v.status !== 'ok') findings.push({ level: v.status === 'fail' ? 'fail' : 'inconclusive', why: `${name}: ${v.why}` });
     const hash = sha256(bytes);
     hashes.push(hash);
-    cited.push({ path: relative(repo, path), sha256: hash });
+    cited.push({ path: receiptPath(repo, cfg, path), sha256: hash });
     if (seen.has(hash)) findings.push({ level: 'fail', why: `${name}: byte-identical to ${seen.get(hash)}` });
     seen.set(hash, name);
     if (v.status === 'fail') continue;
-    const rec = records.filter((r) => r.files.some((f) => f.sha256 === hash)).sort((a, b) => b.started_at.localeCompare(a.started_at))[0];
-    if (!rec) {
+    // A file in the evidence root is claimed by the record that lists its path; a copy elsewhere, by its bytes.
+    const inRoot = under(cfg.evidence.root, path);
+    const claims = records.filter((r) => r.files.some((f) => f.sha256 === hash && (inRoot === null || f.path === inRoot)));
+    if (!claims.length) {
       findings.push({ level: 'inconclusive', why: `${name}: not in any done-done run record, so it is not tied to a commit` });
       continue;
     }
+    // Records from before runs had their own folders can both claim one file; never guess which run wrote it.
+    if (claims.length > 1) {
+      findings.push({ level: 'inconclusive', why: `${name}: claimed by more than one run (${claims.map((r) => r.run_id).join(', ')}), so it is not tied to one commit` });
+      continue;
+    }
+    const rec = claims[0];
     // Only a capture tied to a run record can reach the judge, so a stray cited file is never sent.
     if (v.status === 'ok') captures.push({ name, bytes, sha256: hash, media: v });
     const stale = staleness(repo, cfg, rec.commit, now.commit);
@@ -473,6 +484,17 @@ type Receipt = {
 
 const receiptsDir = (cfg: Config) => join(cfg.evidence.root, '.done-done', 'receipts');
 
+// A receipt names a cited file relative to the repo, or to an evidence root outside it under this prefix,
+// so any checkout of the repo (or a CI job that restored the evidence root) finds the same file.
+const IN_EVIDENCE = '<evidence root>/';
+
+function receiptPath(repo: string, cfg: Config, p: string): string {
+  const inRepo = under(repo, p);
+  if (inRepo !== null) return inRepo;
+  const inRoot = under(cfg.evidence.root, p);
+  return inRoot === null ? p : IN_EVIDENCE + inRoot;
+}
+
 function writeReceipt(cfg: Config, rec: Receipt): string {
   const path = join(receiptsDir(cfg), `${rec.head}.json`);
   mkdirSync(dirname(path), { recursive: true });
@@ -489,7 +511,7 @@ function verifyReceipt(repo: string, cfg: Config, headArg: string): number {
     emit({ command: 'receipt', result: 'fail', head: headArg, reason, help: ['Record a passing check for this head: done-done receipt --from <file|->'] });
     return FAIL;
   };
-  if (!existsSync(path)) return fail(`no receipt for ${short}`);
+  if (!existsSync(path)) return fail(`no receipt for ${short} in ${receiptsDir(cfg)}`);
   let rec: Receipt;
   try {
     rec = JSON.parse(readFileSync(path, 'utf8'));
@@ -505,7 +527,7 @@ function verifyReceipt(repo: string, cfg: Config, headArg: string): number {
   for (const f of rec.files) {
     let bytes: Buffer;
     try {
-      bytes = readFileSync(resolve(repo, f.path));
+      bytes = readFileSync(f.path.startsWith(IN_EVIDENCE) ? join(cfg.evidence.root, f.path.slice(IN_EVIDENCE.length)) : resolve(repo, f.path));
     } catch {
       bad.push(`${f.path}: missing`);
       continue;
@@ -619,8 +641,6 @@ function report(findings: Finding[], files: string[], ctx: ReportContext, note =
   return { code, result };
 }
 
-const INIT_EVIDENCE_ROOT = '.proof';
-
 // Append `<rel>/` to .gitignore unless git already ignores it. Never rewrites existing bytes.
 function ensureIgnored(repo: string, rel: string): boolean {
   const entry = `${rel.replace(/\/+$/, '')}/`;
@@ -641,18 +661,17 @@ function cmdInit(argv: string[]): number {
   const file = join(repo, '.done-done.yaml');
   const existed = existsSync(file);
   const cfg = loadConfig(repo); // validates the existing project config; malformed -> exit 2, no writes
-  let rel: string;
-  if (existed) {
-    const r = relative(repo, cfg.evidence.root);
-    rel = r && !outside(r) ? r : '';
-  } else {
-    const body = `# done-done project config. \`done-done init\` never overwrites this file.\napp: ${JSON.stringify(cfg.app)}\nevidence:\n  root: ${INIT_EVIDENCE_ROOT}\n`;
+  if (!existed) {
+    // No evidence.root: proof goes to <local_root>/<app>, outside the repo, so it outlives this checkout.
+    // The pinned app name is what lets every checkout of the repo find the same evidence and receipts.
+    const body = `# done-done project config. \`done-done init\` never overwrites this file.\napp: ${JSON.stringify(cfg.app)}\n`;
     writeFileSync(`${file}.tmp`, body);
     renameSync(`${file}.tmp`, file);
-    rel = INIT_EVIDENCE_ROOT;
   }
+  // An evidence root inside the repo (an older config's `root: .proof`) stays out of git.
+  const rel = under(repo, cfg.evidence.root);
   const added = !!rel && ensureIgnored(repo, rel);
-  const root = rel || shown(repo, cfg.evidence.root);
+  const root = shown(repo, cfg.evidence.root);
   const check = 'done-done check --outcome "<what you proved>" <files it recorded>';
   emit({
     command: 'init',
@@ -660,10 +679,10 @@ function cmdInit(argv: string[]): number {
     config: existed ? 'unchanged' : 'written',
     app: cfg.app,
     evidence_root: root,
-    gitignore: added ? `added ${rel.replace(/\/+$/, '')}/` : 'unchanged',
+    gitignore: added ? `added ${rel!.replace(/\/+$/, '')}/` : 'unchanged',
     help: Object.keys(cfg.journeys).length
       ? [`Capture proof: ${captureHint(cfg)}, then: ${check}`]
-      : [`Add a journey that drives the real app and saves proof under ${root}, e.g. ${journeyExample}`, `Then commit, run \`done-done run smoke\`, and: ${check}`],
+      : [`Add a journey that drives the real app and saves proof under $DONE_DONE_EVIDENCE_ROOT (each run's own folder in ${root}), e.g. ${journeyExample}`, `Then commit, run \`done-done run smoke\`, and: ${check}`],
   });
   return PASS;
 }

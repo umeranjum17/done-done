@@ -1,9 +1,10 @@
 // End-to-end: drives the built CLI against throwaway git repos with fictional fixtures.
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { appendFileSync, cpSync, mkdirSync, mkdtempSync, existsSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { after, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { crc32, deflateSync } from 'node:zlib';
@@ -147,16 +148,16 @@ test('files outside any run record are inconclusive; a failed or dirty run fails
   assert.match(r.out, /not in any done-done run record/);
   const none = dd('run', '--', 'true');
   assert.equal(none.code, 1, none.out);
-  assert.match(toon(none).reason, /^the run wrote no files under \.proof;/, 'the reason names the evidence root repo-relative');
+  assert.equal(toon(none).reason.split(';')[0], `the run wrote no files into its folder .proof/${toon(none).run_id}`, 'the reason names the run folder repo-relative');
   const run = dd('run', 'broken');
   assert.equal(run.code, 1, run.out);
   assert.match(run.out, /exited 4/);
   const id = toon(run).run_id;
   assert.match(dd('check', '--outcome', 'broken run', `.proof/${id}/home.png`).out, /its run command exited 4/);
   writeFileSync(join(repo, 'src', 'app.js'), 'export const app = 3;\n');
-  const dirty = dd('run', '--', `node make-shots.mjs dirty`);
+  const dirty = dd('run', '--', 'node make-shots.mjs ${RUN_ID}');
   assert.equal(dirty.code, 0, dirty.out);
-  const d = dd('check', '--outcome', 'dirty', '.proof/dirty/settings.png');
+  const d = dd('check', '--outcome', 'dirty', `.proof/${toon(dirty).run_id}/settings.png`);
   assert.equal(d.code, 1, d.out);
   assert.match(d.out, /uncommitted changes/);
 });
@@ -165,12 +166,38 @@ test('open and close a hand-driven run', () => {
   const { repo, dd } = setup();
   const open = dd('run', '--open');
   assert.equal(open.code, 0, open.out);
-  const id = toon(open).run_id;
-  mkdirSync(join(repo, '.proof', 'manual'), { recursive: true });
-  writeFileSync(join(repo, '.proof', 'manual', 'cli.log'), '$ notes add milk\nadded: milk\nexit 0\n');
+  const { run_id: id, evidence_root: folder } = toon(open);
+  assert.equal(folder, `.proof/${id}`, 'a hand-driven run captures into its own folder');
+  writeFileSync(join(repo, folder, 'cli.log'), '$ notes add milk\nadded: milk\nexit 0\n');
   const close = dd('run', '--close', id);
   assert.equal(close.code, 0, close.out);
-  assert.equal(dd('check', '--outcome', 'notes add works', '.proof/manual/cli.log').code, 0);
+  assert.equal(dd('check', '--outcome', 'notes add works', `${folder}/cli.log`).code, 0);
+});
+
+test('two runs in the same second at one commit get distinct ids and folders', () => {
+  const { dd } = setup();
+  // Retry until two runs share a timestamp second, so the test proves the suffix keeps them apart.
+  let a, b;
+  for (let i = 0; i < 10 && (!a || a.run_id.slice(0, 16) !== b.run_id.slice(0, 16)); i++) [a, b] = [toon(dd('run', '--open')), toon(dd('run', '--open'))];
+  assert.equal(a.run_id.slice(0, 26), b.run_id.slice(0, 26), 'same second, same commit');
+  assert.notEqual(a.run_id, b.run_id);
+  assert.notEqual(a.evidence_root, b.evidence_root);
+  assert.equal(dd('run', '--close', a.run_id).code, 1, 'each run closes on its own record (an empty one fails)');
+  assert.match(dd('run', '--close', b.run_id).out, /wrote no files/);
+});
+
+test('a file claimed by more than one legacy run record is inconclusive', () => {
+  const { repo, dd, head } = setup();
+  mkdirSync(join(repo, '.proof', '.done-done', 'runs'), { recursive: true });
+  writeFileSync(join(repo, '.proof', 'legacy.log'), 'added: milk\n');
+  const file = { path: 'legacy.log', sha256: createHash('sha256').update('added: milk\n').digest('hex'), bytes: 12 };
+  for (const id of ['old-a', 'old-b']) {
+    const rec = { schema: 1, run_id: id, journey: null, command: 'x', commit: head(), tree: 't', dirty: false, started_at: `2026-01-01T00:00:0${id.at(-1) === 'a' ? 1 : 2}Z`, ended_at: '2026-01-01T00:00:03Z', exit: 0, files: [file] };
+    writeFileSync(join(repo, '.proof', '.done-done', 'runs', `${id}.json`), JSON.stringify(rec));
+  }
+  const r = dd('check', '--outcome', 'notes add works', '.proof/legacy.log');
+  assert.equal(r.code, 3, r.out);
+  assert.match(r.out, /claimed by more than one run \(old-a, old-b\)/);
 });
 
 test('the same evidence cannot prove a second, different claim', () => {
@@ -221,18 +248,29 @@ test('config is strict and scoped', () => {
   assert.match(r.out, /app may only be set in the project/);
 });
 
+test('an absolute evidence.root is used as-is, not joined under the repo', () => {
+  const { dir, repo, sh, dd } = setup();
+  const root = join(dir, 'proof-outside');
+  writeFileSync(join(repo, '.done-done.yaml'), `app: notes\nevidence:\n  root: ${JSON.stringify(root)}\n`);
+  sh('commit', '-qam', 'absolute root');
+  const r = dd('run', '--', 'echo added: milk > $DONE_DONE_EVIDENCE_ROOT/${RUN_ID}.log');
+  assert.equal(r.code, 0, r.out);
+  const d = toon(r);
+  assert.deepEqual(d.evidence, [join(root, d.run_id, `${d.run_id}.log`)], 'evidence is written and shown at the absolute root');
+  assert.ok(!existsSync(join(repo, root)), 'nothing is written under the repo');
+});
+
 test('videos are probed for real frames', { skip: spawnSync('ffmpeg', ['-version']).error && 'ffmpeg not installed' }, () => {
   const { repo, dd } = setup('app: notes\nevidence:\n  root: .proof\n');
   const open = dd('run', '--open');
   const id = toon(open).run_id;
-  const out = join(repo, '.proof', 'clip.mp4');
-  mkdirSync(dirname(out), { recursive: true });
+  const out = join(repo, '.proof', id, 'clip.mp4');
   execFileSync('ffmpeg', ['-v', 'error', '-f', 'lavfi', '-i', 'testsrc=size=128x96:rate=10', '-t', '1', '-pix_fmt', 'yuv420p', out]);
   const full = readFileSync(out);
-  writeFileSync(join(repo, '.proof', 'cut.mp4'), full.subarray(0, Math.floor(full.length / 2)));
+  writeFileSync(join(repo, '.proof', id, 'cut.mp4'), full.subarray(0, Math.floor(full.length / 2)));
   assert.equal(dd('run', '--close', id).code, 0);
-  assert.equal(dd('check', '--outcome', 'clip plays', '.proof/clip.mp4').code, 0);
-  const cut = dd('check', '--outcome', 'cut clip', '.proof/cut.mp4');
+  assert.equal(dd('check', '--outcome', 'clip plays', `.proof/${id}/clip.mp4`).code, 0);
+  const cut = dd('check', '--outcome', 'cut clip', `.proof/${id}/cut.mp4`);
   assert.equal(cut.code, 1, cut.out);
   assert.match(cut.out, /does not decode/);
 });
@@ -382,26 +420,27 @@ function bareRepo(dirName = 'repo') {
   return { dir, repo, env, sh, dd };
 }
 
-test('init writes a minimal config, ignores the evidence root, and is idempotent', () => {
-  const { repo, dd } = bareRepo();
+test('init writes a minimal config that keeps evidence outside the repo, and is idempotent', () => {
+  const { dir, repo, dd } = bareRepo();
   const r = dd('init');
   assert.equal(r.code, 0, r.out);
   const d = toon(r);
   assert.equal(d.command, 'init');
   assert.equal(d.result, 'pass');
   assert.equal(d.config, 'written');
-  assert.equal(d.gitignore, 'added .proof/');
+  assert.equal(d.gitignore, 'unchanged', 'nothing to ignore: the evidence root is outside the repo');
   assert.match(d.help.join('\n'), /journeys: .*done-done run smoke/s, 'the next step shows a journey, then the run');
   const yml = join(repo, '.done-done.yaml');
-  assert.equal(parse(readFileSync(yml, 'utf8')).evidence.root, '.proof');
-  assert.ok(isIgnored(repo, '.proof/'), 'git ignores the evidence root');
-  const before = [readFileSync(yml), readFileSync(join(repo, '.gitignore'))];
+  assert.deepEqual(parse(readFileSync(yml, 'utf8')), { app: 'repo' }, 'the app is pinned and no in-repo evidence root is set');
+  assert.ok(!existsSync(join(repo, '.gitignore')), 'no .gitignore is written');
+  assert.match(d.evidence_root, /evidence[/\\]repo$/, 'init names the out-of-repo evidence root');
+  const before = readFileSync(yml);
   const again = dd('init');
   assert.equal(again.code, 0, again.out);
   assert.equal(toon(again).config, 'unchanged');
   assert.equal(toon(again).gitignore, 'unchanged');
   assert.deepEqual(json(dd('init', '--json')), toon(again), '--json is the same result as JSON');
-  assert.deepEqual([readFileSync(yml), readFileSync(join(repo, '.gitignore'))], before, 'repeat init preserves both files');
+  assert.deepEqual(readFileSync(yml), before, 'repeat init preserves the config');
 });
 
 test('init leaves a customized config untouched and only appends a missing ignore line', () => {
@@ -453,8 +492,7 @@ test('init works in a repo path with a space', () => {
   const { repo, dd } = bareRepo('my project');
   const r = dd('init');
   assert.equal(r.code, 0, r.out);
-  assert.ok(existsSync(join(repo, '.done-done.yaml')));
-  assert.ok(isIgnored(repo, '.proof/'), 'git ignores the evidence root');
+  assert.equal(parse(readFileSync(join(repo, '.done-done.yaml'), 'utf8')).app, 'my project');
 });
 
 test('init outside a git repository reports a clear usage error', () => {
@@ -465,8 +503,8 @@ test('init outside a git repository reports a clear usage error', () => {
   assert.match(r.stdout + r.stderr, /not inside a git repository/);
 });
 
-test('a repo set up by init captures and checks real evidence, then catches stale and missing', () => {
-  const { repo, sh, dd } = bareRepo();
+test('a repo set up by init captures, checks and receipts real evidence that outlives the checkout', () => {
+  const { dir, repo, env, sh, dd } = bareRepo();
   const init = dd('init');
   assert.equal(init.code, 0);
   // Follow init's hint as printed: its example journey, placeholder filled in, becomes the config.
@@ -476,16 +514,68 @@ test('a repo set up by init captures and checks real evidence, then catches stal
   sh('commit', '-qm', 'config');
   const r = dd('run', 'smoke');
   assert.equal(r.code, 0, r.out);
-  const id = toon(r).run_id;
-  assert.equal(dd('check', '--outcome', 'notes add works', `.proof/${id}.log`).code, 0);
-  assert.equal(dd('check', '--outcome', 'gone', `.proof/${id}-missing.log`).code, 1, 'a missing file fails');
-  writeFileSync(join(repo, 'app.js'), 'export const app = 2;\n');
-  sh('add', '-A');
-  sh('commit', '-qm', 'code');
-  const stale = dd('check', '--outcome', 'notes add works', `.proof/${id}.log`);
+  const [log] = toon(r).evidence;
+  const { run_id: id } = toon(r);
+  assert.equal(log, join(dir, 'home', 'evidence', 'repo', id, `${id}.log`), 'evidence lands outside the repo, in the run\'s own folder');
+  assert.equal(dd('check', '--outcome', 'notes add works', log).code, 0);
+  assert.equal(dd('check', '--outcome', 'gone', `${log}-missing.log`).code, 1, 'a missing file fails');
+  const h = sh('rev-parse', 'HEAD').toString().trim();
+  assert.equal(dd('receipt', '--outcome', 'notes add works', log).code, 0);
+  // The worker's checkout goes away; a fresh clone elsewhere (a merge gate) re-verifies the same proof.
+  const clone = join(dir, 'merge-gate');
+  execFileSync('git', ['clone', '-q', repo, clone]);
+  rmSync(repo, { recursive: true, force: true });
+  const inClone = (e, ...args) => {
+    const x = spawnSync(process.execPath, [CLI, ...args], { cwd: clone, env: e, encoding: 'utf8' });
+    return { code: x.status, out: x.stdout + x.stderr };
+  };
+  const v = inClone(env, 'receipt', '--verify', h);
+  assert.equal(v.code, 0, v.out);
+  // CI on another machine: the evidence root restored under a different DONE_DONE_HOME verifies too.
+  const ciHome = join(dir, 'ci-home');
+  cpSync(join(dir, 'home', 'evidence'), join(ciHome, 'evidence'), { recursive: true });
+  assert.equal(inClone({ ...env, DONE_DONE_HOME: ciHome }, 'receipt', '--verify', h).code, 0, 'a restored evidence root verifies');
+  writeFileSync(join(ciHome, 'evidence', 'repo', id, basename(log)), 'added: eggs\n');
+  const tampered = inClone({ ...env, DONE_DONE_HOME: ciHome }, 'receipt', '--verify', h);
+  assert.equal(tampered.code, 1, tampered.out);
+  assert.match(tampered.out, /hash changed/);
+  writeFileSync(join(clone, 'app.js'), 'export const app = 2;\n');
+  execFileSync('git', ['commit', '-qam', 'code'], { cwd: clone, env });
+  const stale = inClone(env, 'check', '--outcome', 'notes add works', log);
   assert.equal(stale.code, 1, stale.out);
   assert.match(stale.out, /evidence is for commit/);
   assert.equal(toon(stale).help[0], 'Commit your change, re-capture with done-done run smoke, then check the new files', 'evidence is ignored, so the hint never says to commit it');
+});
+
+test('overlapping runs from two checkouts sharing the evidence root never claim each other\'s files', () => {
+  const { dir, repo, env, sh, dd } = bareRepo();
+  assert.equal(dd('init').code, 0);
+  sh('add', '-A');
+  sh('commit', '-qm', 'config');
+  const lane2 = join(dir, 'lane2');
+  execFileSync('git', ['clone', '-q', repo, lane2]);
+  writeFileSync(join(lane2, 'app.js'), 'export const app = 2;\n');
+  execFileSync('git', ['commit', '-qam', 'lane 2 work'], { cwd: lane2, env });
+  const in2 = (...args) => {
+    const x = spawnSync(process.execPath, [CLI, ...args], { cwd: lane2, env, encoding: 'utf8' });
+    return { code: x.status, out: x.stdout + x.stderr };
+  };
+  // Lane 1 holds a run open while lane 2 runs a failing capture and a passing one into the same root.
+  const open = toon(dd('run', '--open'));
+  const failed = in2('run', '--', 'echo broken > $DONE_DONE_EVIDENCE_ROOT/b.log; exit 1');
+  assert.equal(failed.code, 1, failed.out);
+  const passed = in2('run', '--', 'echo added: milk > $DONE_DONE_EVIDENCE_ROOT/c.log');
+  assert.equal(passed.code, 0, passed.out);
+  writeFileSync(join(open.evidence_root, 'a.log'), 'added: milk\n');
+  const closed = dd('run', '--close', open.run_id);
+  assert.deepEqual(toon(closed).evidence, [join(open.evidence_root, 'a.log')], 'lane 1 records only its own folder');
+  // The failed run's file cannot pass through lane 1's successful record.
+  const fromFailed = dd('check', '--outcome', 'notes add works', toon(failed).evidence[0]);
+  assert.equal(fromFailed.code, 1, fromFailed.out);
+  assert.match(fromFailed.out, /its run command exited 1/);
+  // Byte-identical captures in both lanes: each lane's own file passes, tied to its own commit.
+  assert.equal(in2('check', '--outcome', 'notes add works', toon(passed).evidence[0]).code, 0, 'lane 2 is not stale through lane 1');
+  assert.equal(dd('check', '--outcome', 'notes add works', join(open.evidence_root, 'a.log')).code, 0, 'lane 1 is not stale through lane 2');
 });
 
 test('a result is one TOON document by default, and --json is the same data as JSON', () => {
@@ -680,15 +770,16 @@ test('judge wrong screen fails with exit 1, unsure and low confidence are inconc
 
 test('judge.enabled turns the judge on; text evidence is not judged; a failed check is not judged', () => {
   const j = judgeSetup(CORRECT, { projectYaml: 'app: notes\nevidence:\n  root: .proof\njudge:\n  enabled: true\njourneys:\n  shots:\n    command: node make-shots.mjs ${RUN_ID}\n' });
-  const r = j.dd('run', '--', `node make-shots.mjs mixed && node -e "require('fs').writeFileSync('.proof/mixed/session.log','saved 3 notes')"`);
+  const r = j.dd('run', '--', `node make-shots.mjs \${RUN_ID} && node -e "require('fs').writeFileSync(process.env.DONE_DONE_EVIDENCE_ROOT + '/session.log','saved 3 notes')"`);
   assert.equal(r.code, 0, r.out);
-  const ok = j.dd('check', '--outcome', 'three notes are saved', '.proof/mixed/home.png', '.proof/mixed/session.log');
+  const mixed = `.proof/${toon(r).run_id}`;
+  const ok = j.dd('check', '--outcome', 'three notes are saved', `${mixed}/home.png`, `${mixed}/session.log`);
   assert.equal(ok.code, 0, ok.out);
   const d = toon(ok);
-  assert.deepEqual(d.judge.judged.map((x) => x.path), ['.proof/mixed/home.png']);
-  assert.deepEqual(d.judge.not_judged, ['.proof/mixed/session.log']);
+  assert.deepEqual(d.judge.judged.map((x) => x.path), [`${mixed}/home.png`]);
+  assert.deepEqual(d.judge.not_judged, [`${mixed}/session.log`]);
   assert.match(d.judge.note, /text, log and video evidence are not/);
-  const bad = j.dd('check', '--outcome', 'three notes are saved', '.proof/mixed/home.png', '.proof/nope.png');
+  const bad = j.dd('check', '--outcome', 'three notes are saved', `${mixed}/home.png`, '.proof/nope.png');
   assert.equal(bad.code, 1, bad.out);
   assert.match(toon(bad).judge.skipped, /already failed/);
   writeFileSync(join(j.repo, 'stray.png'), screen(11));

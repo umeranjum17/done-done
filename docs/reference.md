@@ -14,7 +14,7 @@ For the install steps, see the [README quick start](../README.md#quick-start). d
 done-done init
 ```
 
-`init` writes a minimal `.done-done.yaml` only when one does not exist, and adds the evidence root (`.proof/` by default, or `evidence.root` from an existing config) to `.gitignore` when git does not already ignore it. It never rewrites the config: re-running is a no-op and a customized `.done-done.yaml` is left byte-for-byte; `.gitignore` gains a line only when the ignore entry is missing. A malformed `.done-done.yaml` makes `init` exit 2 with the file named and untouched. Its result says whether the config was `written` or left `unchanged`, what it added to `.gitignore`, and the next step.
+`init` writes a minimal `.done-done.yaml` only when one does not exist: just `app`, the repo directory name, so every checkout of the repo finds the same evidence (see [Where proof lives](#where-proof-lives)). It sets no `evidence.root`, so evidence goes outside the repo. When an existing config puts `evidence.root` inside the repo (an older `root: .proof`), `init` adds it to `.gitignore` when git does not already ignore it. It never rewrites the config: re-running is a no-op and a customized `.done-done.yaml` is left byte-for-byte; `.gitignore` gains a line only when the ignore entry is missing. A malformed `.done-done.yaml` makes `init` exit 2 with the file named and untouched. Its result says whether the config was `written` or left `unchanged`, the evidence root, what it added to `.gitignore`, and the next step.
 
 ### Run a journey
 
@@ -23,11 +23,10 @@ Describe your journeys in `.done-done.yaml` at the repo root:
 ```yaml
 app: notes
 evidence:
-  root: .verify-artifacts          # gitignore this; evidence never goes in the repo
   ignore_paths: ["docs/**", "*.md"]  # commits touching only these keep evidence fresh
 journeys:
   review:
-    command: node scripts/capture-review.mjs --out .verify-artifacts/${RUN_ID}
+    command: node scripts/capture-review.mjs --out $DONE_DONE_EVIDENCE_ROOT
 ```
 
 Then run it:
@@ -36,10 +35,11 @@ Then run it:
 done-done run review
 ```
 
-`run` does four things:
+`run` does five things:
 - records HEAD, its tree, and whether tracked files were dirty;
-- runs the command, with `${RUN_ID}` substituted and `DONE_DONE_RUN_ID` / `DONE_DONE_EVIDENCE_ROOT` exported;
-- hashes every file the command created or changed under the evidence root;
+- creates a new folder for the run, `<root>/<run-id>/`. The run id is the time, the commit and a random suffix, so two runs never share one;
+- runs the command, with `${RUN_ID}` substituted, `DONE_DONE_RUN_ID` exported, and `DONE_DONE_EVIDENCE_ROOT` set to the run's folder;
+- hashes every file in the run's folder. Every checkout of a repo shares the evidence root, so a run records only its own folder and never another run's files;
 - writes a run record to `<root>/.done-done/runs/<run-id>.json`.
 
 A non-zero command exit, or a run that wrote nothing, fails.
@@ -48,7 +48,7 @@ For a proof you drive by hand or through an agent:
 
 ```sh
 done-done run --open      # prints a run id
-# ...capture into the evidence root...
+# ...capture into the folder it prints (evidence_root)...
 done-done run --close <run-id>
 ```
 
@@ -58,7 +58,7 @@ Run `done-done` outside wrappers that expand `${...}` themselves (`systemd-run` 
 ### Check a claim
 
 ```sh
-done-done check --outcome "notes sync between two devices" .verify-artifacts/<run-id>/after.png
+done-done check --outcome "notes sync between two devices" ~/.done-done/evidence/notes/<run-id>/after.png
 done-done check --from pr-body.md                 # a file, `-` for stdin, or a GitHub PR URL (needs gh)
 ```
 
@@ -90,7 +90,7 @@ evidence: <paths of the evidence files, or "not proven: <cause>">
 | Clean | The run was not dirty, unless `evidence.allow_dirty: true`. The run command also exited 0. |
 | Not reused | Fails when the files are byte-identical within one claim. Also fails when every file was already used to prove a different claim in this repo; the ledger is `$DONE_DONE_HOME/hashes`. |
 
-Files that are in no run record give an inconclusive result: nothing ties them to a commit.
+Files that are in no run record give an inconclusive result: nothing ties them to a commit. So does a file that more than one run record claims (possible only with records from before each run had its own folder).
 
 `evidence: not proven: <cause>` is inconclusive too. A repo can set `checks.not_proven: allow`, but that setting is honoured only when the config is read from a trusted ref (`--trusted-ref`).
 
@@ -138,7 +138,7 @@ done-done receipt --from pr-body.md       # or --outcome "<claim>" <files...>, o
 done-done receipt --verify <head>         # read-only: check a recorded receipt
 ```
 
-`receipt` takes the same claim inputs as `check` and runs that check. It writes `<root>/.done-done/receipts/<head>.json` only when the check passes on the current HEAD, the tracked tree is clean, and the check cited at least one evidence file; a dirty tracked tree, a failed or inconclusive check, a pass that cited no evidence (for example `not proven:` allowed by trusted config), or a moved HEAD writes nothing and exits non-zero. The record holds the repo, the head and tree sha, the claim outcome, and every cited file with its sha256 and a timestamp.
+`receipt` takes the same claim inputs as `check` and runs that check. It writes `<root>/.done-done/receipts/<head>.json` only when the check passes on the current HEAD, the tracked tree is clean, and the check cited at least one evidence file; a dirty tracked tree, a failed or inconclusive check, a pass that cited no evidence (for example `not proven:` allowed by trusted config), or a moved HEAD writes nothing and exits non-zero. The record holds the repo, the head and tree sha, the claim outcome, and every cited file with its sha256 and a timestamp. A cited file is stored relative to the repo, or as `<evidence root>/<path>` when it is under an evidence root outside the repo, so the receipt still finds it from another checkout or a restored evidence root.
 
 `receipt --verify <head>` changes nothing. It succeeds only when the receipt exists, is PASS, the current HEAD is still that head, and every cited file still hashes to the recorded sha256. A missing or malformed receipt and a hash mismatch are failures (exit 1), not usage errors.
 
@@ -167,7 +167,15 @@ done-done receipt --from - --trusted-ref origin/main < pr-body.md   # record the
 done-done receipt --verify "$HEAD"                                   # re-verify later
 ```
 
-`--trusted-ref` reads `.done-done.yaml` from that ref instead of the PR branch. This matters because repo keys can loosen the bar and journeys run commands. `check --from -` and `receipt --from -` read the `## Checks` block from stdin, so a CI job can pipe the pull request body straight in.
+Run `receipt --verify` with that head checked out and the evidence root in place (see below). `--trusted-ref` reads `.done-done.yaml` from that ref instead of the PR branch. This matters because repo keys can loosen the bar and journeys run commands. `check --from -` and `receipt --from -` read the `## Checks` block from stdin, so a CI job can pipe the pull request body straight in.
+
+### Where proof lives
+
+Evidence, run records (`<root>/.done-done/runs/`) and receipts (`<root>/.done-done/receipts/<head>.json`) all live in the evidence root. By default that is `~/.done-done/evidence/<app>`, outside the repo, so they outlive the checkout that captured them: any checkout of the same repo on the same machine (a fresh clone, a merge gate's checkout) with `<head>` checked out runs `done-done receipt --verify <head>` and finds the same receipt and files. A checkout of a later commit, such as the merge or squash commit on main, does not verify: the receipt is for `<head>` only.
+
+- **Same machine** (a merge gate, a fresh clone): check out `<head>`, nothing else. Every checkout reads the same `app` from the committed `.done-done.yaml`, so it resolves the same evidence root. Keep `app` pinned (`init` writes it); without it the app is the directory name, which differs between clones. Receipts are named by the full head sha, which is the same in every clone, shallow or not, so no repo commit is needed in the key, and a receipt verifies only where that commit is checked out.
+- **CI on another machine**: the evidence is not there. Copy the evidence root to the job (for example upload `~/.done-done/evidence/<app>` as a build artifact from the job that captured the proof), restore it as `$DONE_DONE_HOME/evidence/<app>`, check out the head, and run `done-done receipt --verify <head>`.
+- **`evidence.root` inside the repo** (an older `root: .proof`): still works, but the evidence is gitignored and goes away with that checkout, so only that checkout can re-verify.
 
 ## Config
 
@@ -191,7 +199,7 @@ judge:                                # used only when the judge is on
 | `app` | repo directory name |
 | `skill` | `.agents/skills/verify-<app>` |
 | `journeys.<name>.command` | none |
-| `evidence.root` | `<local_root>/<app>` |
+| `evidence.root` | `<local_root>/<app>`, outside the repo. A relative path is under the repo; an absolute path is used as-is |
 | `evidence.allow_dirty` | `false` |
 | `evidence.ignore_paths` | `[]` |
 | `checks.not_proven` | `inconclusive`; `allow` is honoured only from `--trusted-ref` |

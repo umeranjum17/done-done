@@ -592,6 +592,21 @@ test('a result is one TOON document by default, and --json is the same data as J
   assert.deepEqual(json(j), d);
 });
 
+test('a noisy journey leaves run stdout as one document; its words go to stderr', () => {
+  const { repo, env, sh } = setup('app: notes\nevidence:\n  root: .proof\njourneys:\n  noisy:\n    command: node noisy.mjs ${RUN_ID}\n');
+  writeFileSync(join(repo, 'noisy.mjs'), `import { mkdirSync, writeFileSync } from 'node:fs';\nconsole.log('wrote .proof/SMOKE/smoke.log');\nmkdirSync(process.env.DONE_DONE_EVIDENCE_ROOT, { recursive: true });\nwriteFileSync(process.env.DONE_DONE_EVIDENCE_ROOT + '/' + process.env.DONE_DONE_RUN_ID + '.log', 'ok\\n');\n`);
+  sh('add', '-A');
+  sh('commit', '-qm', 'noisy journey');
+  for (const args of [['run', 'noisy'], ['run', 'noisy', '--json']]) {
+    const r = spawnSync(process.execPath, [CLI, ...args], { cwd: repo, env, encoding: 'utf8' });
+    assert.equal(r.status, 0, r.stdout + r.stderr);
+    assert.match(r.stderr, /wrote \.proof\/SMOKE\/smoke\.log/, `${args.join(' ')} still shows the journey line live on stderr`);
+    // decode() and JSON.parse() throw unless stdout is exactly one result document.
+    const d = args.includes('--json') ? JSON.parse(r.stdout) : decode(r.stdout);
+    assert.equal(d.result, 'pass', `${args.join(' ')} stdout is only done-done's result`);
+  }
+});
+
 test('--full lists every finding; the compact default truncates and says how many it dropped', () => {
   const { dd } = setup();
   const missing = ['a.png', 'b.png', 'c.png', 'd.png', 'e.png', 'f.png', 'g.png'];

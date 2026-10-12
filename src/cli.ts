@@ -278,8 +278,10 @@ function cmdRun(argv: string[]): number {
   if (!command) throw new UsageError('run needs a journey, a command after --, or --open');
   const expanded = command.replaceAll('${RUN_ID}', rec.run_id);
   rec.command = expanded;
+  // The journey's own stdout goes to our stderr, never our stdout: stdout carries only done-done's
+  // result document (TOON or --json), so a noisy journey cannot break `run --json | JSON.parse`.
   const r = spawnSync(expanded, {
-    cwd: repo, shell: true, stdio: 'inherit',
+    cwd: repo, shell: true, stdio: ['inherit', process.stderr, 'inherit'],
     env: { ...process.env, DONE_DONE_RUN_ID: rec.run_id, DONE_DONE_EVIDENCE_ROOT: runDir(cfg, rec.run_id) },
   });
   rec.exit = r.status ?? 1;

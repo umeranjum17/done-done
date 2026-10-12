@@ -49,10 +49,11 @@ export const FLAGSHIP_MODEL_PATTERN = /opus|sonnet/i;
 
 export const home = () => process.env.DONE_DONE_HOME || join(homedir(), '.done-done');
 
-// A duration such as 90s or 30m, in milliseconds; null when the text is not one.
+// A duration such as 90s or 30m, in milliseconds; null when the text is not one or is not a delay a timer can run.
 export const parseDuration = (text: string): number | null => {
   const m = /^(\d+)(s|m)$/.exec(text);
-  return m ? Number(m[1]) * (m[2] === 'm' ? 60_000 : 1000) : null;
+  const ms = m ? Number(m[1]) * (m[2] === 'm' ? 60_000 : 1000) : 0;
+  return ms > 0 && ms <= 2_147_483_647 ? ms : null;
 };
 
 function flatten(doc: unknown, file: string): Map<string, unknown> {

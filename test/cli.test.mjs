@@ -1377,12 +1377,55 @@ test('a runner killed mid-step shows as failed at that step, and status stops th
   for (let i = 0; i < 100 && (r = dd('status')).code === 4; i++) await new Promise((res) => setTimeout(res, 50));
   assert.equal(r.code, 1, r.out);
   assert.ok(await groupGone(run.runner.journey_pgid), 'status killed the journey the killed runner left behind');
+  assert.ok(existsSync(join(runs, run.run_id, 'journey.killed')), 'the kill is recorded once');
   const s = toon(r);
   assert.equal(s.status, 'failed');
   assert.equal(s.steps[1].status, 'failed');
   assert.match(s.reason, new RegExp(`^the runner died at step drive \\(pid ${run.runner.pid},`));
   assert.equal(JSON.parse(readFileSync(join(runs, run.run_id, 'run.json'), 'utf8')).status, 'running', 'status only reads the store');
   assert.match(s.help[1], /^Fix the cause, commit, then start a new run: done-done verify slow --outcome 'home and settings render'$/);
+});
+
+test('a live runner with an old heartbeat is not failed, and its journey is not killed', async () => {
+  const { dd, runs, runningAt, release, settled } = slowRepo();
+  assert.equal(dd('verify', 'slow', '--outcome', 'home and settings render', '--no-wait').code, 4);
+  const run = await runningAt('drive');
+  const file = join(runs, run.run_id, 'run.json');
+  const stale = JSON.parse(readFileSync(file, 'utf8'));
+  stale.runner.heartbeat = '2000-01-01T00:00:00.000Z';
+  writeFileSync(file, JSON.stringify(stale));
+  const r = dd('status', '--run', run.run_id);
+  assert.equal(r.code, 4, r.out);
+  assert.equal(toon(r).status, 'running');
+  assert.equal(existsSync(join(runs, run.run_id, 'journey.killed')), false);
+  writeFileSync(release, '');
+  assert.equal((await settled()).code, 0);
+});
+
+test('a journey timeout of zero or past the timer limit is refused at resolve', () => {
+  for (const timeout of ['0s', '40000m']) {
+    const { repo, dd } = setup();
+    appendFileSync(join(repo, '.done-done.yaml'), `  hang:\n    command: node -e "setInterval(() => {}, 1000)"\n    timeout: ${timeout}\n`);
+    const r = dd('verify', 'hang', '--outcome', 'the app starts', '--foreground');
+    assert.equal(r.code, 1, r.out);
+    assert.equal(toon(r).reason, `resolve: journeys.hang.timeout must be a duration such as 30m or 90s, not ${timeout}`);
+  }
+});
+
+test('status shows the newest run of this checkout and names its repo', () => {
+  const { repo, env, dd } = setup();
+  assert.equal(dd('verify', 'shots', '--outcome', 'home and settings render', '--foreground').code, 0);
+  const other = mkdtempSync(join(tmpdir(), 'done-done-other-'));
+  after(() => rmSync(other, { recursive: true, force: true }));
+  const otherRepo = join(other, 'repo');
+  mkdirSync(otherRepo);
+  execFileSync('git', ['init', '-q'], { cwd: otherRepo, env });
+  writeFileSync(join(otherRepo, '.done-done.yaml'), 'app: notes\n');
+  const elsewhere = spawnSync(process.execPath, [CLI, 'status'], { cwd: otherRepo, env, encoding: 'utf8' });
+  assert.equal(elsewhere.status, 2, elsewhere.stdout + elsewhere.stderr);
+  const here = toon(dd('status'));
+  assert.equal(here.repo, repo);
+  assert.equal(here.result, 'pass');
 });
 
 test('a journey past its timeout is killed and the run ends inconclusive', async () => {

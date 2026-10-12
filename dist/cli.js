@@ -42,7 +42,7 @@ const FLAGS = {
     '--wait': 'wait until the run ends (the default)',
     '--no-wait': 'start the run and return at once (exit 4); read it later with done-done status',
     '--foreground': 'run every step in this process instead of a detached runner (use in CI)',
-    '--run <run-id>': 'the run to show (default: the newest run of this app)',
+    '--run <run-id>': 'the run to show (default: the newest run of this checkout)',
     '--agent <agent>': 'also add a SessionStart hook to .claude/settings.json (claude) or .codex/hooks.json (codex) that shows `done-done` to each session, or a plugin to .opencode/plugins that adds it to the first message of each opencode session (opt-in)',
 };
 // `more` is the reference text a command needs beyond its flags, shared with the top-level help.
@@ -701,7 +701,7 @@ function report(findings, files, ctx, note = '') {
 }
 const CLI_PATH = fileURLToPath(import.meta.url);
 const HEARTBEAT_MS = 5_000;
-// A runner whose heartbeat is this old is gone even if its pid was reused.
+// A run that never recorded its runner's pid this long after it was created has no runner.
 const STALE_MS = 60_000;
 const runsRoot = (app) => join(home(), 'runs', app);
 const now = () => new Date().toISOString();
@@ -712,6 +712,15 @@ const killGroup = (pgid) => {
     }
     catch {
         // The group already exited.
+    }
+};
+const createOnce = (path) => {
+    try {
+        writeFileSync(path, '', { flag: 'wx' });
+        return true;
+    }
+    catch {
+        return false;
     }
 };
 const evidenceOf = (repo, cfg, rec) => rec.files.map((f) => citable(repo, join(cfg.evidence.root, f.path)));
@@ -819,7 +828,7 @@ async function runVerify(dir) {
         clearInterval(beat);
     }
 }
-// EPERM: the pid is alive but not ours to signal.
+// EPERM: the pid is alive but not ours to signal. A pid reused by another process still reads as alive: the known limit of a pid check.
 const alive = (pid) => {
     try {
         return process.kill(pid, 0);
@@ -836,10 +845,11 @@ function showRun(dir, cfg, command, gone = false) {
     const at = run.steps.find((s) => s.status === 'running') ?? run.steps.find((s) => s.status === 'pending');
     let { status, reason } = run;
     const open = status === 'pending' || status === 'running';
-    if (open && (gone || (run.runner && !alive(run.runner.pid)) || Date.now() - Date.parse(run.runner?.heartbeat ?? run.created) > STALE_MS)) {
+    if (open && (gone || (run.runner ? !alive(run.runner.pid) : Date.now() - Date.parse(run.created) > STALE_MS))) {
         status = 'failed';
-        reason = `the runner died at step ${at?.name}${run.runner ? ` (pid ${run.runner.pid}, last heartbeat ${run.runner.heartbeat})` : ' before it started'}`;
-        if (run.runner?.journey_pgid)
+        const beat = run.runner && Math.round((Date.now() - Date.parse(run.runner.heartbeat)) / 1000);
+        reason = `the runner died at step ${at?.name}${run.runner ? ` (pid ${run.runner.pid}, last heartbeat ${beat}s ago)` : ' before it started'}`;
+        if (run.runner?.journey_pgid && createOnce(join(dir, 'journey.killed')))
             killGroup(run.runner.journey_pgid);
     }
     const code = status === 'pending' || status === 'running' ? WAITING : status === 'failed' || run.result === 'fail' ? FAIL : run.result === 'inconclusive' ? INCONCLUSIVE : PASS;
@@ -852,7 +862,7 @@ function showRun(dir, cfg, command, gone = false) {
         result.result = run.result;
     if (reason)
         result.reason = reason;
-    Object.assign(result, { claim: run.claim, journey: run.journey, ...(rec && { head: rec.commit }), steps: run.steps.map((s) => ({ name: s.name, status: status === 'failed' && s === at ? 'failed' : s.status })) });
+    Object.assign(result, { claim: run.claim, journey: run.journey, repo: run.repo, ...(rec && { head: rec.commit }), steps: run.steps.map((s) => ({ name: s.name, status: status === 'failed' && s === at ? 'failed' : s.status })) });
     if (ev.items.length)
         result.evidence = ev.items;
     if (ev.omitted)
@@ -921,11 +931,12 @@ async function cmdVerify(argv) {
 }
 function cmdStatus(argv) {
     const { values } = parseArgs({ args: argv, options: { run: { type: 'string' } } });
-    const cfg = loadConfig(repoRoot());
+    const repo = repoRoot();
+    const cfg = loadConfig(repo);
     const root = runsRoot(cfg.app);
-    const id = values.run ?? (existsSync(root) ? readdirSync(root).sort().pop() : undefined);
+    const id = values.run ?? (existsSync(root) ? readdirSync(root).sort().reverse().find((n) => existsSync(join(root, n, 'run.json')) && loadRun(join(root, n)).repo === repo) : undefined);
     if (!id)
-        throw new UsageError(`no runs for ${cfg.app} yet`, `Start one: done-done verify ${Object.keys(cfg.journeys).length > 1 ? '<journey> ' : ''}--outcome "<what a user can now do>"`);
+        throw new UsageError(`no runs for ${cfg.app} in this checkout yet`, `Start one: done-done verify ${Object.keys(cfg.journeys).length > 1 ? '<journey> ' : ''}--outcome "<what a user can now do>"`);
     if (!/^[\w-]+$/.test(id) || !existsSync(join(root, id, 'run.json')))
         throw new UsageError(`no run ${id} in ${root}`, 'Show the newest run: done-done status');
     return showRun(join(root, id), cfg, 'status');

@@ -1,7 +1,7 @@
 
 ## Proof with done-done
 Before you report done, load the done-done skill and follow it. If the skill is missing, install it with
-`npx skills add umeranjum17/done-done-axi --skill done-done -g -a <your agent: claude-code, codex or opencode> -y`.
+`npx skills add umeranjum17/done-done-axi --skill done-done -g -a <your agent: claude-code, codex, opencode, pi or gemini-cli> -y`.
 Run the CLI as `done-done` if it is on PATH; otherwise run `npx -y --allow-git=all github:umeranjum17/done-done-axi`
 wherever this text or the skill says `done-done`. If done-done cannot run, report that instead of writing proof by hand.
 

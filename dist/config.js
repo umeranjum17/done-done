@@ -10,8 +10,15 @@ export class UsageError extends Error {
         this.help = help;
     }
 }
-// Where each key may be set. Global-only keys describe the machine; repo-only keys describe the project.
+// The coding agents done-done can start, in the order `agent: auto` looks for them on PATH.
+export const AGENTS = ['claude', 'codex', 'opencode', 'pi', 'gemini'];
+// The cost guard is this table: a default model is always the agent's cheap one, never a flagship,
+// whatever the vendor; any other model runs only when the user names it. pi and gemini get theirs with their adapters.
+export const CHEAP_MODELS = { claude: 'claude-haiku-5-5', opencode: 'opencode-go/muse-spark-1.3-contributor' };
+// Where each key may be set. Global-only keys describe the machine; repo-only keys describe the project; `any` may be in either.
 const KEYS = {
+    agent: { scope: 'any', type: 'agent' },
+    agent_config: { scope: 'global', type: 'agent_config' },
     'evidence.local_root': { scope: 'global', type: 'string' },
     app: { scope: 'repo', type: 'string' },
     skill: { scope: 'repo', type: 'string' },
@@ -25,16 +32,10 @@ const KEYS = {
     'judge.model': { scope: 'global', type: 'string' },
     'judge.bin': { scope: 'global', type: 'string' },
     'judge.config_dir': { scope: 'global', type: 'string' },
+    'judge.route': { scope: 'global', type: 'string' },
+    'judge.allow_same': { scope: 'global', type: 'boolean' },
 };
 const SECTIONS = new Set(['evidence', 'checks', 'judge']);
-// The judge default stays cheap: Haiku reads images (Anthropic vision docs list
-// text-and-image input for Haiku, and the Bedrock model card marks image input
-// supported), and the judge runs through the user's own `claude` binary, which
-// only accepts Claude model ids — so an opencode model id can never be the default here.
-// Users may still set any model they like via judge.model.
-export const DEFAULT_JUDGE_MODEL = 'claude-haiku-5-5';
-// Flagship models must never become a default again; the cheap-default test guards this.
-export const FLAGSHIP_MODEL_PATTERN = /opus|sonnet/i;
 export const home = () => process.env.DONE_DONE_HOME || join(homedir(), '.done-done');
 // A duration such as 90s or 30m, in milliseconds; null when the text is not one or is not a delay a timer can run.
 export const parseDuration = (text) => {
@@ -76,19 +77,26 @@ function apply(target, text, file, scope) {
         const spec = KEYS[key];
         if (!spec)
             throw new UsageError(`${file}: unknown key ${key}`);
-        if (spec.scope !== scope)
+        if (spec.scope !== scope && spec.scope !== 'any')
             throw new UsageError(`${file}: ${key} may only be set in the ${spec.scope === 'global' ? 'global config' : 'project .done-done.yaml'}`);
         const ok = spec.type === 'string' ? typeof value === 'string'
             : spec.type === 'boolean' ? typeof value === 'boolean'
                 : spec.type === 'string[]' ? Array.isArray(value) && value.every((v) => typeof v === 'string')
-                    : !!value && typeof value === 'object' && Object.values(value).every((j) => j && typeof j.command === 'string');
+                    : spec.type === 'agent' ? value === 'auto' || [value].flat().every((v) => AGENTS.includes(v)) && [value].flat().length > 0
+                        : spec.type === 'agent_config' ? !!value && typeof value === 'object' && Object.entries(value).every(([a, c]) => AGENTS.includes(a) && !!c && typeof c === 'object' && Object.entries(c).every(([k, m]) => k === 'model' && typeof m === 'string'))
+                            : !!value && typeof value === 'object' && Object.values(value).every((j) => j && typeof j.command === 'string');
+        const want = { journeys: 'a map of name: {command: <string>}', agent: `auto, or one or a list of ${AGENTS.join(', ')}`, agent_config: `a map of <agent>: {model: <string>} for ${AGENTS.join(', ')}` };
         if (!ok)
-            throw new UsageError(`${file}: ${key} must be ${spec.type === 'journeys' ? 'a map of name: {command: <string>}' : `a ${spec.type}`}`);
+            throw new UsageError(`${file}: ${key} must be ${want[spec.type] ?? `a ${spec.type}`}`);
         if (key === 'checks.not_proven' && value !== 'inconclusive' && value !== 'allow')
             throw new UsageError(`${file}: checks.not_proven must be inconclusive or allow`);
         const [a, b] = key.split('.');
         if (b)
             target[a][b] = value;
+        else if (key === 'agent')
+            target.agent = value === 'auto' ? 'auto' : [value].flat();
+        else if (key === 'agent_config')
+            target.agent_config = { ...target.agent_config, ...value };
         else
             target[a] = value;
     }
@@ -103,18 +111,24 @@ function readOptional(path) {
         throw new UsageError(`${path}: ${e.message}`);
     }
 }
-// Precedence: built-in defaults, then the global file, then the project file.
-// `projectText` overrides reading <repo>/.done-done.yaml (used for --trusted-ref).
-export function loadConfig(repo, projectText) {
-    const cfg = {
+// The built-in defaults, before any config file is read.
+export function defaultConfig(repo) {
+    return {
+        agent: 'auto',
+        agent_config: {},
         app: basename(repo),
         skill: '',
         journeys: {},
         evidence: { local_root: join(home(), 'evidence'), root: '', allow_dirty: false, ignore_paths: [] },
         checks: { not_proven: 'inconclusive', fix_title: '^(fix|bugfix|hotfix)\\b' },
-        judge: { enabled: false, model: DEFAULT_JUDGE_MODEL, bin: '', config_dir: join(home(), 'claude') },
-        trusted: projectText != null,
+        judge: { enabled: false, model: CHEAP_MODELS.claude, bin: '', config_dir: join(home(), 'claude'), route: '', allow_same: false },
+        trusted: false,
     };
+}
+// Precedence: built-in defaults, then the global file, then the project file.
+// `projectText` overrides reading <repo>/.done-done.yaml (used for --trusted-ref).
+export function loadConfig(repo, projectText) {
+    const cfg = { ...defaultConfig(repo), trusted: projectText != null };
     const globalFile = join(home(), 'config.yaml');
     apply(cfg, readOptional(globalFile), globalFile, 'global');
     const projectFile = join(repo, '.done-done.yaml');

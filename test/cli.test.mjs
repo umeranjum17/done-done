@@ -2,7 +2,7 @@
 import assert from 'node:assert/strict';
 import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
-import { appendFileSync, cpSync, mkdirSync, mkdtempSync, existsSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { appendFileSync, cpSync, mkdirSync, mkdtempSync, existsSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 import { after, test } from 'node:test';
@@ -10,7 +10,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { crc32, deflateSync } from 'node:zlib';
 import { parse } from 'yaml';
 import { decode } from '@toon-format/toon';
-import { DEFAULT_JUDGE_MODEL, FLAGSHIP_MODEL_PATTERN, loadConfig } from '../dist/config.js';
+import { loadConfig } from '../dist/config.js';
 
 const CLI = join(dirname(fileURLToPath(import.meta.url)), '..', 'dist', 'cli.js');
 
@@ -1695,7 +1695,7 @@ test('without the optional kit, --judge is a config error naming the npx command
   assert.equal(j.calls()[0].model, 'claude-haiku-5-5');
 });
 
-test('the default judge model is cheap, never a flagship', () => {
+test('the default judge model is the cheap Claude model and agent defaults to auto', () => {
   const dir = mkdtempSync(join(tmpdir(), 'done-done-cheap-default-'));
   after(() => rmSync(dir, { recursive: true, force: true }));
   const repo = join(dir, 'repo');
@@ -1711,8 +1711,8 @@ test('the default judge model is cheap, never a flagship', () => {
     if (prev === undefined) delete process.env.DONE_DONE_HOME;
     else process.env.DONE_DONE_HOME = prev;
   }
-  assert.equal(cfg.judge.model, DEFAULT_JUDGE_MODEL, 'the default is the exported cheap default');
-  assert.doesNotMatch(cfg.judge.model, FLAGSHIP_MODEL_PATTERN, 'the default must never be a flagship model again');
+  assert.equal(cfg.judge.model, 'claude-haiku-5-5', 'the judge default is Claude\'s cheap model');
+  assert.equal(cfg.agent, 'auto');
 });
 
 // doctor: read-only health check. Required items (git, config, evidence root) gate
@@ -1739,7 +1739,7 @@ test('doctor passes in a set-up repo and lists every check', () => {
   assert.equal(r.code, 0, r.out);
   const d = toon(r);
   assert.equal(d.result, 'pass');
-  assert.deepEqual(d.checks.map((c) => c.check), ['git', 'config', 'evidence_root', 'verify_skill', 'agent', 'judge', 'ffprobe']);
+  assert.deepEqual(d.checks.map((c) => c.check), ['git', 'config', 'evidence_root', 'verify_skill', 'agent', 'judge', 'ffprobe', 'judge_choice']);
   assert.deepEqual(d.checks.slice(0, 3).map((c) => c.status), ['ok', 'ok', 'ok']);
   assert.match(d.checks[1].detail, /app notes/);
   assert.equal(d.checks[3].status, 'missing', 'no verify skill yet, and that is optional');
@@ -1747,7 +1747,7 @@ test('doctor passes in a set-up repo and lists every check', () => {
   assert.ok(d.help.length >= 1);
   const j = json(dd('doctor', '--json'));
   assert.equal(j.result, 'pass');
-  assert.equal(j.checks.length, 7);
+  assert.equal(j.checks.length, 8);
 });
 
 test('doctor does not send a repo with a malformed global config to init', () => {
@@ -1852,16 +1852,134 @@ test('doctor finds agent, judge and ffprobe binaries from PATH; missing optional
   const full = doctorIn(repo, pathEnv(env, ['claude', 'codex', 'opencode', 'ffprobe']), 'doctor');
   assert.equal(full.code, 0, full.out);
   const f = toon(full);
-  assert.match(f.checks[4].detail, /found claude at .*claude/, 'claude wins over codex and opencode');
+  assert.match(f.checks[4].detail, /^claude \(model claude-haiku-5-5; agent: auto\) at .*claude/, 'claude wins over codex and opencode');
+  assert.equal(f.checks[7].status, 'missing', 'claude is the author, so the claude judge is the same agent');
+  assert.match(f.checks[7].detail, /^claude judge \(model claude-haiku-5-5\) in a fresh session, the same agent as the author/);
   assert.match(f.checks[5].detail, /never called/, 'the judge binary is never run');
   assert.match(f.checks[6].detail, /found at .*ffprobe/);
   const codexOnly = toon(doctorIn(repo, pathEnv(env, ['codex']), 'doctor'));
-  assert.match(codexOnly.checks[4].detail, /found codex/);
+  assert.equal(codexOnly.checks[4].status, 'missing');
+  assert.match(codexOnly.checks[4].detail, /^codex \(model none; agent: auto\) at .*, but done-done cannot start codex yet \(claude and opencode for now\)/);
+  assert.equal(codexOnly.checks[7].status, 'missing', 'an author done-done cannot start is no author');
+  assert.match(codexOnly.checks[7].detail, /^claude judge \(model claude-haiku-5-5\), and no author agent is installed/);
+  const two = toon(doctorIn(repo, pathEnv(env, ['codex', 'opencode']), 'doctor'));
+  assert.match(two.checks[4].detail, /^opencode .* at /, 'auto skips an installed agent done-done cannot start');
+  assert.equal(two.checks[7].status, 'ok', 'the author is opencode, so the claude judge is apart from it');
+  assert.match(two.checks[7].detail, /^claude judge \(model claude-haiku-5-5\), a different agent from the author \(opencode\)/);
   const none = doctorIn(repo, pathEnv(env, []), 'doctor');
   assert.equal(none.code, 0, 'missing optionals still exit 0 when every required item is ok');
   const n = toon(none);
-  assert.deepEqual(n.checks.slice(4).map((c) => c.status), ['missing', 'missing', 'missing']);
-  assert.match(n.checks[4].fix, /agent CLI/);
+  assert.deepEqual(n.checks.slice(4).map((c) => c.status), ['missing', 'missing', 'missing', 'missing']);
+  assert.match(n.checks[4].fix, /Install claude and opencode, or set agent: to an installed one of claude, codex, opencode, pi, gemini/);
   assert.match(n.checks[5].fix, /judge\.bin/);
   assert.match(n.checks[6].fix, /ffprobe/);
+  assert.match(n.checks[7].detail, /^claude judge \(model claude-haiku-5-5\), and no author agent is installed/, 'with no author there is no same-agent claim');
+  const repoYaml = readFileSync(join(repo, '.done-done.yaml'), 'utf8');
+  const claudeOnly = pathEnv(env, ['claude']);
+  writeFileSync(join(repo, '.done-done.yaml'), `${repoYaml}judge:\n  allow_same: true\n`);
+  const inRepo = toon(doctorIn(repo, claudeOnly, 'doctor'));
+  assert.match(inRepo.checks[1].detail, /judge\.allow_same may only be set in the global config/, 'the project file cannot waive the judge');
+  writeFileSync(join(repo, '.done-done.yaml'), repoYaml);
+  const unwaived = toon(doctorIn(repo, claudeOnly, 'doctor'));
+  assert.equal(unwaived.checks[7].status, 'missing');
+  writeFileSync(join(env.DONE_DONE_HOME, 'config.yaml'), 'judge:\n  allow_same: true\n');
+  const same = toon(doctorIn(repo, claudeOnly, 'doctor'));
+  assert.deepEqual([same.checks[7].status, /judge\.allow_same accepts it/.test(same.checks[7].detail)], ['ok', true]);
+});
+
+// Stub agent CLIs that log how they were started (argv, stdin, cwd) and answer like the real ones:
+// claude -p prints its JSON result with structured_output; opencode run reads the attached prompt file and
+// prints JSON events (after a wrapper's banner line) whose text part holds the answer, fenced as models often do.
+function stubAgents(env, answer = '{"ok":true}') {
+  const e = pathEnv(env, ['ffprobe']);
+  const log = join(e.PATH, 'calls.jsonl');
+  const stub = (name, reply) => writeFileSync(join(e.PATH, name), `#!${process.execPath}
+const { appendFileSync, readFileSync, writeFileSync } = require('node:fs');
+const argv = process.argv.slice(2);
+const stdin = readFileSync(0, 'utf8');
+const file = argv.includes('-f') ? readFileSync(argv[argv.indexOf('-f') + 1], 'utf8') : '';
+appendFileSync(${JSON.stringify(log)}, JSON.stringify({ agent: ${JSON.stringify(name)}, argv, stdin, file, permission: process.env.OPENCODE_PERMISSION, cwd: process.cwd() }) + '\\n');
+${reply}
+`, { mode: 0o755 });
+  stub('claude', `process.exitCode = ${JSON.stringify(answer)} === 'error' ? 1 : 0;
+process.stdout.write(JSON.stringify({ type: 'result', is_error: ${JSON.stringify(answer)} === 'error', result: 'You have hit your session limit', structured_output: ${JSON.stringify(answer)} === 'error' ? undefined : JSON.parse(${JSON.stringify(answer)}) }));`);
+  stub('opencode', `console.log('mise tools: opencode');
+console.log(JSON.stringify({ type: 'step_start', part: { type: 'step-start' } }));
+console.log(JSON.stringify({ type: 'text', part: { type: 'text', text: '\\\`\\\`\\\`json\\n' + ${JSON.stringify(answer)} + '\\n\\\`\\\`\\\`' } }));`);
+  const calls = () => (existsSync(log) ? readFileSync(log, 'utf8').trim().split('\n').map((l) => JSON.parse(l)) : []);
+  return { env: e, calls, bin: e.PATH };
+}
+
+test('the agent comes from config (a fallback list moves past missing agents), and doctor --probe asks it one schema question', () => {
+  const { repo, env } = setup();
+  const s = stubAgents(env);
+  mkdirSync(env.DONE_DONE_HOME, { recursive: true });
+  writeFileSync(join(env.DONE_DONE_HOME, 'config.yaml'), 'agent_config:\n  opencode: { model: opencode-go/test-model }\n');
+  const yaml = readFileSync(join(repo, '.done-done.yaml'), 'utf8');
+  const doctor = (extra, ...args) => {
+    writeFileSync(join(repo, '.done-done.yaml'), yaml + extra);
+    const r = doctorIn(repo, s.env, 'doctor', ...args);
+    return { ...r, d: r.out.startsWith('command') ? toon(r) : undefined, by: (n) => toon(r).checks.find((c) => c.check === n) };
+  };
+  // pi is listed first and installed, but done-done cannot start it yet, so the list moves on to opencode at its configured model and doctor names pi.
+  writeFileSync(join(s.bin, 'pi'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+  const oc = doctor('agent: [pi, opencode]\n', '--probe');
+  assert.equal(oc.code, 0, oc.out);
+  assert.match(oc.by('agent').detail, /^opencode \(model opencode-go\/test-model; from config; skipped pi: done-done cannot start it yet\)/);
+  assert.match(oc.by('judge_choice').detail, /^claude judge \(model claude-haiku-5-5\), a different agent from the author \(opencode\)/);
+  assert.equal(oc.by('probe').status, 'ok');
+  const [call] = s.calls();
+  assert.match(call.file, /connectivity probe[\s\S]*JSON schema[\s\S]*"required":\["ok"\]/, 'the prompt and schema go in the attached file');
+  assert.ok(!call.argv.some((a) => a.includes('connectivity probe')) && call.stdin === '', 'never in argv');
+  assert.notEqual(call.cwd, repo, 'a tool-less probe runs in a scratch dir, never the repo');
+  assert.deepEqual(call.argv.slice(0, 6), ['run', 'Follow the attached instructions.', '--format', 'json', '-m', 'opencode-go/test-model']);
+  assert.deepEqual(JSON.parse(call.permission), { '*': 'deny' }, 'every tool is denied');
+  const record = oc.by('probe').detail.match(/record (\S+)$/)[1];
+  assert.equal(statSync(record).mode & 0o777, 0o600);
+  const rec = JSON.parse(readFileSync(record, 'utf8'));
+  assert.deepEqual([rec.agent, rec.model, rec.tools, rec.ok, rec.answer], ['opencode', 'opencode-go/test-model', 'none', true, { ok: true }]);
+  assert.ok(rec.prompt_bytes > 0 && !JSON.stringify(rec).includes('connectivity probe'), 'the record keeps no prompt text');
+  // claude at its cheap default, all tools off.
+  const claude = doctor('agent: claude\n', '--probe');
+  assert.equal(claude.code, 0, claude.out);
+  const c = s.calls()[1];
+  assert.equal(c.agent, 'claude');
+  assert.notEqual(c.cwd, repo, 'a tool-less probe runs in a scratch dir, never the repo');
+  assert.deepEqual(['--model', '--tools', '--setting-sources'].map((f) => c.argv[c.argv.indexOf(f) + 1]), ['claude-haiku-5-5', '', ''], 'no project or user settings load');
+  assert.ok(c.argv.includes('-p') && c.argv.includes('--no-session-persistence') && JSON.parse(c.argv[c.argv.indexOf('--json-schema') + 1]).required[0] === 'ok');
+  assert.match(c.stdin, /connectivity probe/);
+  // A failed answer fails the probe, which --probe makes required; without --probe nothing is asked.
+  const bad = stubAgents(env, 'error');
+  const failed = doctorIn(repo, bad.env, 'doctor', '--probe');
+  assert.equal(failed.code, 2, failed.out);
+  assert.match(toon(failed).checks.find((x) => x.check === 'probe').detail, /claude did not answer: claude exited 1: You have hit your session limit; record /);
+  assert.equal(doctorIn(repo, bad.env, 'doctor').code, 0);
+  assert.equal(bad.calls().length, 1);
+  // An agent without an adapter yet, an explicit judge route, and bad values.
+  const pi = doctor('agent: pi\n', '--probe');
+  assert.equal(pi.code, 2, pi.out);
+  assert.match(pi.by('probe').detail, /cannot start pi yet/);
+  assert.equal(pi.by('probe').fix, 'Check that pi is signed in, or set agent_config.pi.model', 'no empty model in the fix');
+  writeFileSync(join(s.bin, 'gemini'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+  const pg = doctor('agent: [pi, gemini]\n');
+  assert.equal(pg.by('agent').status, 'missing');
+  assert.match(pg.by('agent').detail, /^pi \(model none; from config; skipped gemini: done-done cannot start it yet\) at .*, but done-done cannot start pi yet/, 'gemini is installed too, so it is named');
+  writeFileSync(join(env.DONE_DONE_HOME, 'config.yaml'), 'judge:\n  route: opencode:plan_key:opencode-go\n  model: muse-spark-1.3-contributor\n');
+  assert.match(doctor('').by('judge_choice').detail, /^claude judge \(model muse-spark-1.3-contributor\) in a fresh session.*judge\.route opencode:plan_key:opencode-go is recorded, not used yet/);
+  assert.match(doctor('agent: cursor\n').out, /agent must be auto, or one or a list of claude, codex, opencode, pi, gemini/);
+  assert.match(doctor('judge: auto\n').out, /judge must be a mapping/, 'judge: auto is not a spelling of the judge');
+  assert.match(doctor('agent_config:\n  opencode: { model: x }\n').out, /agent_config may only be set in the global config/, 'the project file cannot pick a model');
+  writeFileSync(join(env.DONE_DONE_HOME, 'config.yaml'), 'agent_config:\n  cursor: { model: x }\n');
+  assert.match(doctor('').out, /agent_config must be a map of <agent>: \{model: <string>\}/);
+  assert.equal(s.calls().length, 2, 'only --probe asks the agent');
+  // Without a repo config, the agent keys still come from the global config.
+  writeFileSync(join(env.DONE_DONE_HOME, 'config.yaml'), 'agent: opencode\n');
+  rmSync(join(repo, '.done-done.yaml'));
+  const global = doctorIn(repo, s.env, 'doctor');
+  assert.equal(global.code, 2, global.out);
+  assert.match(toon(global).checks.find((x) => x.check === 'agent').detail, /^opencode \(model opencode-go\/muse-spark-1.3-contributor; from config\)/);
+  writeFileSync(join(env.DONE_DONE_HOME, 'config.yaml'), 'agent: [pi]\njudge:\n  modle: x\n');
+  const broken = toon(doctorIn(repo, s.env, 'doctor'));
+  assert.equal(broken.checks.find((x) => x.check === 'agent').status, 'missing');
+  assert.match(broken.checks.find((x) => x.check === 'agent').detail, /unknown key judge\.modle/, 'a broken global config is named, never replaced by built-in defaults');
 });

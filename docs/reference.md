@@ -50,7 +50,19 @@ done-done init --agent opencode
 done-done doctor
 ```
 
-`doctor` answers "is this repo worth driving" and changes nothing. It checks seven items, each reported `ok` or `missing`, and each missing item names its fix command: `git` (inside a repository), `config` (a valid `.done-done.yaml`), `evidence_root` (writable), `verify_skill` (`.agents/skills/verify-<app>/SKILL.md`), `agent` (`claude`, `codex` or `opencode` on PATH; the first one wins), `judge` (an executable `claude` binary, a sign-in folder and the judge kit are present, and login is checked only when a capture is judged; the model is never called) and `ffprobe` (video evidence only). Only the first three are required: `doctor` exits 0 when they are all ok and 2 otherwise, so missing optionals never fail the run. In a fresh repo with nothing set up, `doctor` names each missing piece, starting with `done-done init`.
+`doctor` answers "is this repo worth driving" and changes nothing. It checks eight items, each reported `ok` or `missing` with the exact fix command: `git` (inside a repository), `config` (a valid `.done-done.yaml`), `evidence_root` (writable), `verify_skill` (`.agents/skills/verify-<app>/SKILL.md`), `agent` (the coding agent done-done starts, its model and where it came from; `missing` when it is not installed or done-done cannot start it yet; see [Agents](#agents)), `judge` (an executable `claude` binary, a sign-in folder and the judge kit are present, and login is checked only when a capture is judged; the model is never called), `ffprobe` (video evidence only) and `judge_choice` (the claude judge that `--judge` runs, at `judge.model`: `ok` when the author is another agent that done-done can start; `missing` when the author is claude, in a fresh session, unless `judge.allow_same: true` in the global config, and also when no startable author is installed; `judge.route` is recorded and not used yet). Only the first three are required: `doctor` exits 0 when they are all ok and 2 otherwise, so missing optionals never fail the run. In a fresh repo with nothing set up, `doctor` names each missing piece, starting with `done-done init`.
+
+```sh
+done-done doctor --probe
+```
+
+`--probe` also asks the agent one JSON-schema question (one call at its model) and adds a `probe` item that is then required: `ok` only when the agent answers with a valid object. The call record goes to `$DONE_DONE_HOME/agents/` (mode 0600); it keeps the agent, model, schema, tools, cwd, timeout, argv, prompt size in bytes, timing, exit code, answer or error, and the last 2000 characters of stderr, never the prompt text.
+
+#### Agents
+
+done-done works with the coding agent you have. `agent:` names it (`claude`, `codex`, `opencode`, `pi` or `gemini`), or a fallback list such as `[opencode, claude]`, which moves on when an agent is not installed or done-done cannot start it yet; doctor names each installed agent it skipped. `agent: auto` (the default) takes the first of claude, codex, opencode, pi, gemini on PATH that done-done can start (claude and opencode today). The model is `agent_config.<agent>.model` (global config only), else the agent's cheap default (`claude-haiku-5-5` for claude, `opencode-go/muse-spark-1.3-contributor` for opencode); codex, pi and gemini cannot be started yet; each gets its adapter and cheap default in a later release. These defaults are the cost guard: done-done never defaults to a flagship model, whatever the vendor.
+
+Each call is a fresh, single-shot session that must answer one JSON object matching a schema. The prompt goes on stdin (claude) or into a 0600 prompt file (opencode), never in argv. done-done can start claude (`claude -p --output-format json --json-schema <schema> --model <model> --no-session-persistence`, all tools off with `--tools ''`; tool-less calls also pass `--setting-sources ''` and run from a scratch folder, so no project settings or hooks load) and opencode (`opencode run "Follow the attached instructions." --format json -m <provider/model> -f <prompt file>`, with the schema in the 0600 prompt file and every tool denied through `OPENCODE_PERMISSION`) today; codex, pi and gemini come next.
 
 ### Run a journey
 
@@ -190,7 +202,7 @@ done-done status [--run <run-id>]                                   # the newest
 
 ### Output
 
-Every command prints one machine-readable result on stdout. By default it is [TOON](https://github.com/toon-format/spec) in the AXI convention (the shape `no-mistakes axi status` uses): scalar `key: value` lines, tabular arrays, and a `help` list that names the exact next command. `--json` prints the same result as JSON. `--full` lists every evidence file or finding; without it, lists longer than five rows are truncated and the count of dropped rows is reported (`evidence_omitted` or `findings_omitted`). `doctor` always lists every check: its seven rows never truncate.
+Every command prints one machine-readable result on stdout. By default it is [TOON](https://github.com/toon-format/spec) in the AXI convention (the shape `no-mistakes axi status` uses): scalar `key: value` lines, tabular arrays, and a `help` list that names the exact next command. `--json` prints the same result as JSON. `--full` lists every evidence file or finding; without it, lists longer than five rows are truncated and the count of dropped rows is reported (`evidence_omitted` or `findings_omitted`). `doctor` always lists every check: its rows (eight checks, nine with --probe) never truncate.
 
 Running `done-done` with no subcommand prints the repo's config state (`config: present | missing | none`), its journeys and run count, and the next step. Usage and config errors also print one result: the `command` that failed, an `error` field and a `help` line with the recovery command (for example `done-done init` when no config exists, or the command's valid flags after an unknown one).
 
@@ -236,7 +248,12 @@ There are two files. Unknown keys are an error in both.
 ```yaml
 evidence:
   local_root: ~/.done-done/evidence   # evidence root for repos that set none (<local_root>/<app>)
+agent: auto                           # also allowed in .done-done.yaml, which wins; see Agents
+agent_config:                         # per-agent model; global only, a project file may not set it
+  opencode: { model: opencode-go/muse-spark-1.3-contributor }
 judge:                                # used only when the judge is on
+  route: ''                           # recorded only; judge routes land next, and --judge runs the claude judge until then
+  allow_same: false                   # true: accept the claude judge as the author's session-only judge; global only
   model: claude-haiku-5-5              # the default: cheap and reads images; set any model you like
   bin: /usr/local/bin/claude          # default: the first `claude` on PATH; an absolute path to an executable
   config_dir: ~/.done-done/claude     # the default; a sign-in folder for done-done only
@@ -256,8 +273,9 @@ judge:                                # used only when the judge is on
 | `checks.not_proven` | `inconclusive`; `allow` is honoured only from `--trusted-ref` |
 | `checks.fix_title` | `^(fix\|bugfix\|hotfix)\b`: titles that need a repro |
 | `judge.enabled` | `false`: judge relevance on every `check` and `receipt` |
+| `agent` | as in the global file; set here, it wins |
 
 **Precedence:** built-in defaults, then the global file, then the project file.
 
-Global-only keys describe the machine. Project-only keys describe the project. Setting a key in the wrong file is an error (exit 2), not something silently ignored.
+Global-only keys describe the machine. Project-only keys describe the project. Setting a global-only or project-only key in the wrong file is an error (exit 2), not something silently ignored.
 

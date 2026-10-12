@@ -104,7 +104,7 @@ cd your-app
 done-done init
 ```
 
-`init` writes a minimal `.done-done.yaml` (only if you don't already have one) and adds the evidence root `.proof/` to `.gitignore`. It never overwrites an existing config. Then describe how to capture proof — swap the command for whatever drives your real app and saves screenshots, recordings or logs:
+`init` writes a minimal `.done-done.yaml` (only if you don't already have one) that names your app. It never overwrites an existing config. Evidence lives outside the repo, in `~/.done-done/evidence/<app>`, so it outlives the checkout that captured it. Then describe how to capture proof — swap the command for whatever drives your real app and saves screenshots, recordings or logs:
 
 ```yaml
 journeys:
@@ -112,12 +112,12 @@ journeys:
     command: npm test > $DONE_DONE_EVIDENCE_ROOT/${RUN_ID}.log
 ```
 
-The command runs from the repo root with `DONE_DONE_EVIDENCE_ROOT` (the evidence root) and `DONE_DONE_RUN_ID` set, and `${RUN_ID}` in it is replaced. A run that writes nothing under the evidence root fails.
+The command runs from the repo root with `DONE_DONE_EVIDENCE_ROOT` (a new folder for this run in the evidence root) and `DONE_DONE_RUN_ID` set, and `${RUN_ID}` in it is replaced. A run that writes nothing into its folder fails.
 
 Commit the config, because proof only counts from a clean tree:
 
 ```sh
-git add .gitignore .done-done.yaml
+git add .done-done.yaml
 git commit -m "Add done-done"
 ```
 
@@ -125,15 +125,15 @@ git commit -m "Add done-done"
 
 ```sh
 done-done run smoke
-done-done check --outcome "it starts" .proof/*.log
+done-done check --outcome "it starts" ~/.done-done/evidence/your-app/*/*.log
 ```
 
-Each command prints one machine-readable result. By default it is [TOON](https://github.com/toon-format/spec) (the compact AXI convention), and a passing check shows `result: pass`. Add `--json` for JSON, or `--full` to list every evidence file or finding instead of the first few. After later runs, use the `run_id` the result prints in place of `*`.
+Each command prints one machine-readable result. By default it is [TOON](https://github.com/toon-format/spec) (the compact AXI convention), and a passing check shows `result: pass`. Add `--json` for JSON, or `--full` to list every evidence file or finding instead of the first few. After later runs, use the `run_id` the result prints in place of the first `*`.
 
 When a check passes, save a receipt and re-verify it later:
 
 ```sh
-done-done receipt --outcome "it starts" .proof/*.log
+done-done receipt --outcome "it starts" ~/.done-done/evidence/your-app/*/*.log
 done-done receipt --verify "$(git rev-parse HEAD)"
 ```
 
@@ -146,7 +146,7 @@ Run `done-done` with no arguments to see the current config and the next step.
 - ⏱️ **Fresh**: Proof from an older commit fails. Commits that only touch docs can be set to keep it fresh.
 - ♻️ **Not reused**: Proof made only of files already used for a different claim fails, and so does citing the same file twice.
 - 🧾 **Honest claims**: Reads a pull request's `## Checks` block — from a file, a URL, or stdin — and makes sure every line is filled in.
-- 📌 **Verifiable later**: `receipt` records a passing check against the exact commit and the sha256 of every file it cited; `receipt --verify` re-checks it in CI or at merge.
+- 📌 **Verifiable later**: `receipt` records a passing check against the exact commit and the sha256 of every file it cited; `receipt --verify` re-checks it from any checkout of that commit on the same machine (a merge gate or a fresh clone), or in CI once the evidence folder is copied there ([how](docs/reference.md#where-proof-lives)).
 - 👀 **Shows the outcome** (opt-in): `--judge` asks a model on your own Claude plan whether each screenshot is the right screen for the claim; a wrong screen fails.
 - 🔒 **Safe in CI**: `--trusted-ref origin/main` reads the rules from your main branch, so a pull request can't loosen them.
 

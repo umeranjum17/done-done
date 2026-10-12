@@ -2,7 +2,7 @@
 import { execFileSync, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
-import { dirname, join, matchesGlob, relative, resolve } from 'node:path';
+import { basename, dirname, join, matchesGlob, relative, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 import { type Config, home, loadConfig, UsageError } from './config.js';
 import { checkMedia } from './media.js';
@@ -10,6 +10,7 @@ import { checkMedia } from './media.js';
 const PASS = 0, FAIL = 1, USAGE = 2, INCONCLUSIVE = 3;
 
 const USAGE_TEXT = `usage:
+  done-done init                                write a minimal .done-done.yaml and ignore the evidence root
   done-done run [<journey>] [-- <command...>]   run a journey (or command) and record the evidence it writes
   done-done run --open [<journey>]              open a run for a hand- or agent-driven proof; prints its id
   done-done run --close <run-id>                seal an open run
@@ -313,9 +314,50 @@ function report(findings: Finding[], files: number, note = ''): number {
   return PASS;
 }
 
+const INIT_EVIDENCE_ROOT = '.proof';
+
+// Append `<rel>/` to .gitignore unless git already ignores it. Never rewrites existing bytes.
+function ensureIgnored(repo: string, rel: string): boolean {
+  const entry = `${rel.replace(/\/+$/, '')}/`;
+  if (spawnSync('git', ['check-ignore', '--no-index', '-q', '--', entry], { cwd: repo }).status === 0) return false;
+  const file = join(repo, '.gitignore');
+  if (!existsSync(file)) {
+    writeFileSync(file, `${entry}\n`);
+    return true;
+  }
+  const text = readFileSync(file, 'utf8');
+  appendFileSync(file, `${text && !text.endsWith('\n') ? '\n' : ''}${entry}\n`);
+  return true;
+}
+
+function cmdInit(argv: string[]): number {
+  parseArgs({ args: argv, options: {}, allowPositionals: false });
+  const repo = repoRoot();
+  const file = join(repo, '.done-done.yaml');
+  const existed = existsSync(file);
+  const cfg = loadConfig(repo); // validates the existing project config; malformed -> exit 2, no writes
+  let rel: string;
+  if (existed) {
+    const r = relative(repo, cfg.evidence.root);
+    rel = r && !r.startsWith('..') ? r : '';
+    console.log('init: .done-done.yaml already exists; left unchanged');
+  } else {
+    const app = basename(repo);
+    const body = `# done-done project config. \`done-done init\` never overwrites this file.\napp: ${JSON.stringify(app)}\nevidence:\n  root: ${INIT_EVIDENCE_ROOT}\n`;
+    writeFileSync(`${file}.tmp`, body);
+    renameSync(`${file}.tmp`, file);
+    rel = INIT_EVIDENCE_ROOT;
+    console.log(`init: wrote .done-done.yaml (app: ${app})`);
+  }
+  if (rel && ensureIgnored(repo, rel)) console.log(`init: added ${rel.replace(/\/+$/, '')}/ to .gitignore`);
+  console.log('next: add a journey to .done-done.yaml, then `done-done run <journey>`');
+  return PASS;
+}
+
 function main(argv: string[]): number {
   const [cmd, ...rest] = argv;
   try {
+    if (cmd === 'init') return cmdInit(rest);
     if (cmd === 'run') return cmdRun(rest);
     if (cmd === 'check') return cmdCheck(rest);
     if (cmd === '--help' || cmd === '-h' || cmd === 'help') {

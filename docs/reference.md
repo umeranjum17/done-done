@@ -1,12 +1,20 @@
 # done-done reference
 
-Everything `run`, `check` and the config files do. For the overview and quick start, see the [README](../README.md).
+Everything `init`, `run`, `check` and the config files do. For the overview and quick start, see the [README](../README.md).
 
 ## Install
 
 For the install steps, see the [README quick start](../README.md#quick-start). done-done needs Node 22.5 or later and git. `ffprobe` is optional. Without it, videos are reported as "not verified" and the check is inconclusive, never a pass.
 
 ## Use
+
+### Set up a repo
+
+```sh
+done-done init
+```
+
+`init` writes a minimal `.done-done.yaml` only when one does not exist, and adds the evidence root (`.proof/` by default, or `evidence.root` from an existing config) to `.gitignore` when git does not already ignore it. It never rewrites the config: re-running is a no-op and a customized `.done-done.yaml` is left byte-for-byte; `.gitignore` gains a line only when the ignore entry is missing. A malformed `.done-done.yaml` makes `init` exit 2 with the file named and untouched. It prints what it wrote and the next step.
 
 ### Run a journey
 

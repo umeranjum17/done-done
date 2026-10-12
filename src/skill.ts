@@ -46,7 +46,7 @@ First run \`command -v done-done\`. If it prints a path, run \`done-done\` as sh
 - \`done-done <command> --help\` for one command's usage and flags
 
 Results are TOON: read \`result\` and follow the \`help\` lines through
-\`init\`, \`run\`, \`check\` and \`receipt\`. Proof comes from driving the real product, not from a unit test run, and counts only from a committed
+\`init\`, \`doctor\`, \`run\`, \`check\` and \`receipt\`. Proof comes from driving the real product, not from a unit test run, and counts only from a committed
 tree: commit the done-done setup (config, capture script) before you capture. \`fail\` or
 \`inconclusive\` is not done: fix the cause and re-run, or tell the user exactly what is still unproven.
 

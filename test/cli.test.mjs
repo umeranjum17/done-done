@@ -1038,29 +1038,55 @@ test('init does not read a README that is a symlink out of the repo', () => {
   assert.deepEqual(featureFiles(join(repo, '.agents', 'skills', 'verify-notes')), ['README.md', 'add.md', 'list.md'], 'the symlink target is not scanned');
 });
 
+test('init takes the readiness port only from the dev script', () => {
+  const { repo, dd } = shapeRepo('web', 'shop');
+  writeFileSync(join(repo, 'package.json'), JSON.stringify({ name: 'shop', scripts: { dev: 'next dev' }, dependencies: { react: '^19.0.0' } }));
+  writeFileSync(join(repo, 'README.md'), '# shop\nDATABASE_URL=postgres://localhost:5432/app\n');
+  assert.equal(dd('init').code, 0);
+  const body = readFileSync(join(repo, '.agents', 'skills', 'verify-shop', 'SKILL.md'), 'utf8');
+  assert.doesNotMatch(body, /localhost:5432/, 'a database URL in the README is not the app port');
+});
+
+test('init reads a package.json larger than 20 KB', () => {
+  const { repo, dd } = shapeRepo('web', 'shop');
+  writeFileSync(join(repo, 'package.json'), JSON.stringify({ name: 'shop', scripts: { dev: 'vite --port 5173' }, dependencies: { react: '^19.0.0' }, description: 'x'.repeat(30000) }));
+  assert.equal(dd('init').code, 0);
+  const body = readFileSync(join(repo, '.agents', 'skills', 'verify-shop', 'SKILL.md'), 'utf8');
+  assert.match(body, /npm run dev \(vite --port 5173\)/, 'scripts past the old 20000-character cut are still read');
+});
+
 test('init refuses a verify skill path that leaves the repo', () => {
   const { dir, repo, dd } = shapeRepo('cli', 'notes');
   writeFileSync(join(repo, '.done-done.yaml'), 'skill: ../escaped/verify\n');
   const r = dd('init');
   assert.notEqual(r.code, 0, r.out);
-  assert.match(r.out, /must be a path inside the repo/);
+  assert.match(r.out, /has a \.\. segment/);
+  assert.match(r.out, /\.\.\/escaped\/verify/, 'the message names the bad value');
   assert.equal(existsSync(join(dir, 'escaped')), false, 'nothing is written outside the repo');
-  rmSync(join(repo, '.done-done.yaml'));
+});
+
+test('init skips the verify skill behind a symlinked ancestor and writes the rest', () => {
+  const { dir, repo, dd } = shapeRepo('cli', 'notes');
   mkdirSync(join(dir, 'elsewhere'));
   symlinkSync(join(dir, 'elsewhere'), join(repo, '.agents'));
   writeFileSync(join(repo, '.done-done.yaml'), 'skill: .agents/skills/verify-notes\n');
-  assert.notEqual(dd('init').code, 0, 'a symlinked ancestor cannot redirect the skill');
+  const r = dd('init');
+  assert.equal(r.code, 0, r.out);
+  assert.match(toon(r).verify_skill, /^skipped, \.agents is a symlink/);
   assert.equal(existsSync(join(dir, 'elsewhere', 'skills')), false, 'nothing is written through the symlink');
+  assert.equal(existsSync(join(repo, '.done-done.yaml')), true, 'the rest of init still ran');
 });
 
-test('init refuses a symlink beneath the verify skill dir', () => {
+test('init skips the verify skill when a symlink sits beneath the skill dir', () => {
   const { dir, repo, dd } = shapeRepo('cli', 'notes');
   mkdirSync(join(repo, '.agents', 'skills', 'verify-notes'), { recursive: true });
   mkdirSync(join(dir, 'elsewhere'));
   symlinkSync(join(dir, 'elsewhere'), join(repo, '.agents', 'skills', 'verify-notes', 'features'));
   const r = dd('init');
-  assert.notEqual(r.code, 0, r.out);
+  assert.equal(r.code, 0, r.out);
+  assert.match(toon(r).verify_skill, /features is a symlink/);
   assert.deepEqual(readdirSync(join(dir, 'elsewhere')), [], 'no feature file is written through the symlink');
+  assert.equal(existsSync(join(repo, '.agents', 'skills', 'verify-notes', 'SKILL.md')), false, 'no partial scaffold');
 });
 
 test('init outside a git repository reports a clear usage error', () => {

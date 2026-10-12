@@ -760,7 +760,7 @@ function sourceFiles(dir: string, max: number, out: string[] = []): string[] {
 function detectApp(repo: string): Detected {
   let pkg: Record<string, any> = {};
   try {
-    pkg = JSON.parse(headText(join(repo, 'package.json'), 20000) || '{}');
+    pkg = JSON.parse(headText(join(repo, 'package.json'), Infinity) || '{}');
   } catch {
     pkg = {};
   }
@@ -791,7 +791,7 @@ function detectApp(repo: string): Detected {
     : bins.length ? `node ${bins[0]} --help`
     : make ? 'TODO(live drive): pick the dev target from the Makefile and record it here'
     : 'TODO(live drive): how the app starts locally (no npm script, bin or Makefile found)';
-  const port = text.match(/(?:localhost:|--port[= ])(\d{4,5})/)?.[1];
+  const port = `${scripts.dev ?? ''} ${scripts.start ?? ''}`.match(/(?:localhost:|--port[= ])(\d{4,5})/)?.[1];
   const ready = port
     ? `http://localhost:${port} answers (TODO(live drive): confirm the ready log line)`
     : web || api
@@ -868,35 +868,33 @@ function verifyFeaturesMd(app: string, d: Detected): string {
   return `# ${app} features\n\nThe repo's maintained verification map; a proof that drives one entry point is incomplete when this lists others.\n\n${index}\n`;
 }
 
-// The cloned repo's .done-done.yaml names the skill dir, so a write target must stay in the repo: every existing
-// component from the repo down (the leaf included) must be a real entry, not a symlink that points elsewhere.
-function writableInRepo(repo: string, p: string): boolean {
+// The first existing component on the way from the repo to `p` that is a symlink, if any: a cloned repo's symlink
+// would redirect the scaffold's writes out of the repo.
+function symlinkOnPath(repo: string, p: string): string | undefined {
   let cur = repo;
   for (const part of relative(repo, p).split(sep)) {
     cur = join(cur, part);
     try {
-      if (lstatSync(cur).isSymbolicLink()) return false;
+      if (lstatSync(cur).isSymbolicLink()) return cur;
     } catch {
-      return true;
+      return undefined;
     }
   }
-  return true;
+  return undefined;
 }
 
-// Writes only missing files; an existing skill is left byte-identical.
+// Writes only missing files; an existing skill is left byte-identical. SKILL.md is written last, so it marks a
+// finished scaffold. Every write target is checked before the first write.
 function scaffoldVerify(repo: string, cfg: Config): string {
-  const outsideRepo = new UsageError(`verify skill ${cfg.skill} must be a path inside the repo`, 'Set skill to a repo-relative path in .done-done.yaml');
-  if (cfg.skill.split(/[\\/]/).includes('..')) throw outsideRepo;
   const dir = join(repo, cfg.skill);
   if (existsSync(join(dir, 'SKILL.md'))) return 'unchanged';
   const d = detectApp(repo);
-  const files = new Map<string, string>([
-    ['SKILL.md', verifySkillMd(cfg.app, d)],
-    [join('features', 'README.md'), verifyFeaturesMd(cfg.app, d)],
-  ]);
+  const files = new Map<string, string>([[join('features', 'README.md'), verifyFeaturesMd(cfg.app, d)]]);
   for (const f of d.features) files.set(join('features', `${f.slug}.md`), verifyFeatureMd(cfg.app, d, f));
+  files.set('SKILL.md', verifySkillMd(cfg.app, d));
   const targets = [...files].map(([rel, body]) => ({ p: join(dir, rel), body }));
-  if (!targets.every(({ p }) => writableInRepo(repo, p))) throw outsideRepo;
+  const link = targets.map(({ p }) => symlinkOnPath(repo, p)).find((l) => l !== undefined);
+  if (link !== undefined) return `skipped, ${shown(repo, link)} is a symlink; write it by hand or remove the link`;
   for (const { p, body } of targets) {
     if (!existsSync(p)) {
       mkdirSync(dirname(p), { recursive: true });
@@ -1024,6 +1022,7 @@ function cmdInit(argv: string[]): number {
   const file = join(repo, '.done-done.yaml');
   const existed = existsSync(file);
   const cfg = loadConfig(repo); // validates the existing project config; malformed -> exit 2, no writes
+  if (cfg.skill.split(/[\\/]/).includes('..')) throw new UsageError(`verify skill ${cfg.skill} has a .. segment; use a path inside the repo`, 'Set skill to a repo-relative path in .done-done.yaml');
   const hook = values.agent === 'claude' ? claudeSettings(repo) : values.agent === 'codex' ? codexSettings(repo) : values.agent === 'opencode' ? opencodePlugin(repo) : undefined; // likewise validated before any write
   if (journey !== null) {
     // Record the capture recipe in the repo so any checkout can re-run the proof.

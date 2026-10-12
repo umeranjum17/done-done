@@ -2246,7 +2246,7 @@ const stdin = readFileSync(0, 'utf8');
 appendFileSync(${JSON.stringify(log)}, JSON.stringify({ agent: 'gemini', argv, stdin, cwd: process.cwd() }) + '\\n');
 // A signed-out gemini (seen 13 Oct): the stack of its auth error, a warning, then the one useful line in red.
 if (${JSON.stringify(mode)} === 'auth') {
-  process.stderr.write('Error authenticating: FatalCancellationError: Authentication cancelled by user.\\n    at initOauthClient (file:///gemini/bundle/chunk.js:1:1)\\n  exitCode: 130\\n}\\nSkill conflict detected: a skill overrides another\\n\\u001b[31mAuthentication cancelled by user.\\u001b[0m\\n');
+  process.stderr.write('Error authenticating: FatalCancellationError: Authentication cancelled by user.\\n    at initOauthClient (file:///gemini/bundle/chunk.js:1:1)\\n  exitCode: 130\\n}\\nSkill conflict detected: a skill overrides another\\n\\u001b[31mAuthentication cancelled by user.\\u001b[0m\\nUpdate available: 0.57.0\\n');
   process.exit(130);
 }
 process.stdout.write(JSON.stringify({ response: ${JSON.stringify(fenced)}, stats: {} }));

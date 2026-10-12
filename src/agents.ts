@@ -26,11 +26,13 @@ export type AgentAnswer = { ok: boolean; answer?: Record<string, unknown>; error
 // argv never carries the prompt: it goes on stdin, or (file: true) into a 0600 prompt file the argv points at.
 // done-done parses the answer, validates it against the schema, and asks a tool-less call again, at most ASK_ATTEMPTS calls.
 const ASK_ATTEMPTS = 3;
-// What a user sees of an agent's error: no colour codes, only the last line that says something (not a
+// What a user sees of an agent's error: no colour codes, only the last line that names an error (not a
 // stack frame, an indented field or a lone brace), at most 200 characters. The call record keeps the raw stderr.
+const ERROR_WORD = /\b(error|failed|denied|cancelled|refused|not|invalid|unauthorized)\b/i;
 function errorLine(text: string): string {
   const lines = stripVTControlCharacters(text).split(/[\r\n]+/).filter((l) => /\w/.test(l));
-  const line = (lines.findLast((l) => !/^\s/.test(l)) ?? lines.at(-1) ?? '').trim();
+  const top = lines.filter((l) => !/^\s/.test(l));
+  const line = (top.findLast((l) => ERROR_WORD.test(l)) ?? top.at(-1) ?? lines.at(-1) ?? '').trim();
   return line.length > 200 ? `${line.slice(0, 199)}…` : line;
 }
 class ProviderError extends Error {

@@ -2618,6 +2618,7 @@ test('maintain refuses a skill reached through a symlinked ancestor', () => {
     const m = toon(r);
     assert.deepEqual([r.code, m.result], [3, 'blocked'], r.out);
     assert.match(m.reason, /^locate: .*is reached through a symlink/);
+    assert.doesNotMatch(m.help.join('\n'), /done-done init/);
     assert.deepEqual(s.calls(), []);
   } finally {
     rmSync(outside, { recursive: true, force: true });
@@ -2692,6 +2693,47 @@ test('maintain gives a pi reader no tools and puts the cited source in its promp
   assert.ok(reader.argv.includes('--no-tools'), reader.argv.join(' '));
   assert.ok(!reader.argv.includes('-t'), 'no read tools for pi');
   assert.match(reader.stdin, /Cited source src\/app\.js:\nexport const app = 1; \/\/ CITED-SOURCE-LINE/);
+});
+
+test('maintain sends a pi reader only the source its prompt shows, not a citation past the reader window', () => {
+  const { repo, env, sh } = setup();
+  const s = stubPiGemini(env, JSON.stringify({ drift: [], recipe: 'open it', recipes: [], missing: [] }));
+  mkdirSync(env.DONE_DONE_HOME, { recursive: true });
+  writeFileSync(join(env.DONE_DONE_HOME, 'config.yaml'), 'agent: pi\n');
+  const skill = join(repo, '.agents', 'skills', 'verify-notes');
+  mkdirSync(join(skill, 'features'), { recursive: true });
+  mkdirSync(join(repo, 'src'), { recursive: true });
+  writeFileSync(join(repo, 'src', 'app.js'), 'export const app = 1; // LATE-CITED-LINE\n');
+  writeFileSync(join(skill, 'SKILL.md'), '# verify-notes\n');
+  writeFileSync(join(skill, 'features', 'README.md'), '# features\n\n- [Home](home.md)\n');
+  writeFileSync(join(skill, 'features', 'home.md'), `# Home\n\n${'x'.repeat(20_000)}\nThe app starts at src/app.js:1.\n`);
+  sh('add', '-A');
+  sh('commit', '-qm', 'skill');
+  const r = doctorIn(repo, s.env, 'maintain', '--foreground');
+  assert.equal(r.code, 0, r.out);
+  const reader = s.calls().find((c) => c.stdin.includes('Feature file'));
+  assert.doesNotMatch(reader.stdin, /Cited source src\/app\.js/);
+});
+
+test('maintain names at most 500 recently changed paths to reconcile and says how many it left out', () => {
+  const { repo, env, sh } = setup();
+  const s = stubAgents(env, JSON.stringify({ drift: [], recipe: 'open it', recipes: [], missing: [] }));
+  const skill = join(repo, '.agents', 'skills', 'verify-notes');
+  mkdirSync(join(skill, 'features'), { recursive: true });
+  writeFileSync(join(skill, 'SKILL.md'), '# verify-notes\n');
+  writeFileSync(join(skill, 'features', 'README.md'), '# features\n\n- [Home](home.md)\n');
+  writeFileSync(join(skill, 'features', 'home.md'), '# Home\n');
+  mkdirSync(join(repo, 'churn'));
+  for (let i = 0; i < 600; i++) writeFileSync(join(repo, 'churn', `f${i}.txt`), `${i}\n`);
+  sh('add', '-A');
+  sh('commit', '-qm', 'skill and churn');
+  assert.equal(doctorIn(repo, s.env, 'maintain', '--foreground').code, 0);
+  const reconcile = s.calls().find((c) => c.stdin.includes('Recently changed files')).stdin;
+  const line = reconcile.split('\n').find((l) => l.startsWith('Recently changed files'));
+  const header = line.slice(0, line.indexOf(': '));
+  const listed = line.slice(line.indexOf(': ') + 2).split(', ');
+  assert.equal(listed.length, 500);
+  assert.match(header, /most recent first; \d+ older paths left out/);
 });
 
 test('maintain lists a reader drift item with a string line as unverified, not as a finding', () => {

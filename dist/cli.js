@@ -1008,8 +1008,9 @@ function showRun(dir, cfg, command, gone = false) {
         code === WAITING ? [`The run goes on without this command; read it later: done-done status --run ${run.run_id}`]
             : run.kind === 'maintain' && status === 'completed' ? (run.result === 'clean' ? [`The verify skill matches the source; read the readers' recipes: done-done logs --step reconcile --run ${run.run_id}`]
                 : run.result === 'drift' ? [`Fix the findings in ${cfg.skill} (maintain edits nothing; --full lists them all), commit, then run again: ${again}`]
-                    : /^locate:/.test(run.reason ?? '') ? ['Create the verify skill: done-done init']
-                        : [`Read the step logs in ${shown(run.repo, join(dir, 'logs'))}`, `Fix the cause, then run again: ${again}`])
+                    : /^locate: no verify skill/.test(run.reason ?? '') ? ['Create the verify skill: done-done init']
+                        : /^locate:/.test(run.reason ?? '') ? [`Make ${cfg.skill} a real folder inside the repository (not a link), commit, then run again: ${again}`]
+                            : [`Read the step logs in ${shown(run.repo, join(dir, 'logs'))}`, `Fix the cause, then run again: ${again}`])
                 : code === PASS ? [`Verify this receipt (CI or merge): done-done receipt --verify ${rec.commit}`]
                     : status === 'cancelled' ? [`Start again from the failed step: done-done rerun --run ${run.run_id}`, `List past runs: done-done history`]
                         : [`Read the step logs in ${shown(run.repo, join(dir, 'logs'))}`, `Fix the cause, commit, then run again from the failed step: done-done rerun --run ${run.run_id}`, `Or start a new run: ${again}`];

@@ -23,6 +23,7 @@ type Harness<S> = {
 const MAX_CALLS = 30;
 const CALL_MS = 20 * 60_000;
 const CHURN_SINCE = '30.days.ago';
+const CHURN_MAX = 500;
 const FEATURE_CHARS = 20_000;
 // ponytail: a bare name can match many tracked files, so one feature's cited source is capped at 60,000 characters; upgrade to ranking files by citation count when a repo needs more.
 const CITED_CHARS = 60_000;
@@ -290,7 +291,7 @@ ${toolless ? 'Use the cited source, not the skill, and explain' : "Read the prod
 - recipe: one short recipe to verify the feature live, the way a user reaches it.
 
 Feature file ${rel(file)}:
-${text.slice(0, FEATURE_CHARS)}${toolless ? citedSource(rel(file), text) : ''}`;
+${text.slice(0, FEATURE_CHARS)}${toolless ? citedSource(rel(file), text.slice(0, FEATURE_CHARS)) : ''}`;
     const a = askAgent({ agent: agent.agent, model: agent.model, prompt, schema: READER_SCHEMA, cwd: repo, timeoutMs: CALL_MS, tools: toolless ? 'none' : 'read', record: record(`reader-${name.replace(/\.md$/, '')}`) });
     if (!a.ok) add({ kind: 'coverage', file: rel(file), what: `the reader did not answer: ${a.error}` });
     return { feature: rel(file), ok: a.ok, drift: a.answer?.drift, recipe: a.answer?.recipe, ...(a.error && { error: a.error }), record: a.record, ...(a.recordError && { record_error: a.recordError }) };
@@ -328,9 +329,10 @@ ${text.slice(0, FEATURE_CHARS)}${toolless ? citedSource(rel(file), text) : ''}`;
     }
   }
   const skillDir = rel(skill);
-  const churn = [...new Set(git(repo, 'log', `--since=${CHURN_SINCE}`, '--name-only', '-z', '--format=').split('\0'))]
-    .filter((p) => p && !p.startsWith(`${skillDir}/`) && existsSync(join(repo, p)))
-    .sort();
+  // ponytail: the reconcile prompt names only the CHURN_MAX most recently changed paths; older ones get no coverage check.
+  const churnAll = [...new Set(git(repo, 'log', `--since=${CHURN_SINCE}`, '--name-only', '-z', '--format=').split('\0'))]
+    .filter((p) => p && !p.startsWith(`${skillDir}/`) && existsSync(join(repo, p)));
+  const churn = churnAll.slice(0, CHURN_MAX);
   let recipes: unknown[] = [];
   const answered = readers.filter((r) => r.ok);
   if (answered.length) {
@@ -340,7 +342,7 @@ ${text.slice(0, FEATURE_CHARS)}${toolless ? citedSource(rel(file), text) : ''}`;
 
 Features (JSON): ${JSON.stringify(answered.map((r) => ({ feature: r.feature, recipe: r.recipe })))}
 
-Recently changed files (git log since ${CHURN_SINCE}): ${churn.length ? churn.join(', ') : 'none'}`;
+Recently changed files (git log since ${CHURN_SINCE}, most recent first${churnAll.length > churn.length ? `; ${churnAll.length - churn.length} older paths left out` : ''}): ${churn.length ? churn.join(', ') : 'none'}`;
     const a = askAgent({ agent: agent.agent, model: agent.model, prompt, schema: RECONCILE_SCHEMA, cwd: repo, timeoutMs: CALL_MS, tools: 'none', record: record('reconcile') });
     if (!a.ok) add({ kind: 'coverage', file: skillDir, what: `the reconcile call did not answer: ${a.error}` });
     if (a.answer) {

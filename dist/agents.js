@@ -79,7 +79,7 @@ const ADAPTERS = {
     // --no-session keeps the probe ephemeral.
     // Pi has no permission gate for edit steps, so doctor warns about it. Without a model, pi runs its own default.
     pi: {
-        argv: (c) => ['-p', '--mode', 'json', '--no-session', ...(c.tools === 'none' ? ['--no-tools'] : c.tools === 'read' ? ['-t', 'read,grep,find,ls'] : []), ...(c.model ? ['--model', c.model] : [])],
+        argv: (c) => ['-p', '--mode', 'json', '--no-session', ...(c.tools === 'edit' ? [] : ['--no-tools']), ...(c.model ? ['--model', c.model] : [])],
         answer: (out) => {
             let text = '';
             let failure = '';

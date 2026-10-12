@@ -10,13 +10,13 @@ If done-done cannot run, report that instead of writing proof by hand.
    (done-done exports both to the journey command). Commit `.done-done.yaml`, the journey script and `.gitignore`.
 2. Commit your change, then run `done-done run <journey>` from the repo root. Proof only counts from a clean,
    committed tree.
-3. Write a Checks block that cites the run's files by the paths `run` printed:
+3. Write a Checks block (the shape `done-done --help` prints) that cites the run's files by the paths `run` printed:
    ```
    ## Checks
    outcome: <what a user can now do>
-   repro: <command that failed before and passes now; n/a only when the PR title is not a fix>
-   proof: <the repo's verify-<app> skill, or "no verify skill - done-done run <journey>">
-   evidence: <the run's files, for example .proof/<run-id>/after.png>
+   repro: <command that failed before and passes now, or n/a; a fix PR needs one>
+   proof: <the command or path that drove the real product; name the repo's verify-<app> skill, or say "no verify skill">
+   evidence: <the evidence file paths, or "not proven: <cause>">
    ```
    Put it at the end of the PR body. With no PR, put it in `checks.md` in your task's data folder outside the
    worktree (`<firstmate home>/data/<task-id>/checks.md`).

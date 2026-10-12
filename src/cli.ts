@@ -793,7 +793,10 @@ export const DoneDonePlugin = async ({ directory }) => {
   };
 };
 `;
-  if (existsSync(file) && readFileSync(file, 'utf8') === text) return { file };
+  if (existsSync(file)) {
+    if (readFileSync(file, 'utf8') === text) return { file };
+    throw new UsageError('.opencode/plugins/done-done.js already exists with other content, so init will not overwrite it', 'Delete .opencode/plugins/done-done.js, then re-run: done-done init --agent opencode');
+  }
   return { file, text };
 }
 

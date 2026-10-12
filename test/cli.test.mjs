@@ -890,6 +890,17 @@ test('init --agent opencode adds a session plugin that shows the bare state, mer
   assert.deepEqual(JSON.parse(readFileSync(join(two.repo, 'opencode.json'), 'utf8')), { $schema: 'https://opencode.ai/config.json', theme: 'dark' }, 'project config keys are kept');
 });
 
+test('init --agent opencode refuses to overwrite a plugin file with other content', () => {
+  const { repo, dd } = bareRepo();
+  const plugin = join(repo, '.opencode', 'plugins', 'done-done.js');
+  mkdirSync(join(repo, '.opencode', 'plugins'), { recursive: true });
+  writeFileSync(plugin, 'export const Mine = async () => ({});\n');
+  const r = dd('init', '--agent', 'opencode');
+  assert.equal(r.code, 2, r.out);
+  assert.match(toon(r).error, /\.opencode\/plugins\/done-done\.js already exists/);
+  assert.equal(readFileSync(plugin, 'utf8'), 'export const Mine = async () => ({});\n', 'the existing file is kept');
+});
+
 test('init outside a git repository reports a clear usage error', () => {
   const dir = mkdtempSync(join(tmpdir(), 'done-done-nogit-'));
   after(() => rmSync(dir, { recursive: true, force: true }));

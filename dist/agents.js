@@ -5,30 +5,28 @@ import { dirname, join } from 'node:path';
 import { AGENTS, CHEAP_MODELS } from './config.js';
 import { onPath } from './judge.js';
 // argv never carries the prompt: it goes on stdin, or (file: true) into a 0600 prompt file the argv points at.
-// An adapter with schema: true has the CLI enforce the schema itself (one call); without it done-done
-// parses the answer out of the model text, validates it, and asks again, at most ASK_ATTEMPTS calls.
+// done-done parses the answer, validates it against the schema, and asks a tool-less call again, at most ASK_ATTEMPTS calls.
 const ASK_ATTEMPTS = 3;
 class ProviderError extends Error {
 }
-// The one JSON object inside free model text (often fenced): shared by every adapter without a schema flag.
+// The one JSON object inside free model text (often fenced): shared by the adapters that answer in text.
 export function extractJsonObject(text) {
     return JSON.parse(text.slice(text.indexOf('{'), text.lastIndexOf('}') + 1));
 }
 const ADAPTERS = {
     // claude -p: --json-schema puts the validated object in structured_output; --tools '' turns every tool off.
     claude: {
-        schema: true,
         argv: (c) => ['-p', '--output-format', 'json', '--json-schema', JSON.stringify(c.schema), '--model', c.model, '--no-session-persistence',
             ...(c.tools === 'edit' ? ['--permission-mode', 'acceptEdits'] : ['--tools', c.tools === 'read' ? 'Read,Grep,Glob' : '']),
             ...(c.tools === 'none' ? ['--setting-sources', ''] : [])],
         answer: (out) => {
             const r = JSON.parse(out);
             if (r.is_error)
-                throw new Error(String(r.result || r.subtype));
+                throw new ProviderError(String(r.result || r.subtype));
             return r.structured_output;
         },
     },
-    // opencode run reads no stdin and has no schema flag: the prompt and the schema go in an attached file,
+    // opencode run reads no stdin: the prompt and the schema go in an attached file,
     // and the answer is the JSON object in the text parts of its JSON event stream.
     opencode: {
         file: true,
@@ -45,7 +43,7 @@ const ADAPTERS = {
     },
     // pi -p reads the prompt on stdin (probed 12 Oct: with no positional message, stdin becomes the user
     // message); --mode json streams JSONL events whose assistant message_end holds the answer text,
-    // --no-session keeps the probe ephemeral. No schema flag: parse + validate + ask again.
+    // --no-session keeps the probe ephemeral.
     // Pi has no permission gate for edit steps, so doctor warns about it. Without a model, pi runs its own default.
     pi: {
         argv: (c) => ['-p', '--mode', 'json', '--no-session', ...(c.tools === 'none' ? ['--no-tools'] : c.tools === 'read' ? ['-t', 'read,grep,find,ls'] : []), ...(c.model ? ['--model', c.model] : [])],
@@ -76,7 +74,7 @@ const ADAPTERS = {
     // -o json prints one object {response, stats, error?} (its headless.md). plan mode is read-only, so a
     // headless call never blocks on an approval prompt; auto_edit (edits approved, shell still asks) is only for edit steps. --skip-trust is the
     // CLI's own documented headless path (its trusted-folders.md): done-done never runs interactively, so
-    // the trust dialog could never be answered. No schema flag either: parse + validate + ask again.
+    // the trust dialog could never be answered.
     gemini: {
         argv: (c) => ['-p', 'Follow the instructions on stdin.', '-o', 'json', '-m', c.model, '--approval-mode', c.tools === 'edit' ? 'auto_edit' : 'plan', '--skip-trust'],
         answer: (out) => {
@@ -153,8 +151,8 @@ export function askAgent(c) {
                     throw e;
                 // Only a tool-less call is asked again: an edit or read step may already have changed the repo or read it.
                 lastError = e.message;
-                if (adapter.schema || c.tools !== 'none' || attempts >= ASK_ATTEMPTS)
-                    throw new Error(adapter.schema ? lastError : `the agent did not answer with valid JSON after ${attempts} ${attempts === 1 ? 'try' : 'tries'}: ${lastError}`);
+                if (c.tools !== 'none' || attempts >= ASK_ATTEMPTS)
+                    throw new Error(`the agent did not answer with valid JSON after ${attempts} ${attempts === 1 ? 'try' : 'tries'}: ${lastError}`);
             }
         }
     }

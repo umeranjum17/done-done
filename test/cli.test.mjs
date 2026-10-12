@@ -2365,6 +2365,20 @@ test('gemini edit steps run with auto_edit, never yolo, and read steps stay in p
   assert.ok(!edit.argv.includes('--skip-trust') && !read.argv.includes('--skip-trust'), 'a repo step keeps Gemini trust gate');
 });
 
+test('opencode read calls get a deny-all permission and no read allowance', async () => {
+  const { repo, env } = setup();
+  const s = stubAgents(env);
+  const { askAgent } = await import(pathToFileURL(join(dirname(fileURLToPath(import.meta.url)), '..', 'dist', 'agents.js')).href);
+  const old = process.env.PATH;
+  process.env.PATH = s.env.PATH;
+  try {
+    askAgent({ agent: 'opencode', model: 'm', prompt: 'p', schema: { type: 'object', properties: { ok: { type: 'boolean' } }, required: ['ok'] }, cwd: repo, timeoutMs: 60_000, tools: 'read', record: join(s.env.PATH, 'rec.json') });
+  } finally {
+    process.env.PATH = old;
+  }
+  assert.deepEqual(JSON.parse(s.calls()[0].permission), { '*': 'deny' });
+});
+
 test('braces in the prose before the JSON in the final answer do not break it', () => {
   const { repo, env } = setup();
   const s = stubPiGemini(env);

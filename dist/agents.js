@@ -72,7 +72,7 @@ const ADAPTERS = {
             }
             return extractJsonObject(text);
         },
-        env: (c) => (c.tools === 'edit' ? {} : { OPENCODE_PERMISSION: JSON.stringify(c.tools === 'read' ? { '*': 'deny', read: 'allow', grep: 'allow', glob: 'allow', list: 'allow' } : { '*': 'deny' }) }),
+        env: (c) => (c.tools === 'edit' ? {} : { OPENCODE_PERMISSION: JSON.stringify({ '*': 'deny' }) }),
     },
     // pi -p reads the prompt on stdin (probed 12 Oct: with no positional message, stdin becomes the user
     // message); --mode json streams JSONL events whose assistant message_end holds the answer text,

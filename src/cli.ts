@@ -771,15 +771,15 @@ function cmdInit(argv: string[]): number {
   const journey = values.journey ?? null;
   if (values.agent !== undefined && values.agent !== 'claude' && values.agent !== 'codex')
     throw new UsageError(`--agent ${values.agent} is not supported; the supported values are claude, codex`, 'Run: done-done init --agent <claude|codex>');
-  if (!journey && parts.length) throw new UsageError('init needs --journey <name> to record a command after --');
-  if (journey && !parts.length) throw new UsageError(`init --journey ${journey} needs a command after --`);
-  if (journey && !/^[A-Za-z0-9][A-Za-z0-9_-]*$/.test(journey)) throw new UsageError(`invalid journey name ${journey}; use letters, digits, - or _`);
+  if (journey === null && parts.length) throw new UsageError('init needs --journey <name> to record a command after --');
+  if (journey !== null && !parts.length) throw new UsageError(`init --journey ${journey} needs a command after --`);
+  if (journey !== null && !/^[A-Za-z0-9][A-Za-z0-9_-]*$/.test(journey)) throw new UsageError(`invalid journey name ${journey}; use letters, digits, - or _`);
   const repo = repoRoot();
   const file = join(repo, '.done-done.yaml');
   const existed = existsSync(file);
   const cfg = loadConfig(repo); // validates the existing project config; malformed -> exit 2, no writes
   const hook = values.agent === 'claude' ? claudeSettings(repo) : values.agent === 'codex' ? codexSettings(repo) : undefined; // likewise validated before any write
-  if (journey) {
+  if (journey !== null) {
     // Record the capture recipe in the repo so any checkout can re-run the proof.
     // The command is stored verbatim; ${RUN_ID} in it becomes the run id, like a run -- command.
     const command = parts.join(' ');

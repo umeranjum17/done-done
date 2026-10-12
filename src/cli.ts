@@ -1259,7 +1259,7 @@ async function cmdDoctor(argv: string[]): Promise<number> {
   const judgeChoice = (detail: string, ok: boolean, fix = ''): DoctorCheck => ({ check: 'judge_choice', status: ok ? 'ok' : 'missing', detail: `claude judge (model ${agentCfg.judge.model || 'none'})${detail}${route}`, fix });
   const apart = agent.agent !== 'claude';
   checks.push(
-    !agent.path ? judgeChoice(', and no author agent is installed, so there is no independence to check', false, 'Install an agent (see the agent check) so the judge can be checked against it')
+    !agent.path || !supported(agent.agent) ? judgeChoice(', and no author agent is installed, so there is no independence to check', false, 'Install an agent (see the agent check) so the judge can be checked against it')
       : apart ? judgeChoice(`, a different agent from the author (${agent.agent})`, true)
       : agentCfg.judge.allow_same ? judgeChoice(' in a fresh session, the same agent as the author; judge.allow_same accepts it (session-only independence)', true)
         : judgeChoice(' in a fresh session, the same agent as the author (session-only independence)', false, 'Set agent: to an agent other than claude, or set judge.allow_same: true in the global config to accept it'),

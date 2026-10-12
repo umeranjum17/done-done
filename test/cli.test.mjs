@@ -1617,6 +1617,8 @@ test('doctor finds agent, judge and ffprobe binaries from PATH; missing optional
   const codexOnly = toon(doctorIn(repo, pathEnv(env, ['codex']), 'doctor'));
   assert.equal(codexOnly.checks[4].status, 'missing');
   assert.match(codexOnly.checks[4].detail, /^codex \(model none; agent: auto\) at .*, but done-done cannot start codex yet \(claude and opencode for now\)/);
+  assert.equal(codexOnly.checks[7].status, 'missing', 'an author done-done cannot start is no author');
+  assert.match(codexOnly.checks[7].detail, /^claude judge \(model claude-haiku-5-5\), and no author agent is installed/);
   const two = toon(doctorIn(repo, pathEnv(env, ['codex', 'opencode']), 'doctor'));
   assert.match(two.checks[4].detail, /^opencode .* at /, 'auto skips an installed agent done-done cannot start');
   assert.equal(two.checks[7].status, 'ok', 'the author is opencode, so the claude judge is apart from it');

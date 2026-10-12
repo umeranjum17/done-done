@@ -220,7 +220,7 @@ export function askAgent(c) {
                     throw e;
                 // Only a tool-less call is asked again: an edit or read step may already have changed the repo or read it.
                 lastError = e.message;
-                if (c.tools !== 'none' || attempts >= ASK_ATTEMPTS)
+                if (c.tools !== 'none' || attempts >= (c.attempts ?? ASK_ATTEMPTS))
                     throw new Error(`the agent did not answer with valid JSON after ${attempts} ${attempts === 1 ? 'try' : 'tries'}: ${lastError}`);
             }
         }

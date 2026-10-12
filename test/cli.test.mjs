@@ -1786,6 +1786,21 @@ test('verify --judge with judge.route auto: opencode judges a claude author thro
   assert.match(toon(same).error, /is the author's own agent and model/);
 });
 
+test('verify --judge on the answerer route: a malformed judge answer is one request per capture, never re-asked, and the verdict is unsure', () => {
+  const t = setup();
+  mkdirSync(t.env.DONE_DONE_HOME, { recursive: true });
+  writeFileSync(join(t.env.DONE_DONE_HOME, 'config.yaml'), 'agent: claude\n');
+  const s = stubAgents(t.env, 'I think the screen is right, but I will not answer in JSON.');
+  symlinkSync(process.execPath, join(s.bin, 'node'));
+  const r = spawnSync(process.execPath, [CLI, 'verify', 'shots', '--outcome', 'home and settings render', '--judge', '--foreground'], { cwd: t.repo, env: s.env, encoding: 'utf8' });
+  const o = toon({ out: r.stdout });
+  const calls = s.calls();
+  assert.equal(calls.length, 2, 'one tools-off request per capture, no re-ask after a malformed answer');
+  assert.ok(calls.every((c) => c.agent === 'opencode'));
+  assert.equal(o.result, 'inconclusive', r.stdout);
+  assert.match(o.reason, /judge says unsure: the judge did not answer: the agent did not answer with valid JSON after 1 try/, r.stdout);
+});
+
 // doctor: read-only health check. Required items (git, config, evidence root) gate
 // exit 0/2; the skill, agent, judge and ffprobe items are optional and never fail it.
 // An isolated PATH holding only git plus the named stub binaries, so agent/judge/ffprobe

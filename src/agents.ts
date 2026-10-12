@@ -21,6 +21,7 @@ export type AgentCall = {
   tools: 'none' | 'read' | 'edit'; // none for the judge and readers
   record: string; // where the call record is written
   files?: string[]; // images attached to the prompt, for the answerer judge
+  attempts?: number; // asks allowed for a bad tool-less answer, default ASK_ATTEMPTS
 };
 export type AgentAnswer = { ok: boolean; answer?: Record<string, unknown>; error?: string; record?: string; recordError?: string };
 
@@ -228,7 +229,7 @@ export function askAgent(c: AgentCall): AgentAnswer {
         if (e instanceof ProviderError) throw e;
         // Only a tool-less call is asked again: an edit or read step may already have changed the repo or read it.
         lastError = (e as Error).message;
-        if (c.tools !== 'none' || attempts >= ASK_ATTEMPTS) throw new Error(`the agent did not answer with valid JSON after ${attempts} ${attempts === 1 ? 'try' : 'tries'}: ${lastError}`);
+        if (c.tools !== 'none' || attempts >= (c.attempts ?? ASK_ATTEMPTS)) throw new Error(`the agent did not answer with valid JSON after ${attempts} ${attempts === 1 ? 'try' : 'tries'}: ${lastError}`);
       }
     }
   } catch (e) {

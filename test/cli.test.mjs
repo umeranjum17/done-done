@@ -1,7 +1,7 @@
 // End-to-end: drives the built CLI against throwaway git repos with fictional fixtures.
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { appendFileSync, cpSync, mkdirSync, mkdtempSync, existsSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
@@ -857,25 +857,35 @@ test('init --agent opencode adds a session plugin that shows the bare state, mer
   process.env.DONE_DONE_HOME = env.DONE_DONE_HOME;
   try {
     const { DoneDonePlugin } = await import(pathToFileURL(plugin).href);
+    const id = () => `ses_${randomUUID()}`;
+    const ses1 = id();
+    const ses2 = id();
+    const ses3 = id();
+    for (const sessionID of [ses1, ses2, ses3]) rmSync(join(tmpdir(), 'done-done-opencode', sessionID), { force: true });
     const hooks = await DoneDonePlugin({ directory: repo });
     const parts = [];
-    await hooks['chat.message']({ sessionID: 'ses_1' }, { message: { id: 'msg_1' }, parts });
+    await hooks['chat.message']({ sessionID: ses1 }, { message: { id: 'msg_1' }, parts });
     assert.equal(parts.length, 1);
     assert.equal(parts[0].type, 'text');
     assert.equal(parts[0].text, dd().out.trim(), 'the first message of a session gains the bare done-done state');
     assert.match(parts[0].id, /^prt_/, 'the appended part carries a part id opencode accepts');
     assert.equal(parts[0].messageID, 'msg_1', 'the appended part carries the message id from output.message, since opencode passes no messageID to the hook');
-    assert.equal(parts[0].sessionID, 'ses_1', 'the appended part carries the hook session id');
-    await hooks['chat.message']({ sessionID: 'ses_1' }, { message: { id: 'msg_2' }, parts });
+    assert.equal(parts[0].sessionID, ses1, 'the appended part carries the hook session id');
+    await hooks['chat.message']({ sessionID: ses1 }, { message: { id: 'msg_2' }, parts });
     assert.equal(parts.length, 1, 'later messages in the same session gain nothing');
+    // A continued session (opencode run -s) starts a new plugin instance in a new process; it must not re-add the state.
+    const resumed = await DoneDonePlugin({ directory: repo });
+    const afterResume = [];
+    await resumed['chat.message']({ sessionID: ses1 }, { message: { id: 'msg_5' }, parts: afterResume });
+    assert.deepEqual(afterResume, [], 'a resumed session in a new plugin instance gains nothing');
     const fresh = [];
-    await hooks['chat.message']({ sessionID: 'ses_2' }, { message: { id: 'msg_3' }, parts: fresh });
+    await hooks['chat.message']({ sessionID: ses2 }, { message: { id: 'msg_3' }, parts: fresh });
     assert.equal(fresh.length, 1, 'a new session gains the state again');
     assert.match(fresh[0].id, /^prt_/);
     assert.notEqual(fresh[0].id, parts[0].id, 'each appended part gets its own id');
     process.env.PATH = join(dir, 'empty');
     const silent = [];
-    await hooks['chat.message']({ sessionID: 'ses_3' }, { message: { id: 'msg_4' }, parts: silent });
+    await hooks['chat.message']({ sessionID: ses3 }, { message: { id: 'msg_4' }, parts: silent });
     assert.deepEqual(silent, [], 'without done-done on PATH the hook appends nothing and never throws');
   } finally {
     process.env.PATH = prevPath;

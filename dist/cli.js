@@ -778,19 +778,29 @@ function opencodePlugin(repo) {
 // a session. Other files in .opencode/plugins/ are untouched; delete this file to opt out.
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 const COMMAND = "${CLAUDE_HOOK}";
+
+// One marker file per session, so a continued session (a new opencode process) is not treated as new.
+const firstMessage = (sessionID) => {
+  const dir = join(tmpdir(), "done-done-opencode");
+  const marker = join(dir, sessionID);
+  if (existsSync(marker)) return false;
+  try { mkdirSync(dir, { recursive: true }); writeFileSync(marker, ""); } catch {}
+  return true;
+};
 
 const run = (cwd) => new Promise((resolve) => {
   execFile("sh", ["-c", COMMAND], { cwd, encoding: "utf8", timeout: 30000 }, (error, stdout) => resolve(error ? "" : stdout.trim()));
 });
 
 export const DoneDonePlugin = async ({ directory }) => {
-  const seen = new Set();
   return {
     "chat.message": async (input, output) => {
-      if (seen.has(input.sessionID)) return;
-      seen.add(input.sessionID);
+      if (!firstMessage(input.sessionID)) return;
       const state = await run(directory);
       if (state) output.parts.push({ id: \`prt_\${randomUUID()}\`, messageID: output.message.id, sessionID: input.sessionID, type: "text", text: state });
     },

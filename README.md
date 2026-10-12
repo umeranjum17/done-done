@@ -187,7 +187,7 @@ Another fleet works the same way: add the include text to whatever your workers 
 
 ## What's next
 
-So far: `init`, `run`, `check`, `receipt`, the opt-in screenshot judge and the opt-in Claude Code and Codex session hooks. Coming next: help writing the proof steps for your app.
+So far: `init`, `run`, `check`, `receipt`, the opt-in screenshot judge and the opt-in Claude Code, Codex and opencode session hooks. Coming next: help writing the proof steps for your app.
 
 ## Develop
 

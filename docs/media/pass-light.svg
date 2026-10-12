@@ -15,7 +15,7 @@ text{font:16px ui-monospace,SFMono-Regular,'SF Mono',Menlo,Consolas,'Liberation 
 <text xml:space="preserve" x="22" y="120" textLength="374.4" lengthAdjust="spacing"><tspan class="d">outcome: </tspan>notes sync between two devices</text>
 <text xml:space="preserve" x="22" y="144" textLength="172.8" lengthAdjust="spacing"><tspan class="d">repro: </tspan>n/a: no bug</text>
 <text xml:space="preserve" x="22" y="168" textLength="412.8" lengthAdjust="spacing"><tspan class="d">proof: </tspan>no verify skill - done-done run sync</text>
-<text xml:space="preserve" x="22" y="192" textLength="412.8" lengthAdjust="spacing"><tspan class="d">evidence: </tspan>.proof/20261012T005507Z-7083df3e/</text>
+<text xml:space="preserve" x="22" y="192" textLength="412.8" lengthAdjust="spacing"><tspan class="d">evidence: </tspan>.proof/20261012T061715Z-779d1df4/</text>
 <text xml:space="preserve" x="22" y="216" textLength="124.8" lengthAdjust="spacing">    after.png</text>
 <text xml:space="preserve" x="22" y="240" textLength="412.8" lengthAdjust="spacing"><tspan class="c">~/notes $ </tspan><tspan class="b">done-done check --from pr-body.md</tspan></text>
 <text xml:space="preserve" x="22" y="264" textLength="134.4" lengthAdjust="spacing"><tspan class="d">command: </tspan>check</text>
@@ -23,9 +23,9 @@ text{font:16px ui-monospace,SFMono-Regular,'SF Mono',Menlo,Consolas,'Liberation 
 <text xml:space="preserve" x="22" y="312" textLength="355.2" lengthAdjust="spacing"><tspan class="d">claim: </tspan>notes sync between two devices</text>
 <text xml:space="preserve" x="22" y="336" textLength="172.8" lengthAdjust="spacing"><tspan class="d">source: </tspan>pr-body.md</text>
 <text xml:space="preserve" x="22" y="360" textLength="76.8" lengthAdjust="spacing"><tspan class="d">files: </tspan>1</text>
-<text xml:space="preserve" x="22" y="384" textLength="441.6" lengthAdjust="spacing"><tspan class="d">evidence[1]: </tspan>.proof/20261012T005507Z-7083df3e/</text>
+<text xml:space="preserve" x="22" y="384" textLength="441.6" lengthAdjust="spacing"><tspan class="d">evidence[1]: </tspan>.proof/20261012T061715Z-779d1df4/</text>
 <text xml:space="preserve" x="22" y="408" textLength="124.8" lengthAdjust="spacing">    after.png</text>
-<text xml:space="preserve" x="22" y="432" textLength="460.8" lengthAdjust="spacing"><tspan class="d">help[1]: </tspan>"Gate CI on this proof: done-done check</text>
-<text xml:space="preserve" x="22" y="456" textLength="441.6" lengthAdjust="spacing">    --from &lt;PR URL&gt; --trusted-ref origin/main"</text>
+<text xml:space="preserve" x="22" y="432" textLength="441.6" lengthAdjust="spacing"><tspan class="d">help[1]: </tspan>"Record this pass for HEAD: done-done</text>
+<text xml:space="preserve" x="22" y="456" textLength="288.0" lengthAdjust="spacing">    receipt --from pr-body.md"</text>
 <text xml:space="preserve" x="22" y="480" textLength="57.6" lengthAdjust="spacing"><tspan class="d">exit 0</tspan></text></g>
 </svg>

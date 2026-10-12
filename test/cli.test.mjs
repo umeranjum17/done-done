@@ -89,6 +89,17 @@ test('a fresh run of the real journey passes the check', () => {
   assert.deepEqual(d.evidence, files);
 });
 
+test('a pass with no origin remote points at a receipt; with one, at the CI gate', () => {
+  const { sh, dd, shots } = setup();
+  const { files } = shots();
+  const local = toon(dd('check', '--outcome', 'home and settings render', ...files));
+  assert.equal(local.help[0], `Record this pass for HEAD: done-done receipt --outcome "home and settings render" ${files.join(' ')}`);
+  const receipt = dd(...local.help[0].split(': ')[1].replace('done-done ', '').match(/"[^"]+"|\S+/g).map((a) => a.replace(/^"|"$/g, '')));
+  assert.equal(receipt.code, 0, `the suggested receipt command works: ${receipt.out}`);
+  sh('remote', 'add', 'origin', 'https://example.com/notes.git');
+  assert.match(toon(dd('check', '--outcome', 'home and settings render', ...files)).help[0], /^Gate CI on this proof: done-done check --from <PR URL> --trusted-ref origin\/main$/);
+});
+
 test('empty, truncated, blank, tiny and mislabelled images fail with the reason', () => {
   const { repo, dd, shots } = setup();
   const { id, files } = shots();
@@ -131,6 +142,9 @@ test('files outside any run record are inconclusive; a failed or dirty run fails
   const r = dd('check', '--outcome', 'hand made', join(dir, 'screen.png'));
   assert.equal(r.code, 3, r.out);
   assert.match(r.out, /not in any done-done run record/);
+  const none = dd('run', '--', 'true');
+  assert.equal(none.code, 1, none.out);
+  assert.match(toon(none).reason, /^the run wrote no files under \.proof;/, 'the reason names the evidence root repo-relative');
   const run = dd('run', 'broken');
   assert.equal(run.code, 1, run.out);
   assert.match(run.out, /exited 4/);
@@ -369,13 +383,21 @@ test('init writes a minimal config, ignores the evidence root, and is idempotent
   const { repo, dd } = bareRepo();
   const r = dd('init');
   assert.equal(r.code, 0, r.out);
+  const d = toon(r);
+  assert.equal(d.command, 'init');
+  assert.equal(d.result, 'pass');
+  assert.equal(d.config, 'written');
+  assert.equal(d.gitignore, 'added .proof/');
+  assert.match(d.help.join('\n'), /journeys: .*done-done run smoke/s, 'the next step shows a journey, then the run');
   const yml = join(repo, '.done-done.yaml');
   assert.equal(parse(readFileSync(yml, 'utf8')).evidence.root, '.proof');
   assert.ok(isIgnored(repo, '.proof/'), 'git ignores the evidence root');
   const before = [readFileSync(yml), readFileSync(join(repo, '.gitignore'))];
   const again = dd('init');
   assert.equal(again.code, 0, again.out);
-  assert.match(again.out, /already exists/);
+  assert.equal(toon(again).config, 'unchanged');
+  assert.equal(toon(again).gitignore, 'unchanged');
+  assert.deepEqual(json(dd('init', '--json')), toon(again), '--json is the same result as JSON');
   assert.deepEqual([readFileSync(yml), readFileSync(join(repo, '.gitignore'))], before, 'repeat init preserves both files');
 });
 
@@ -392,6 +414,10 @@ test('init leaves a customized config untouched and only appends a missing ignor
   const snapshot = readFileSync(join(repo, '.gitignore'));
   assert.equal(dd('init').code, 0);
   assert.deepEqual(readFileSync(join(repo, '.gitignore')), snapshot, 'the second init appends nothing');
+  writeFileSync(join(repo, '.done-done.yaml'), 'app: notes\nevidence:\n  root: ..proof\n');
+  const dots = toon(dd('init'));
+  assert.deepEqual([dots.evidence_root, dots.gitignore], ['..proof', 'added ..proof/'], 'a root named ..proof is inside the repo');
+  assert.ok(isIgnored(repo, '..proof/'));
 });
 
 test('init is a no-op when the evidence root is already tracked and ignored', () => {
@@ -414,7 +440,7 @@ test('init refuses a malformed config with a clear error and no rewrite', () => 
   const r = dd('init');
   assert.equal(r.code, 2, r.out);
   assert.match(r.out, /\.done-done\.yaml/);
-  assert.match(toon(r).help[0], /done-done init/, 'a config error names the recovery command');
+  assert.equal(toon(r).help[0], 'Fix the config file named above, then re-run: done-done init', 'init cannot fix a bad config, so the hint is to fix it');
   assert.deepEqual(readFileSync(join(repo, '.done-done.yaml')), before, 'the bad file is not rewritten');
   writeFileSync(join(repo, '.done-done.yaml'), 'unknown_key: 1\n');
   assert.equal(dd('init').code, 2, 'an invalid key is refused too');
@@ -441,7 +467,7 @@ test('a repo set up by init captures and checks real evidence, then catches stal
   const init = dd('init');
   assert.equal(init.code, 0);
   // Follow init's hint as printed: its example journey, placeholder filled in, becomes the config.
-  const example = init.out.match(/journeys: \{.*\} \}/)[0].replace('<drive the real app>', 'echo added: milk');
+  const example = toon(init).help[0].match(/journeys: \{.*\} \}/)[0].replace('<drive the real app>', 'echo added: milk');
   appendFileSync(join(repo, '.done-done.yaml'), `${example}\n`);
   sh('add', '-A');
   sh('commit', '-qm', 'config');
@@ -456,6 +482,7 @@ test('a repo set up by init captures and checks real evidence, then catches stal
   const stale = dd('check', '--outcome', 'notes add works', `.proof/${id}.log`);
   assert.equal(stale.code, 1, stale.out);
   assert.match(stale.out, /evidence is for commit/);
+  assert.equal(toon(stale).help[0], 'Commit your change, re-capture with done-done run smoke, then check the new files', 'evidence is ignored, so the hint never says to commit it');
 });
 
 test('a result is one TOON document by default, and --json is the same data as JSON', () => {
@@ -487,6 +514,34 @@ test('--full lists every finding; the compact default truncates and says how man
   assert.equal(f.findings.length, 7, '--full shows every finding');
   assert.equal(f.findings_omitted, undefined);
   assert.equal(f.evidence_omitted, undefined);
+});
+
+test('every command has its own --help, and a usage error names the command and its flags', () => {
+  const { dd } = setup();
+  const top = dd('--help');
+  assert.equal(top.code, 0, top.out);
+  for (const cmd of ['init', 'run', 'check', 'receipt']) {
+    const h = dd(cmd, '--help');
+    assert.equal(h.code, 0, h.out);
+    assert.match(h.out, /^usage:\n( {2}done-done .+\n)+flags:\n( {2}.+\n)+(\S.+\n( {2}.+\n)+)*global flags: .+\nexit codes: .+\n$/, `${cmd} --help has the shared shape`);
+    for (const line of h.out.split('\n').filter((l) => l.startsWith('  done-done '))) {
+      assert.ok(line.startsWith(`  done-done ${cmd}`), `${cmd} --help shows only ${cmd}: ${line}`);
+      assert.ok(top.out.includes(line.split(/ {3,}/)[0]), `top-level --help lists ${line}`);
+    }
+    assert.equal(dd(cmd, '-h').out, h.out, `${cmd} -h is --help`);
+    const bad = dd(cmd, '--bogus');
+    assert.equal(bad.code, 2, bad.out);
+    assert.equal(toon(bad).command, cmd, 'the error names the subcommand');
+    assert.match(toon(bad).help[0], new RegExp(`done-done ${cmd} --help`));
+  }
+  assert.match(toon(dd('check', '--outcome', 'x', '--bogus.yaml')).help[0], /^Valid flags for check: /, 'a .yaml-looking flag is still a flag error');
+  assert.match(toon(dd('check', '--from', 'missing.yaml')).help[0], /done-done check --help/, 'a missing claim file is not a config error');
+  assert.match(dd('receipt', '--help').out, /done-done receipt --outcome .*\[--trusted-ref <ref>\]/);
+  assert.match(dd('run', '--help').out, /--close <run-id> +seal an open run/);
+  assert.match(dd('run', '--help').out, /^journeys \(\.done-done\.yaml\): /m, 'run --help shows the journey format');
+  assert.match(dd('receipt', '--help').out, /^Checks block \(--from\): .*\n {2}outcome: /m, 'receipt --help shows the Checks block');
+  assert.match(dd('check', '--help').out, /--trusted-ref <ref> +read \.done-done\.yaml/);
+  assert.equal(dd('run', '--', 'node', '-e', 'process.exit(0)', '--help').code, 1, 'a --help after -- belongs to the run command');
 });
 
 test('a failing check points at the exact command that produces the proof', () => {

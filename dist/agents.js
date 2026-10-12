@@ -8,7 +8,7 @@ import { onPath } from './judge.js';
 // narration; braces in narration are skipped, and a span nested inside an accepted object is not a candidate.
 // ponytail: tries every brace pair (quadratic in the braces), fine for one answer's text.
 function jsonIn(text) {
-    const ends = [...text].flatMap((c, i) => (c === '}' ? [i + 1] : [])).reverse();
+    const ends = [...text.matchAll(/\}/g)].map((m) => m.index + 1).reverse();
     let answer;
     for (let start = text.indexOf('{'); start >= 0; start = text.indexOf('{', start + 1)) {
         if (answer && start < answer.end)

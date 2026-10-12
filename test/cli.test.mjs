@@ -681,15 +681,54 @@ test('init --agent claude adds a SessionStart hook that shows the bare state, me
   assert.equal(two.dd('init', '--agent', 'claude').code, 0);
   const merged = JSON.parse(readFileSync(join(two.repo, '.claude', 'settings.json'), 'utf8'));
   assert.deepEqual(merged, { ...other, hooks: { ...other.hooks, SessionStart: [...other.hooks.SessionStart, hooks[0]] } }, 'both hooks and every other key are kept');
-  // Another agent is a usage error naming the supported value; a malformed settings file is left untouched.
-  const bad = two.dd('init', '--agent', 'codex');
+  // Another agent is a usage error naming the supported values; a malformed settings file is left untouched.
+  const bad = two.dd('init', '--agent', 'opencode');
   assert.equal(bad.code, 2, bad.out);
-  assert.match(toon(bad).error, /supported value is claude/);
+  assert.match(toon(bad).error, /supported values are claude, codex/);
   writeFileSync(join(two.repo, '.claude', 'settings.json'), '{ nope');
   const broken = two.dd('init', '--agent', 'claude');
   assert.equal(broken.code, 2, broken.out);
   assert.match(toon(broken).help[0], /Fix \.claude\/settings\.json/);
   assert.equal(readFileSync(join(two.repo, '.claude', 'settings.json'), 'utf8'), '{ nope');
+});
+
+test('init --agent codex adds a SessionStart hook that shows the bare state, merges, and never duplicates', () => {
+  const { dir, repo, env, dd } = bareRepo();
+  const hooksFile = join(repo, '.codex', 'hooks.json');
+  const r = dd('init', '--agent', 'codex');
+  assert.equal(r.code, 0, r.out);
+  assert.equal(toon(r).codex_hook, 'added to .codex/hooks.json');
+  const hooks = JSON.parse(readFileSync(hooksFile, 'utf8')).hooks.SessionStart;
+  assert.equal(hooks.length, 1);
+  const { command } = hooks[0].hooks[0];
+  // Run the hook as Codex does: through a shell, from the repo cwd, with done-done on PATH and without it.
+  const bin = join(dir, 'bin');
+  mkdirSync(bin);
+  writeFileSync(join(bin, 'done-done'), `#!/bin/sh\nexec ${JSON.stringify(process.execPath)} ${JSON.stringify(CLI)} "$@"\n`, { mode: 0o755 });
+  const hook = (path) => spawnSync('/bin/sh', ['-c', command], { cwd: repo, env: { ...env, PATH: path }, encoding: 'utf8' });
+  const on = hook(`${bin}:${env.PATH}`);
+  assert.equal(on.status, 0, on.stderr);
+  assert.equal(on.stdout, dd().out, 'the hook prints the bare done-done state');
+  assert.equal(toon({ out: on.stdout }).config, 'present');
+  const off = hook(join(dir, 'empty'));
+  assert.deepEqual([off.status, off.stdout, off.stderr], [0, '', ''], 'without done-done on PATH the hook is silent and exits 0');
+  const before = readFileSync(hooksFile);
+  assert.equal(toon(dd('init', '--agent', 'codex')).codex_hook, 'unchanged');
+  assert.deepEqual(readFileSync(hooksFile), before, 'a second run adds no duplicate');
+  // An existing hooks file keeps its other keys and hooks.
+  const other = { description: 'team hooks', hooks: { SessionStart: [{ matcher: 'startup', hooks: [{ type: 'command', command: 'echo hi' }] }], Stop: [{ hooks: [{ type: 'command', command: 'echo bye' }] }] } };
+  const two = bareRepo();
+  mkdirSync(join(two.repo, '.codex'));
+  writeFileSync(join(two.repo, '.codex', 'hooks.json'), JSON.stringify(other));
+  assert.equal(two.dd('init', '--agent', 'codex').code, 0);
+  const merged = JSON.parse(readFileSync(join(two.repo, '.codex', 'hooks.json'), 'utf8'));
+  assert.deepEqual(merged, { ...other, hooks: { ...other.hooks, SessionStart: [...other.hooks.SessionStart, hooks[0]] } }, 'both hooks and every other key are kept');
+  // A malformed hooks file is left untouched.
+  writeFileSync(join(two.repo, '.codex', 'hooks.json'), '{ nope');
+  const broken = two.dd('init', '--agent', 'codex');
+  assert.equal(broken.code, 2, broken.out);
+  assert.match(toon(broken).help[0], /Fix \.codex\/hooks\.json/);
+  assert.equal(readFileSync(join(two.repo, '.codex', 'hooks.json'), 'utf8'), '{ nope');
 });
 
 test('init outside a git repository reports a clear usage error', () => {

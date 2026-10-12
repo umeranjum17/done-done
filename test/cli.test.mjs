@@ -1863,7 +1863,7 @@ test('doctor finds agent, judge and ffprobe binaries from PATH; missing optional
   assert.match(f.checks[6].detail, /found at .*ffprobe/);
   const codexOnly = toon(doctorIn(repo, pathEnv(env, ['codex']), 'doctor'));
   assert.equal(codexOnly.checks[4].status, 'missing');
-  assert.match(codexOnly.checks[4].detail, /^codex \(model none; agent: auto\) at .*, but done-done cannot start codex yet \(claude and opencode for now\)/);
+  assert.match(codexOnly.checks[4].detail, /^codex \(model none; agent: auto\) at .*, but done-done cannot start codex yet \(claude, opencode, pi and gemini for now\)/);
   assert.equal(codexOnly.checks[7].status, 'missing', 'an author done-done cannot start is no author');
   assert.match(codexOnly.checks[7].detail, /^claude judge \(model claude-haiku-5-5\), and no startable author agent is installed/);
   const two = toon(doctorIn(repo, pathEnv(env, ['codex', 'opencode']), 'doctor'));
@@ -1874,7 +1874,7 @@ test('doctor finds agent, judge and ffprobe binaries from PATH; missing optional
   assert.equal(none.code, 0, 'missing optionals still exit 0 when every required item is ok');
   const n = toon(none);
   assert.deepEqual(n.checks.slice(4).map((c) => c.status), ['missing', 'missing', 'missing', 'missing']);
-  assert.match(n.checks[4].fix, /Install claude and opencode, or set agent: to an installed one of claude, codex, opencode, pi, gemini/);
+  assert.match(n.checks[4].fix, /Install claude, opencode, pi and gemini, or set agent: to an installed one of claude, codex, opencode, pi, gemini/);
   assert.match(n.checks[5].fix, /judge\.bin/);
   assert.match(n.checks[6].fix, /ffprobe/);
   assert.match(n.checks[7].detail, /^claude judge \(model claude-haiku-5-5\), and no author agent is installed/, 'with no author there is no same-agent claim');
@@ -1925,11 +1925,11 @@ test('the agent comes from config (a fallback list moves past missing agents), a
     const r = doctorIn(repo, s.env, 'doctor', ...args);
     return { ...r, d: r.out.startsWith('command') ? toon(r) : undefined, by: (n) => toon(r).checks.find((c) => c.check === n) };
   };
-  // pi is listed first and installed, but done-done cannot start it yet, so the list moves on to opencode at its configured model and doctor names pi.
-  writeFileSync(join(s.bin, 'pi'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
-  const oc = doctor('agent: [pi, opencode]\n', '--probe');
+  // codex is listed first and installed, but done-done cannot start it yet, so the list moves on to opencode at its configured model and doctor names codex.
+  writeFileSync(join(s.bin, 'codex'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+  const oc = doctor('agent: [codex, opencode]\n', '--probe');
   assert.equal(oc.code, 0, oc.out);
-  assert.match(oc.by('agent').detail, /^opencode \(model opencode-go\/test-model; from config; skipped pi: done-done cannot start it yet\)/);
+  assert.match(oc.by('agent').detail, /^opencode \(model opencode-go\/test-model; from config; skipped codex: done-done cannot start it yet\)/);
   assert.match(oc.by('judge_choice').detail, /^claude judge \(model claude-haiku-5-5\), a different agent from the author \(opencode\)/);
   assert.equal(oc.by('probe').status, 'ok');
   const [call] = s.calls();
@@ -1969,14 +1969,13 @@ test('the agent comes from config (a fallback list moves past missing agents), a
   assert.equal(doctorIn(repo, bad.env, 'doctor').code, 0);
   assert.equal(bad.calls().length, 1);
   // An agent without an adapter yet, an explicit judge route, and bad values.
-  const pi = doctor('agent: pi\n', '--probe');
-  assert.equal(pi.code, 2, pi.out);
-  assert.match(pi.by('probe').detail, /cannot start pi yet/);
-  assert.equal(pi.by('probe').fix, 'Set agent: to claude and opencode', 'a probe that never ran points at the agent fix, not a sign-in');
+  const cx = doctor('agent: codex\n', '--probe');
+  assert.equal(cx.code, 2, cx.out);
+  assert.match(cx.by('probe').detail, /cannot start codex yet/);
+  assert.equal(cx.by('probe').fix, 'Set agent: to claude, opencode, pi and gemini', 'a probe that never ran points at the agent fix, not a sign-in');
   writeFileSync(join(s.bin, 'gemini'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
-  const pg = doctor('agent: [pi, gemini]\n');
-  assert.equal(pg.by('agent').status, 'missing');
-  assert.match(pg.by('agent').detail, /^pi \(model none; from config; skipped gemini: done-done cannot start it yet\) at .*, but done-done cannot start pi yet/, 'gemini is installed too, so it is named');
+  const pg = doctor('agent: [codex, gemini]\n');
+  assert.match(pg.by('agent').detail, /^gemini \(model flash-lite; from config; skipped codex: done-done cannot start it yet\)/, 'the list moves past codex to the startable gemini at its cheap default');
   writeFileSync(join(env.DONE_DONE_HOME, 'config.yaml'), 'judge:\n  route: opencode:plan_key:opencode-go\n  model: muse-spark-1.3-contributor\n');
   assert.match(doctor('').by('judge_choice').detail, /^claude judge \(model muse-spark-1.3-contributor\) in a fresh session.*judge\.route opencode:plan_key:opencode-go is recorded, not used yet/);
   assert.match(doctor('agent: cursor\n').out, /agent must be auto, or one or a list of claude, codex, opencode, pi, gemini/);
@@ -2217,4 +2216,110 @@ test('attach streams a running run to its end', async () => {
   assert.equal(code, 0, out + err);
   assert.match(err, /running/, 'events streamed to stderr');
   assert.equal(toon({ out }).result, 'pass');
+});
+
+// Stub pi and gemini CLIs that log how they were started (argv, stdin, cwd) and answer like the real ones:
+// pi -p --mode json streams JSONL with the answer in the assistant message_end text parts (fenced, as models
+// often do); gemini -p -o json prints one object with the answer in `response` (its headless.md).
+// Mode 'retry' answers garbage on the first call (counted from the log) so ask-again is exercised, 'bad'
+// always does, and 'auth' fails like a signed-out CLI.
+function stubPiGemini(env, answer = '{"ok":true}', mode = 'ok') {
+  const e = pathEnv(env, ['ffprobe']);
+  const log = join(e.PATH, 'calls.jsonl');
+  const fenced = '```json\n' + answer + '\n```';
+  writeFileSync(join(e.PATH, 'pi'), `#!${process.execPath}
+const { appendFileSync, readFileSync } = require('node:fs');
+const argv = process.argv.slice(2);
+const stdin = readFileSync(0, 'utf8');
+appendFileSync(${JSON.stringify(log)}, JSON.stringify({ agent: 'pi', argv, stdin, cwd: process.cwd() }) + '\\n');
+const n = readFileSync(${JSON.stringify(log)}, 'utf8').trim().split('\\n').length;
+const text = ${JSON.stringify(mode)} === 'bad' || (${JSON.stringify(mode)} === 'retry' && n === 1) ? 'not json at all' : ${JSON.stringify(fenced)};
+for (const t of ['session', 'agent_start', 'turn_start']) console.log(JSON.stringify({ type: t }));
+console.log(JSON.stringify({ type: 'message_end', message: { role: 'assistant', content: [{ type: 'text', text }] } }));
+console.log(JSON.stringify({ type: 'agent_end' }));
+`, { mode: 0o755 });
+  writeFileSync(join(e.PATH, 'gemini'), `#!${process.execPath}
+const { appendFileSync, readFileSync } = require('node:fs');
+const argv = process.argv.slice(2);
+const stdin = readFileSync(0, 'utf8');
+appendFileSync(${JSON.stringify(log)}, JSON.stringify({ agent: 'gemini', argv, stdin, cwd: process.cwd() }) + '\\n');
+if (${JSON.stringify(mode)} === 'auth') { process.stderr.write('Opening authentication page in your browser. Do you want to continue? [Y/n]: '); process.exit(1); }
+process.stdout.write(JSON.stringify({ response: ${JSON.stringify(fenced)}, stats: {} }));
+`, { mode: 0o755 });
+  const calls = () => (existsSync(log) ? readFileSync(log, 'utf8').trim().split('\n').map((l) => JSON.parse(l)) : []);
+  return { env: e, calls };
+}
+
+test('doctor --probe asks pi on stdin (never in argv) with tools off and a scratch cwd', () => {
+  const { repo, env } = setup();
+  const s = stubPiGemini(env);
+  mkdirSync(env.DONE_DONE_HOME, { recursive: true });
+  writeFileSync(join(env.DONE_DONE_HOME, 'config.yaml'), 'agent: pi\n');
+  const r = doctorIn(repo, s.env, 'doctor', '--probe');
+  assert.equal(r.code, 0, r.out);
+  const d = toon(r);
+  assert.match(d.checks.find((x) => x.check === 'agent').detail, /^pi \(model claude-bridge\/claude-haiku-4-5; from config\)/);
+  assert.equal(d.checks.find((x) => x.check === 'probe').status, 'ok');
+  const [call] = s.calls();
+  assert.equal(call.agent, 'pi');
+  assert.match(call.stdin, /connectivity probe/, 'the prompt goes on stdin (the schema is enforced by done-done, then asked again)');
+  assert.ok(!call.argv.some((a) => a.includes('connectivity probe')), 'never in argv');
+  assert.deepEqual(call.argv, ['-p', '--mode', 'json', '--no-session', '--no-tools', '--model', 'claude-bridge/claude-haiku-4-5']);
+  assert.notEqual(call.cwd, repo, 'a tool-less probe runs in a scratch dir, never the repo');
+  const record = d.checks.find((x) => x.check === 'probe').detail.match(/record (\S+)$/)[1];
+  assert.equal(statSync(record).mode & 0o777, 0o600);
+  const rec = JSON.parse(readFileSync(record, 'utf8'));
+  assert.deepEqual([rec.agent, rec.model, rec.tools, rec.attempts, rec.ok, rec.answer], ['pi', 'claude-bridge/claude-haiku-4-5', 'none', 1, true, { ok: true }]);
+  assert.ok(rec.prompt_bytes > 0 && !JSON.stringify(rec).includes('connectivity probe'), 'the record keeps no prompt text');
+});
+
+test('pi is asked again when its answer is not valid JSON, then fails after three tries', () => {
+  const { repo, env } = setup();
+  mkdirSync(env.DONE_DONE_HOME, { recursive: true });
+  writeFileSync(join(env.DONE_DONE_HOME, 'config.yaml'), 'agent: pi\n');
+  const once = stubPiGemini(env, '{"ok":true}', 'retry');
+  const r = doctorIn(repo, once.env, 'doctor', '--probe');
+  assert.equal(r.code, 0, r.out);
+  assert.equal(toon(r).checks.find((x) => x.check === 'probe').status, 'ok');
+  assert.equal(once.calls().length, 2, 'the bad first answer is asked again once');
+  assert.match(once.calls()[1].stdin, /not valid[\s\S]*Answer with only one JSON object[\s\S]*"required":\["ok"\]/, 'the retry names what was wrong and repeats the schema');
+  const record = toon(r).checks.find((x) => x.check === 'probe').detail.match(/record (\S+)$/)[1];
+  assert.equal(JSON.parse(readFileSync(record, 'utf8')).attempts, 2);
+  const bad = stubPiGemini(env, '{"ok":true}', 'bad');
+  const failed = doctorIn(repo, bad.env, 'doctor', '--probe');
+  assert.equal(failed.code, 2, failed.out);
+  assert.match(toon(failed).checks.find((x) => x.check === 'probe').detail, /did not answer with valid JSON after 3 tries/);
+  assert.equal(bad.calls().length, 3, 'at most three tries');
+});
+
+test('doctor --probe asks gemini with the prompt on stdin, and reports a signed-out gemini with a sign-in fix', () => {
+  const { repo, env } = setup();
+  mkdirSync(env.DONE_DONE_HOME, { recursive: true });
+  writeFileSync(join(env.DONE_DONE_HOME, 'config.yaml'), 'agent: gemini\n');
+  const s = stubPiGemini(env);
+  const r = doctorIn(repo, s.env, 'doctor', '--probe');
+  assert.equal(r.code, 0, r.out);
+  const d = toon(r);
+  assert.match(d.checks.find((x) => x.check === 'agent').detail, /^gemini \(model flash-lite; from config\)/);
+  assert.equal(d.checks.find((x) => x.check === 'probe').status, 'ok');
+  const [call] = s.calls();
+  assert.equal(call.agent, 'gemini');
+  assert.match(call.stdin, /connectivity probe/);
+  assert.deepEqual(call.argv, ['-p', 'Follow the instructions on stdin.', '-o', 'json', '-m', 'flash-lite', '--approval-mode', 'plan', '--skip-trust']);
+  assert.ok(!call.argv.some((a) => a.includes('connectivity probe')), 'never in argv');
+  assert.notEqual(call.cwd, repo, 'a tool-less probe runs in a scratch dir, never the repo');
+  const out = stubPiGemini(env, '{"ok":true}', 'auth');
+  const failed = doctorIn(repo, out.env, 'doctor', '--probe');
+  assert.equal(failed.code, 2, failed.out);
+  const probe = toon(failed).checks.find((x) => x.check === 'probe');
+  assert.equal(probe.status, 'missing');
+  assert.match(probe.detail, /gemini did not answer: gemini exited 1/);
+  assert.match(probe.fix, /Check that gemini is signed in and can use model flash-lite/);
+});
+
+test('agent auto picks pi over gemini at their cheap defaults', () => {
+  const { repo, env } = setup();
+  const s = stubPiGemini(env);
+  const d = toon(doctorIn(repo, s.env, 'doctor'));
+  assert.match(d.checks.find((x) => x.check === 'agent').detail, /^pi \(model claude-bridge\/claude-haiku-4-5; agent: auto\) at /);
 });

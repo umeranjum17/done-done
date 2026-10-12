@@ -1735,7 +1735,8 @@ async function cmdDoctor(argv) {
         }
     }
     const agent = agentCfg && selectAgent(agentCfg);
-    const startable = AGENTS.filter(supported).join(' and ');
+    const startableList = AGENTS.filter(supported);
+    const startable = startableList.length > 1 ? `${startableList.slice(0, -1).join(', ')} and ${startableList.at(-1)}` : (startableList[0] ?? 'no agent');
     const installFix = `Install ${startable}, or set agent: to an installed one of ${AGENTS.join(', ')}`;
     const switchFix = `Set agent: to ${startable}`;
     if (repoFileInvalid) {

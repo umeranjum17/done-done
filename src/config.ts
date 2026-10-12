@@ -25,8 +25,10 @@ export type Config = {
 // The coding agents done-done can start, in the order `agent: auto` looks for them on PATH.
 export const AGENTS = ['claude', 'codex', 'opencode', 'pi', 'gemini'];
 // The cost guard is this table: a default model is always the agent's cheap one, never a flagship,
-// whatever the vendor; any other model runs only when the user names it. pi and gemini get theirs with their adapters.
-export const CHEAP_MODELS: Record<string, string> = { claude: 'claude-haiku-5-5', opencode: 'opencode-go/muse-spark-1.3-contributor' };
+// whatever the vendor; any other model runs only when the user names it. pi's default is the cheapest
+// model in its own `pi --list-models` under the provider that answers here (claude-bridge haiku);
+// gemini's is the CLI's own `flash-lite` alias (its cli-reference.md: the fastest model for simple tasks).
+export const CHEAP_MODELS: Record<string, string> = { claude: 'claude-haiku-5-5', opencode: 'opencode-go/muse-spark-1.3-contributor', pi: 'claude-bridge/claude-haiku-4-5', gemini: 'flash-lite' };
 
 // Where each key may be set. Global-only keys describe the machine; repo-only keys describe the project; `any` may be in either.
 const KEYS: Record<string, { scope: 'global' | 'repo' | 'any'; type: 'string' | 'boolean' | 'string[]' | 'journeys' | 'agent' | 'agent_config' }> = {

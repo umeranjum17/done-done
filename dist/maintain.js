@@ -83,10 +83,10 @@ function citeProblem(repo, file, line, end = line) {
         return `${file} is outside the repository`;
     let n;
     try {
-        if (!lstatSync(p, { throwIfNoEntry: false })?.isFile())
-            return `${file} is not a file in the repository`;
         if (!realInside(repo, p))
             return `${file} is outside the repository`;
+        if (!lstatSync(p, { throwIfNoEntry: false })?.isFile())
+            return `${file} is not a file in the repository`;
         const text = readFileSync(p, 'utf8');
         n = text === '' ? 0 : text.split('\n').length - (text.endsWith('\n') ? 1 : 0);
     }
@@ -235,7 +235,8 @@ export async function maintainSteps(run, dir, cfg, h) {
         for (const m of text.matchAll(CITE)) {
             if (!m[1].includes('/') && !exts.has(extname(m[1])))
                 continue;
-            for (const p of m[1].includes('/') ? tracked.filter((t) => t === m[1]) : trackedNamed(tracked, m[1])) {
+            const from = relative(repo, resolve(repo, m[1]));
+            for (const p of m[1].includes('/') ? tracked.filter((t) => t === from) : trackedNamed(tracked, m[1])) {
                 if (seen.has(p) || left.has(p))
                     continue;
                 const abs = join(repo, p);
@@ -310,7 +311,7 @@ ${text.slice(0, FEATURE_CHARS)}${toolless ? citedSource(rel(file), text) : ''}`;
                     add({ kind: 'citation', file: rel(f), line: i + 1, what: `cites ${m[0]}, but ${why}` });
             }
         });
-    const unverified = [];
+    const unverified = (run.unverified = []);
     const shaped = (v, ok, where) => {
         if (!Array.isArray(v)) {
             unverified.push(`${where} is not a list, so none of it is checked`);

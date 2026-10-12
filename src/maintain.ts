@@ -96,8 +96,8 @@ function citeProblem(repo: string, file: string, line: number, end = line): stri
   if (!r || r.startsWith('..') || isAbsolute(r)) return `${file} is outside the repository`;
   let n: number;
   try {
-    if (!lstatSync(p, { throwIfNoEntry: false })?.isFile()) return `${file} is not a file in the repository`;
     if (!realInside(repo, p)) return `${file} is outside the repository`;
+    if (!lstatSync(p, { throwIfNoEntry: false })?.isFile()) return `${file} is not a file in the repository`;
     const text = readFileSync(p, 'utf8');
     n = text === '' ? 0 : text.split('\n').length - (text.endsWith('\n') ? 1 : 0);
   } catch {
@@ -140,7 +140,7 @@ const RECONCILE_SCHEMA = {
 // Model answers are input from outside: keep only the items with the shape the schema asked for.
 const isCite = (x: any) => typeof x.file === 'string' && Number.isInteger(x.line);
 
-export async function maintainSteps<S>(run: { repo: string; findings?: Finding[]; git_status?: string }, dir: string, cfg: Config, h: Harness<S>): Promise<void> {
+export async function maintainSteps<S>(run: { repo: string; findings?: Finding[]; git_status?: string; unverified?: string[] }, dir: string, cfg: Config, h: Harness<S>): Promise<void> {
   const repo = run.repo;
   const before = repoState(repo);
   const findings: Finding[] = (run.findings = []);
@@ -240,7 +240,8 @@ export async function maintainSteps<S>(run: { repo: string; findings?: Finding[]
     let total = 0;
     for (const m of text.matchAll(CITE)) {
       if (!m[1].includes('/') && !exts.has(extname(m[1]))) continue;
-      for (const p of m[1].includes('/') ? tracked.filter((t) => t === m[1]) : trackedNamed(tracked, m[1])) {
+      const from = relative(repo, resolve(repo, m[1]));
+      for (const p of m[1].includes('/') ? tracked.filter((t) => t === from) : trackedNamed(tracked, m[1])) {
         if (seen.has(p) || left.has(p)) continue;
         const abs = join(repo, p);
         const body = tryRead<string | undefined>(abs, undefined, () => (lstatSync(abs, { throwIfNoEntry: false })?.isFile() && realInside(repo, abs) ? readFileSync(abs, 'utf8') : undefined));
@@ -306,7 +307,7 @@ ${text.slice(0, FEATURE_CHARS)}${toolless ? citedSource(rel(file), text) : ''}`;
         if (why) add({ kind: 'citation', file: rel(f), line: i + 1, what: `cites ${m[0]}, but ${why}` });
       }
     });
-  const unverified: string[] = [];
+  const unverified: string[] = (run.unverified = []);
   const shaped = <T>(v: unknown, ok: (x: any) => boolean, where: string): T[] => {
     if (!Array.isArray(v)) {
       unverified.push(`${where} is not a list, so none of it is checked`);

@@ -998,6 +998,11 @@ function showRun(dir, cfg, command, gone = false) {
         result.findings = findings.items;
     if (findings.omitted)
         result.findings_omitted = findings.omitted;
+    const unverified = cap(run.unverified ?? []);
+    if (unverified.items.length)
+        result.unverified = unverified.items;
+    if (unverified.omitted)
+        result.unverified_omitted = unverified.omitted;
     result.run = shown(run.repo, dir);
     result.help =
         code === WAITING ? [`The run goes on without this command; read it later: done-done status --run ${run.run_id}`]

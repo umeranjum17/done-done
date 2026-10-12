@@ -2695,7 +2695,50 @@ test('maintain lists a reader drift item with a string line as unverified, not a
   const r = doctorIn(repo, s.env, 'maintain', '--foreground');
   const m = toon(r);
   assert.deepEqual([r.code, m.result], [0, 'clean'], r.out);
-  assert.match(toon(doctorIn(repo, s.env, 'logs', '--step', 'reconcile')).log.join('\n'), /drift has an item in an unexpected shape/);
+  assert.match(m.unverified.join('\n'), /drift has an item in an unexpected shape/, r.out);
+});
+
+test('maintain gives a pi reader the cited source for a ./ path citation', () => {
+  const { repo, env, sh } = setup();
+  const s = stubPiGemini(env, JSON.stringify({ drift: [], recipe: 'open it', recipes: [], missing: [] }));
+  mkdirSync(env.DONE_DONE_HOME, { recursive: true });
+  writeFileSync(join(env.DONE_DONE_HOME, 'config.yaml'), 'agent: pi\n');
+  const skill = join(repo, '.agents', 'skills', 'verify-notes');
+  mkdirSync(join(skill, 'features'), { recursive: true });
+  mkdirSync(join(repo, 'src'), { recursive: true });
+  writeFileSync(join(repo, 'src', 'app.js'), 'export const app = 1; // CITED-SOURCE-LINE\n');
+  writeFileSync(join(skill, 'SKILL.md'), '# verify-notes\n');
+  writeFileSync(join(skill, 'features', 'README.md'), '# features\n\n- [Home](home.md)\n');
+  writeFileSync(join(skill, 'features', 'home.md'), '# Home\n\nThe app starts at ./src/app.js:1.\n');
+  sh('add', '-A');
+  sh('commit', '-qm', 'skill');
+  const r = doctorIn(repo, s.env, 'maintain', '--foreground');
+  assert.equal(r.code, 0, r.out);
+  const reader = s.calls().find((c) => c.stdin.includes('Feature file'));
+  assert.match(reader.stdin, /Cited source src\/app\.js:\nexport const app = 1; \/\/ CITED-SOURCE-LINE/);
+});
+
+test('maintain says a cited symlink that points outside the repo is outside the repository', () => {
+  const { repo, env, sh } = setup();
+  const s = stubAgents(env, JSON.stringify({ drift: [], recipe: 'open it', recipes: [], missing: [] }));
+  const outside = mkdtempSync(join(tmpdir(), 'dd-leaf-'));
+  try {
+    writeFileSync(join(outside, 'secrets.txt'), 'token\n');
+    symlinkSync(join(outside, 'secrets.txt'), join(repo, 'link.txt'));
+    const skill = join(repo, '.agents', 'skills', 'verify-notes');
+    mkdirSync(join(skill, 'features'), { recursive: true });
+    writeFileSync(join(skill, 'SKILL.md'), '# verify-notes\n\nSee link.txt:1.\n');
+    writeFileSync(join(skill, 'features', 'README.md'), '# features\n\n- [Home](home.md)\n');
+    writeFileSync(join(skill, 'features', 'home.md'), '# Home\n');
+    sh('add', '-A');
+    sh('commit', '-qm', 'skill');
+    const r = doctorIn(repo, s.env, 'maintain', '--foreground');
+    const m = toon(r);
+    assert.deepEqual([r.code, m.result], [1, 'drift'], r.out);
+    assert.match(m.findings.find((f) => f.kind === 'citation').what, /link\.txt is outside the repository/, r.out);
+  } finally {
+    rmSync(outside, { recursive: true, force: true });
+  }
 });
 
 test('maintain does not wait on a cited path that is a named pipe; it is a citation finding', () => {

@@ -773,7 +773,7 @@ type Run = {
   schema: 2; run_id: string; kind: 'verify' | 'maintain'; app: string; repo: string; journey?: string; claim?: string; claim_id: string | null;
   status: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled';
   runner?: { pid: number; started: string; heartbeat: string; journey_pgid?: number }; steps: Step[];
-  result?: 'pass' | 'fail' | 'inconclusive' | MaintainResult; reason?: string; findings?: MaintainFinding[]; git_status?: string;
+  result?: 'pass' | 'fail' | 'inconclusive' | MaintainResult; reason?: string; findings?: MaintainFinding[]; unverified?: string[]; git_status?: string;
   record?: string; receipt?: string; created: string; updated: string;
   inputs?: { head: string; journey: string; skill: string };
 };
@@ -989,6 +989,9 @@ function showRun(dir: string, cfg: Config, command: string, gone = false): numbe
   if (run.git_status) result.git_status = run.git_status;
   if (findings.items.length) result.findings = findings.items;
   if (findings.omitted) result.findings_omitted = findings.omitted;
+  const unverified = cap(run.unverified ?? []);
+  if (unverified.items.length) result.unverified = unverified.items;
+  if (unverified.omitted) result.unverified_omitted = unverified.omitted;
   result.run = shown(run.repo, dir);
   result.help =
     code === WAITING ? [`The run goes on without this command; read it later: done-done status --run ${run.run_id}`]

@@ -97,7 +97,7 @@ const ADAPTERS = {
     claude: {
         argv: (c) => ['-p', '--output-format', 'json', '--json-schema', JSON.stringify(c.schema), '--model', c.model, '--no-session-persistence',
             ...(c.tools === 'edit' ? ['--permission-mode', 'acceptEdits'] : ['--tools', c.tools === 'read' ? 'Read,Grep,Glob' : '']),
-            ...(c.tools === 'none' ? ['--setting-sources', ''] : [])],
+            ...(c.tools === 'edit' ? [] : ['--setting-sources', '']), ...(c.tools === 'read' ? ['--strict-mcp-config'] : [])],
         answer: (out) => {
             const r = JSON.parse(out);
             if (r.is_error)
@@ -124,14 +124,14 @@ const ADAPTERS = {
             }
             return extractJsonObject(text, c.schema.required);
         },
-        env: (c) => (c.tools === 'edit' ? {} : { OPENCODE_PERMISSION: JSON.stringify(c.tools === 'read' ? { '*': 'deny', read: 'allow', grep: 'allow', glob: 'allow', list: 'allow' } : { '*': 'deny' }) }),
+        env: (c) => (c.tools === 'edit' ? {} : { OPENCODE_PERMISSION: JSON.stringify({ '*': 'deny' }) }),
     },
     // pi -p reads the prompt on stdin (probed 12 Oct: with no positional message, stdin becomes the user
     // message); --mode json streams JSONL events whose assistant message_end holds the answer text,
     // --no-session keeps the probe ephemeral.
     // Pi has no permission gate for edit steps, so doctor warns about it. Without a model, pi runs its own default.
     pi: {
-        argv: (c) => ['-p', '--mode', 'json', '--no-session', ...(c.tools === 'none' ? ['--no-tools'] : c.tools === 'read' ? ['-t', 'read,grep,find,ls'] : []), ...(c.model ? ['--model', c.model] : [])],
+        argv: (c) => ['-p', '--mode', 'json', '--no-session', ...(c.tools === 'edit' ? [] : ['--no-tools']), ...(c.model ? ['--model', c.model] : [])],
         answer: (out, c) => {
             let text = '';
             let failure = '';

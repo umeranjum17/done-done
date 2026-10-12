@@ -50,6 +50,7 @@ function scanSpans(text: string, from: number, spans: string[]): number {
   }
   return depth > 0 ? start : -1;
 }
+// ponytail: a stray quote inside narration braces can hide the answer; the ask-again loop (a tool-less call is asked again up to ASK_ATTEMPTS times) covers it, so the scanner stops growing here.
 export function extractJsonObject(text: string, required: string[] = []): unknown {
   const spans: string[] = [];
   let open = scanSpans(text, 0, spans);

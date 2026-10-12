@@ -1,12 +1,12 @@
 // End-to-end: drives the built CLI against throwaway git repos with fictional fixtures.
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { appendFileSync, cpSync, mkdirSync, mkdtempSync, existsSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 import { after, test } from 'node:test';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { crc32, deflateSync } from 'node:zlib';
 import { parse } from 'yaml';
 import { decode } from '@toon-format/toon';
@@ -682,9 +682,9 @@ test('init --agent claude adds a SessionStart hook that shows the bare state, me
   const merged = JSON.parse(readFileSync(join(two.repo, '.claude', 'settings.json'), 'utf8'));
   assert.deepEqual(merged, { ...other, hooks: { ...other.hooks, SessionStart: [...other.hooks.SessionStart, hooks[0]] } }, 'both hooks and every other key are kept');
   // Another agent is a usage error naming the supported values; a malformed settings file is left untouched.
-  const bad = two.dd('init', '--agent', 'opencode');
+  const bad = two.dd('init', '--agent', 'cursor');
   assert.equal(bad.code, 2, bad.out);
-  assert.match(toon(bad).error, /supported values are claude, codex/);
+  assert.match(toon(bad).error, /supported values are claude, codex, opencode/);
   writeFileSync(join(two.repo, '.claude', 'settings.json'), '{ nope');
   const broken = two.dd('init', '--agent', 'claude');
   assert.equal(broken.code, 2, broken.out);
@@ -828,6 +828,91 @@ test('a run command outside the repo hints that its recipe is not recorded', () 
   assert.match(toon(none).reason, /DONE_DONE_EVIDENCE_ROOT/);
   assert.match(toon(none).reason, /DONE_DONE_RUN_ID/);
   assert.match(toon(none).help.join('\n'), /not in the repo/);
+});
+
+test('init --agent opencode adds a session plugin that shows the bare state, merges, and never duplicates', async () => {
+  const { dir, repo, env, dd } = bareRepo();
+  const plugin = join(repo, '.opencode', 'plugins', 'done-done.js');
+  const r = dd('init', '--agent', 'opencode');
+  assert.equal(r.code, 0, r.out);
+  assert.equal(toon(r).opencode_plugin, 'added to .opencode/plugins/done-done.js');
+  assert.match(toon(r).help.join('\n'), /Commit \.opencode\/plugins\/done-done\.js/);
+  const body = readFileSync(plugin, 'utf8');
+  const command = body.match(/^const COMMAND = "(.*)";$/m)[1];
+  // Run the plugin's done-done command as opencode would: through a shell, from the repo, with done-done on PATH and without it.
+  const bin = join(dir, 'bin');
+  mkdirSync(bin);
+  writeFileSync(join(bin, 'done-done'), `#!/bin/sh\nexec ${JSON.stringify(process.execPath)} ${JSON.stringify(CLI)} "$@"\n`, { mode: 0o755 });
+  const shell = (path) => spawnSync('/bin/sh', ['-c', command], { cwd: repo, env: { ...env, PATH: path }, encoding: 'utf8' });
+  const on = shell(`${bin}:${env.PATH}`);
+  assert.equal(on.status, 0, on.stderr);
+  assert.equal(on.stdout, dd().out, 'the plugin command prints the bare done-done state');
+  assert.equal(toon({ out: on.stdout }).config, 'present');
+  const off = shell(join(dir, 'empty'));
+  assert.deepEqual([off.status, off.stdout, off.stderr], [0, '', ''], 'without done-done on PATH the command is silent and exits 0');
+  // Drive the written plugin itself: the first message of a session gains the bare state, later ones do not.
+  const prevPath = process.env.PATH;
+  const prevHome = process.env.DONE_DONE_HOME;
+  process.env.PATH = `${bin}:${prevPath}`;
+  process.env.DONE_DONE_HOME = env.DONE_DONE_HOME;
+  try {
+    const { DoneDonePlugin } = await import(pathToFileURL(plugin).href);
+    const id = () => `ses_${randomUUID()}`;
+    const ses1 = id();
+    const ses2 = id();
+    const ses3 = id();
+    const hooks = await DoneDonePlugin({ directory: repo });
+    const parts = [];
+    await hooks['chat.message']({ sessionID: ses1 }, { message: { id: 'msg_1' }, parts });
+    assert.equal(parts.length, 1);
+    assert.equal(parts[0].type, 'text');
+    assert.equal(parts[0].text, dd().out.trim(), 'the first message of a session gains the bare done-done state');
+    assert.match(parts[0].id, /^prt_/, 'the appended part carries a part id opencode accepts');
+    assert.equal(parts[0].messageID, 'msg_1', 'the appended part carries the message id from output.message, since opencode passes no messageID to the hook');
+    assert.equal(parts[0].sessionID, ses1, 'the appended part carries the hook session id');
+    await hooks['chat.message']({ sessionID: ses1 }, { message: { id: 'msg_2' }, parts });
+    assert.equal(parts.length, 1, 'later messages in the same session gain nothing');
+    const { DoneDonePlugin: ResumedPlugin } = await import(`${pathToFileURL(plugin).href}?resumed`);
+    const resumed = await ResumedPlugin({ directory: repo });
+    const afterResume = [];
+    await resumed['chat.message']({ sessionID: ses1 }, { message: { id: 'msg_5' }, parts: afterResume });
+    assert.equal(afterResume.length, 1, 'a resumed session in a new plugin instance shows the state again on its first message');
+    const fresh = [];
+    await hooks['chat.message']({ sessionID: ses2 }, { message: { id: 'msg_3' }, parts: fresh });
+    assert.equal(fresh.length, 1, 'a new session gains the state again');
+    assert.match(fresh[0].id, /^prt_/);
+    assert.notEqual(fresh[0].id, parts[0].id, 'each appended part gets its own id');
+    process.env.PATH = join(dir, 'empty');
+    const silent = [];
+    await hooks['chat.message']({ sessionID: ses3 }, { message: { id: 'msg_4' }, parts: silent });
+    assert.deepEqual(silent, [], 'without done-done on PATH the hook appends nothing and never throws');
+  } finally {
+    process.env.PATH = prevPath;
+    if (prevHome === undefined) delete process.env.DONE_DONE_HOME;
+    else process.env.DONE_DONE_HOME = prevHome;
+  }
+  const before = readFileSync(plugin);
+  assert.equal(toon(dd('init', '--agent', 'opencode')).opencode_plugin, 'unchanged');
+  assert.deepEqual(readFileSync(plugin), before, 'a second run adds no duplicate');
+  // An existing plugins directory keeps its other plugins and project config keys.
+  const two = bareRepo();
+  mkdirSync(join(two.repo, '.opencode', 'plugins'), { recursive: true });
+  writeFileSync(join(two.repo, '.opencode', 'plugins', 'other.js'), 'export const Other = async () => ({});\n');
+  writeFileSync(join(two.repo, 'opencode.json'), JSON.stringify({ $schema: 'https://opencode.ai/config.json', theme: 'dark' }));
+  assert.equal(two.dd('init', '--agent', 'opencode').code, 0);
+  assert.equal(readFileSync(join(two.repo, '.opencode', 'plugins', 'other.js'), 'utf8'), 'export const Other = async () => ({});\n', 'other plugins are kept');
+  assert.deepEqual(JSON.parse(readFileSync(join(two.repo, 'opencode.json'), 'utf8')), { $schema: 'https://opencode.ai/config.json', theme: 'dark' }, 'project config keys are kept');
+});
+
+test('init --agent opencode refuses to overwrite a plugin file with other content', () => {
+  const { repo, dd } = bareRepo();
+  const plugin = join(repo, '.opencode', 'plugins', 'done-done.js');
+  mkdirSync(join(repo, '.opencode', 'plugins'), { recursive: true });
+  writeFileSync(plugin, 'export const Mine = async () => ({});\n');
+  const r = dd('init', '--agent', 'opencode');
+  assert.equal(r.code, 2, r.out);
+  assert.match(toon(r).error, /\.opencode\/plugins\/done-done\.js already exists/);
+  assert.equal(readFileSync(plugin, 'utf8'), 'export const Mine = async () => ({});\n', 'the existing file is kept');
 });
 
 test('init outside a git repository reports a clear usage error', () => {

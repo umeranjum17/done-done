@@ -1074,7 +1074,7 @@ function cmdLogs(argv) {
     const file = join(runsRoot(cfg.app), id, 'logs', `${values.step}.log`);
     if (!existsSync(file))
         throw new UsageError(`no log for step ${values.step} yet`, `Read the run: done-done status --run ${id}`);
-    const all = readFileSync(file, 'utf8').split('\n');
+    const all = readFileSync(file, 'utf8').replace(/\n$/, '').split('\n');
     const items = FULL || all.length <= 50 ? all : all.slice(-50);
     emit({ command: 'logs', run_id: id, step: values.step, lines: items.length, log: items, ...(all.length > items.length && { log_omitted: all.length - items.length }), help: FULL ? [`Read the run: done-done status --run ${id}`] : [`Read the full log: done-done logs --step ${values.step} --run ${id} --full`] });
     return PASS;

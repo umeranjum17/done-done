@@ -6,6 +6,7 @@ import { homedir } from 'node:os';
 import { dirname, isAbsolute, join, matchesGlob, relative, resolve, sep } from 'node:path';
 import { parseArgs } from 'node:util';
 import { encode } from '@toon-format/toon';
+import { Document, parseDocument } from 'yaml';
 import { loadConfig, UsageError } from './config.js';
 import { judge } from './judge.js';
 import { checkMedia } from './media.js';
@@ -24,6 +25,7 @@ const CHECKS_TEXT = `Checks block (--from): the newest "## Checks" heading, then
 // One table drives `--help` and every `<command> --help`: each command's usage lines and the flags it takes.
 const FLAGS = {
     '-- <command...>': 'run this command instead of a journey; ${RUN_ID} in it becomes the run id',
+    '--journey <name>': 'record this command as a journey in .done-done.yaml; ${RUN_ID} in it becomes the run id',
     '--open': 'open a run for a hand- or agent-driven proof; prints its id and folder',
     '--close <run-id>': 'seal an open run and record the files in its folder',
     '--outcome "<claim>"': 'the outcome the evidence files prove; the files follow as arguments',
@@ -41,8 +43,9 @@ const COMMANDS = {
             ['done-done init', 'write a minimal .done-done.yaml (evidence lives outside the repo)'],
             ['done-done init --agent claude', 'also show this repo\'s done-done state at each Claude Code session start'],
             ['done-done init --agent codex', 'also show this repo\'s done-done state at each Codex session start'],
+            ['done-done init --journey <name> -- <command...>', "record a journey's capture recipe in .done-done.yaml"],
         ],
-        flags: ['--agent <agent>'],
+        flags: ['--agent <agent>', '--journey <name>', '-- <command...>'],
         more: [JOURNEYS_TEXT],
     },
     run: {
@@ -215,6 +218,14 @@ function closeRun(repo, cfg, rec) {
     result.help = [reason
             ? `Fix the capture, commit, then re-run: ${captureHint(cfg)}`
             : `Check this proof: done-done check --outcome "<what you proved>" ${rel(rec.files[0].path)}`];
+    // A command that matches no repo-recorded journey cannot be re-run from the repo recipe.
+    // A journey run expands ${RUN_ID} to the run id, so compare with the placeholder restored.
+    if (rec.command) {
+        const template = rec.command.replaceAll(rec.run_id, '${RUN_ID}');
+        const recorded = Object.values(cfg.journeys).some((j) => j.command === template);
+        if (!recorded)
+            result.help.push(`this command's recipe is not in the repo (.done-done.yaml journeys); record it with: done-done init --journey <name> -- <command>`);
+    }
     emit(result);
     return reason ? FAIL : PASS;
 }
@@ -750,14 +761,60 @@ function codexSettings(repo) {
     return { file, text: `${JSON.stringify(settings, null, 2)}\n` };
 }
 function cmdInit(argv) {
-    const { values } = parseArgs({ args: argv, options: { agent: { type: 'string' } }, allowPositionals: false });
+    const dash = argv.indexOf('--');
+    const { values } = parseArgs({
+        args: dash < 0 ? argv : argv.slice(0, dash),
+        options: { agent: { type: 'string' }, journey: { type: 'string' } },
+        allowPositionals: false,
+    });
+    const parts = dash < 0 ? [] : argv.slice(dash + 1);
+    const journey = values.journey ?? null;
     if (values.agent !== undefined && values.agent !== 'claude' && values.agent !== 'codex')
         throw new UsageError(`--agent ${values.agent} is not supported; the supported values are claude, codex`, 'Run: done-done init --agent <claude|codex>');
+    if (journey === null && parts.length)
+        throw new UsageError('init needs --journey <name> to record a command after --');
+    if (journey !== null && !parts.some((p) => p.trim()))
+        throw new UsageError(`init --journey ${journey} needs a command after --`);
+    if (journey !== null && !/^[A-Za-z0-9][A-Za-z0-9_-]*$/.test(journey))
+        throw new UsageError(`invalid journey name ${journey}; use letters, digits, - or _`);
     const repo = repoRoot();
     const file = join(repo, '.done-done.yaml');
     const existed = existsSync(file);
     const cfg = loadConfig(repo); // validates the existing project config; malformed -> exit 2, no writes
     const hook = values.agent === 'claude' ? claudeSettings(repo) : values.agent === 'codex' ? codexSettings(repo) : undefined; // likewise validated before any write
+    if (journey !== null) {
+        // Record the capture recipe in the repo so any checkout can re-run the proof.
+        // The command is stored verbatim; ${RUN_ID} in it becomes the run id, like a run -- command.
+        const command = parts.join(' ');
+        const doc = existed ? parseDocument(readFileSync(file, 'utf8')) : new Document({ app: cfg.app });
+        const top = (doc.toJS() ?? {});
+        if (typeof top !== 'object' || Array.isArray(top))
+            throw new UsageError(`${file}: top level must be a mapping`);
+        const journeys = top.journeys ?? {};
+        if (typeof journeys !== 'object' || Array.isArray(journeys))
+            throw new UsageError(`${file}: journeys must be a mapping`);
+        if (top.journeys == null)
+            doc.set('journeys', doc.createNode({}));
+        doc.setIn(['journeys', journey, 'command'], command);
+        writeFileSync(`${file}.tmp`, doc.toString({ lineWidth: 0 }));
+        renameSync(`${file}.tmp`, file);
+        const fresh = loadConfig(repo);
+        const rel = under(repo, fresh.evidence.root);
+        const added = !!rel && ensureIgnored(repo, rel);
+        const root = shown(repo, fresh.evidence.root);
+        const check = 'done-done check --outcome "<what you proved>" <files it recorded>';
+        emit({
+            command: 'init',
+            result: 'pass',
+            config: existed ? 'updated' : 'written',
+            journey,
+            app: fresh.app,
+            evidence_root: root,
+            gitignore: added ? `added ${rel.replace(/\/+$/, '')}/` : 'unchanged',
+            help: [`Capture proof: done-done run ${journey}, then: ${check}`],
+        });
+        return PASS;
+    }
     if (!existed) {
         // No evidence.root: proof goes to <local_root>/<app>, outside the repo, so it outlives this checkout.
         // The pinned app name is what lets every checkout of the repo find the same evidence and receipts.

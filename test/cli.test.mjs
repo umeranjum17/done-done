@@ -731,6 +731,105 @@ test('init --agent codex adds a SessionStart hook that shows the bare state, mer
   assert.equal(readFileSync(join(two.repo, '.codex', 'hooks.json'), 'utf8'), '{ nope');
 });
 
+test('init --journey records the capture recipe and the journey re-runs from any checkout', () => {
+  const { dir, repo, env, sh, dd } = bareRepo();
+  const r = dd('init', '--journey', 'smoke', '--', 'echo added: milk > $DONE_DONE_EVIDENCE_ROOT/${RUN_ID}.log');
+  assert.equal(r.code, 0, r.out);
+  assert.equal(toon(r).config, 'written');
+  assert.equal(toon(r).journey, 'smoke');
+  assert.equal(parse(readFileSync(join(repo, '.done-done.yaml'), 'utf8')).journeys.smoke.command, 'echo added: milk > $DONE_DONE_EVIDENCE_ROOT/${RUN_ID}.log', 'the ${RUN_ID} placeholder is stored verbatim');
+  sh('add', '-A');
+  sh('commit', '-qm', 'config');
+  const run = dd('run', 'smoke');
+  assert.equal(run.code, 0, run.out);
+  assert.ok(!toon(run).help.join('\n').includes('not in the repo'), 'a recorded journey run carries no outside-repo hint');
+  const { run_id: id } = toon(run);
+  const [log] = toon(run).evidence;
+  assert.equal(log, join(dir, 'home', 'evidence', 'repo', id, `${id}.log`));
+  // A second checkout re-runs the proof from only the repo recipe.
+  const lane2 = join(dir, 'lane2');
+  execFileSync('git', ['clone', '-q', repo, lane2]);
+  const in2 = spawnSync(process.execPath, [CLI, 'run', 'smoke'], { cwd: lane2, env, encoding: 'utf8' });
+  assert.equal(in2.status, 0, in2.stdout + in2.stderr);
+  assert.ok(!(in2.stdout + in2.stderr).includes('not in the repo'), 'the recipe travels with the repo');
+  // Re-recording the journey updates the stored command.
+  assert.equal(dd('init', '--journey', 'smoke', '--', 'echo added: eggs > $DONE_DONE_EVIDENCE_ROOT/${RUN_ID}.log').code, 0);
+  assert.equal(parse(readFileSync(join(repo, '.done-done.yaml'), 'utf8')).journeys.smoke.command, 'echo added: eggs > $DONE_DONE_EVIDENCE_ROOT/${RUN_ID}.log');
+  assert.equal(dd('init', '--journey', 'smoke').code, 2, 'a journey with no command after -- is a usage error');
+});
+
+test('init --journey keeps the comments and formatting of an existing config', () => {
+  const { repo, dd } = bareRepo();
+  const long = 'node make-shots.mjs ${RUN_ID} --viewport 1280x800 --theme dark --out-dir .proof/${RUN_ID} --wait-for-network-idle';
+  const original = `# team proof config\napp: notes\n\njourneys:\n  shots:\n    command: ${long}\n`;
+  writeFileSync(join(repo, '.done-done.yaml'), original);
+  const r = dd('init', '--journey', 'smoke', '--', 'echo hi');
+  assert.equal(r.code, 0, r.out);
+  assert.equal(readFileSync(join(repo, '.done-done.yaml'), 'utf8'), `${original}  smoke:\n    command: echo hi\n`);
+});
+
+test('init --journey records the command a run executes, shell syntax included', () => {
+  const { repo, sh, dd } = bareRepo();
+  assert.equal(dd('init', '--journey', 'unit', '--', 'echo', 'added', '>', '$DONE_DONE_EVIDENCE_ROOT/out.txt').code, 0);
+  assert.equal(parse(readFileSync(join(repo, '.done-done.yaml'), 'utf8')).journeys.unit.command, 'echo added > $DONE_DONE_EVIDENCE_ROOT/out.txt');
+  sh('add', '-A');
+  sh('commit', '-qm', 'recipe');
+  const run = dd('run', 'unit');
+  assert.equal(run.code, 0, run.out);
+  const [file] = toon(run).evidence;
+  assert.equal(readFileSync(file, 'utf8'), 'added\n');
+  const adhoc = dd('run', '--', 'echo', 'added', '>', '$DONE_DONE_EVIDENCE_ROOT/out.txt');
+  assert.equal(adhoc.code, 0, adhoc.out);
+  assert.ok(!toon(adhoc).help.join('\n').includes('not in the repo'), 'the same command run ad hoc matches the recorded recipe');
+});
+
+test('re-recording a journey replaces only its command and keeps its other keys and comments', () => {
+  const { repo, dd } = bareRepo();
+  const original = 'app: notes\njourneys:\n  smoke:\n    command: old # keep\n    timeout: 60\n';
+  writeFileSync(join(repo, '.done-done.yaml'), original);
+  assert.equal(dd('init', '--journey', 'smoke', '--', 'echo new').code, 0);
+  assert.equal(readFileSync(join(repo, '.done-done.yaml'), 'utf8'), 'app: notes\njourneys:\n  smoke:\n    command: echo new # keep\n    timeout: 60\n');
+});
+
+test('the outside-repo hint never prints the ad-hoc command, so a secret in it is not suggested for commit', () => {
+  const { dd } = bareRepo();
+  const r = dd('run', '--', 'true', '--token', 's3cret-value');
+  const help = toon(r).help.join('\n');
+  assert.match(help, /not in the repo/);
+  assert.match(help, /init --journey <name> -- <command>/);
+  assert.ok(!help.includes('s3cret-value'), help);
+});
+
+test('init with an empty --journey name is a usage error, not a plain init', () => {
+  const { repo, dd } = bareRepo();
+  const r = dd('init', '--journey', '', '--', 'echo hi');
+  assert.equal(r.code, 2, r.out);
+  assert.equal(existsSync(join(repo, '.done-done.yaml')), false, 'no config is written');
+  assert.equal(dd('init', '--journey', '').code, 2, 'an empty name with no command is a usage error too');
+});
+
+test('init --journey rejects a blank command instead of recording an empty recipe', () => {
+  const { repo, dd } = bareRepo();
+  const r = dd('init', '--journey', 'smoke', '--', '');
+  assert.equal(r.code, 2, r.out);
+  assert.equal(existsSync(join(repo, '.done-done.yaml')), false, 'no config is written');
+});
+
+test('a run command outside the repo hints that its recipe is not recorded', () => {
+  const { dd, shots } = setup();
+  const adhoc = dd('run', '--', 'echo added: milk > $DONE_DONE_EVIDENCE_ROOT/adhoc.log');
+  assert.equal(adhoc.code, 0, adhoc.out);
+  assert.match(toon(adhoc).help.join('\n'), /not in the repo.*done-done init --journey <name> --/);
+  const recorded = dd('run', 'shots');
+  assert.equal(recorded.code, 0, recorded.out);
+  assert.ok(!toon(recorded).help.join('\n').includes('not in the repo'), 'a journey run is the recipe, so no hint');
+  const none = dd('run', '--', 'true');
+  assert.equal(none.code, 1, none.out);
+  assert.match(toon(none).reason, /DONE_DONE_EVIDENCE_ROOT/);
+  assert.match(toon(none).reason, /DONE_DONE_RUN_ID/);
+  assert.match(toon(none).help.join('\n'), /not in the repo/);
+});
+
 test('init outside a git repository reports a clear usage error', () => {
   const dir = mkdtempSync(join(tmpdir(), 'done-done-nogit-'));
   after(() => rmSync(dir, { recursive: true, force: true }));

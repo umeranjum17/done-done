@@ -22,7 +22,7 @@ const QUESTION = {
     personReason: true,
     images: ['capture'],
 };
-function onPath(name) {
+export function onPath(name) {
     for (const dir of (process.env.PATH ?? '').split(delimiter)) {
         const path = join(dir, name);
         try {

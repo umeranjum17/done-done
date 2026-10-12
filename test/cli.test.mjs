@@ -2434,7 +2434,7 @@ test('an edit step whose answer is not JSON is never asked again, while a tool-l
 test('maintain reports a dead link, a wrong file:line and drift from read-only readers, and changes nothing', () => {
   const { repo, env, sh } = setup();
   const answer = JSON.stringify({
-    summary: 'app.js exports the app', entry_points: [{ file: 'src/app.js', line: 1 }], recipe: 'import src/app.js',
+    recipe: 'import src/app.js',
     drift: [{ claim: 'app is 2', why: 'it is 1', file: 'src/app.js', line: 1 }, { claim: 'made up', why: 'no such line', file: 'src/app.js', line: 50 }],
     recipes: [{ state: 'fresh', features: ['home.md'], steps: ['open it'] }], missing: [{ file: 'src/app.js', why: 'new surface' }, { file: 'src/gone.js', why: 'not in the churn list' }],
   });
@@ -2447,7 +2447,7 @@ test('maintain reports a dead link, a wrong file:line and drift from read-only r
   mkdirSync(join(skill, 'features'), { recursive: true });
   writeFileSync(join(skill, 'SKILL.md'), '# verify-notes\n\nThe map: [features](features/README.md). See https://example.com:443/x and localhost:3000.\n');
   writeFileSync(join(skill, 'features', 'README.md'), '# features\n\n- [Home](home.md)\n- [Search](search.md)\n- [Home again](home.md#top)\n');
-  writeFileSync(join(skill, 'features', 'home.md'), '# Home\n\nSource: src/app.js:1, and the old src/app.js:40.\n');
+  writeFileSync(join(skill, 'features', 'home.md'), `# Home\n\nSource: src/app.js:1, and the old src/app.js:40.\nAlso app.js:1, app.js:40 and ghost.js:2.\nLong note: ${'x'.repeat(20_000)}\n`);
   writeFileSync(join(skill, 'features', 'extra.md'), '# Extra\n');
   sh('add', '-A');
   sh('commit', '-qm', 'skill');
@@ -2459,10 +2459,12 @@ test('maintain reports a dead link, a wrong file:line and drift from read-only r
   assert.deepEqual([m.kind, m.result, m.git_status], ['maintain', 'drift', 'same']);
   const at = (f) => `${f.kind} ${f.file.replace('.agents/skills/verify-notes/', '')}${f.line ? `:${f.line}` : ''}`;
   assert.deepEqual(m.findings.map(at), [
-    'dead-link features/README.md:4', 'duplicate features/README.md:5', 'unlisted features/README.md',
-    'citation features/home.md:3', 'drift features/extra.md', 'drift features/home.md', 'unmapped src/app.js',
+    'dead-link features/README.md:4', 'duplicate features/README.md:5', 'unlisted features/README.md', 'truncated features/home.md',
+    'citation features/home.md:3', 'citation features/home.md:4', 'citation features/home.md:4', 'drift features/extra.md', 'drift features/home.md', 'unmapped src/app.js',
   ], 'a reader citation that does not exist and a missing file outside the churn list are not findings');
-  assert.match(m.findings[3].what, /cites src\/app\.js:40, but src\/app\.js has 1 lines/);
+  assert.match(m.findings[4].what, /cites src\/app\.js:40, but src\/app\.js has 1 lines/);
+  assert.match(m.findings[5].what, /cites app\.js:40, but src\/app\.js has 1 lines/);
+  assert.match(m.findings[6].what, /cites ghost\.js:2, but no tracked file is named ghost\.js/);
   assert.equal(status(), before, 'maintain changed nothing');
   // One fresh read-only reader per feature file runs in the repo; the reconcile call has no tools and runs elsewhere.
   const calls = s.calls();
@@ -2473,6 +2475,13 @@ test('maintain reports a dead link, a wrong file:line and drift from read-only r
   assert.deepEqual(readdirSync(join(run, 'agents')).sort(), ['1-reader-extra.json', '2-reader-home.json', '3-reconcile.json']);
   assert.equal(toon(dd('history')).history[0].kind, 'maintain');
   assert.match(toon(dd('logs', '--step', 'reconcile')).log.join('\n'), /src\/app\.js:50: src\/app\.js has 1 lines/);
+  // With no agent the readers do not run, but the plain citation checks still report the planted bad file:line.
+  writeFileSync(join(env.DONE_DONE_HOME, 'config.yaml'), 'agent: gemini\n');
+  const noAgent = toon(dd('maintain', '--foreground', '--full'));
+  assert.deepEqual([noAgent.result, noAgent.git_status], ['blocked', 'same']);
+  assert.match(noAgent.reason, /^source-wave: no agent/);
+  assert.deepEqual(noAgent.findings.map(at).slice(3), ['citation features/home.md:3', 'citation features/home.md:4', 'citation features/home.md:4']);
+  writeFileSync(join(env.DONE_DONE_HOME, 'config.yaml'), 'agent: auto\n');
   // A reader that writes into the repo makes the run blocked.
   writeFileSync(join(s.bin, 'claude'), `#!${process.execPath}\nrequire('node:fs').writeFileSync('stray.txt', '');\nprocess.stdout.write(JSON.stringify({ structured_output: ${answer} }));\n`, { mode: 0o755 });
   const changed = toon(dd('maintain', '--foreground'));

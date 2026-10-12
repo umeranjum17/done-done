@@ -36,9 +36,10 @@ const MAINTAIN_TEXT = `maintain reads the verify skill and the source and edits 
   locate: the verify skill (.agents/skills/verify-<app>/SKILL.md); none: blocked, create it with done-done init
   hygiene: every local link in the skill resolves; features/README.md lists each features/*.md file once
   source-wave: one fresh read-only reader per feature file at the configured agent (agent, agent_config) explains it from source
-  reconcile: each file:line the skill or a reader cites must exist; one tool-less call merges the recipes and names recently
-  changed source (git log, 30 days) that no feature covers. Result: clean (exit 0), drift with findings (exit 1),
-  or blocked (no skill or agent, a reader that did not answer, or a repo that changed; exit 3)`;
+  reconcile: each file:line the skill or a reader cites must exist (a bare file name matches a tracked file); one tool-less call
+  merges the recipes and names recently changed source (git log, 30 days) that no feature covers. Result: clean (exit 0),
+  drift with findings (exit 1), or blocked (no skill, a reader that did not answer, a repo that changed, or no agent: the
+  readers and the merge call do not run, the plain checks still do; exit 3)`;
 const HOOK_AGENTS = ['claude', 'codex', 'opencode'];
 const DOCTOR_TEXT = `doctor changes nothing except the --probe call record (the agent itself may keep its own session files) and exits 0 when every required item is ok, 2 otherwise.
   required: git (inside a repository), config (a valid .done-done.yaml), evidence_root (writable).

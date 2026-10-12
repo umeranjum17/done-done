@@ -22,11 +22,12 @@ type Harness<S> = {
 const MAX_CALLS = 30;
 const CALL_MS = 20 * 60_000;
 const CHURN_SINCE = '30.days.ago';
+const FEATURE_CHARS = 20_000;
 const SOURCE_FILE = /\.(m?[jt]sx?|py|go|rb|rs|php|swift|kt|java|dart)$/;
 // Findings that mean the pass could not finish, so the result is blocked, not drift.
 const BLOCKING = new Set(['coverage', 'repo-changed']);
 
-const git = (cwd: string, ...args: string[]) => execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
+const git = (cwd: string, ...args: string[]) => execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: 64 << 20 }).trim();
 const repoState = (repo: string) => `${git(repo, 'rev-parse', 'HEAD')}\n${git(repo, 'status', '--porcelain', '--untracked-files=all')}`;
 const lines = (p: string) => readFileSync(p, 'utf8').split('\n');
 const mdFiles = (dir: string) => readdirSync(dir, { recursive: true, withFileTypes: true }).filter((e) => e.isFile() && e.name.endsWith('.md')).map((e) => join(e.parentPath, e.name)).sort();
@@ -54,16 +55,13 @@ function citeProblem(repo: string, file: string, line: number, end = line): stri
   return line < 1 || end < line || end > n ? `${file} has ${n} lines` : '';
 }
 
-const CITATION = { type: 'object', properties: { file: { type: 'string' }, line: { type: 'integer' } }, required: ['file', 'line'], additionalProperties: false };
 const READER_SCHEMA = {
   type: 'object',
   properties: {
-    summary: { type: 'string' },
-    entry_points: { type: 'array', items: CITATION },
     drift: { type: 'array', items: { type: 'object', properties: { claim: { type: 'string' }, why: { type: 'string' }, file: { type: 'string' }, line: { type: 'integer' } }, required: ['claim', 'why', 'file', 'line'], additionalProperties: false } },
     recipe: { type: 'string' },
   },
-  required: ['summary', 'entry_points', 'drift', 'recipe'],
+  required: ['drift', 'recipe'],
   additionalProperties: false,
 };
 const RECONCILE_SCHEMA = {
@@ -130,52 +128,48 @@ export async function maintainSteps<S>(run: { repo: string; findings?: Finding[]
   // ponytail: readers run one after another (askAgent is synchronous); run them in parallel when it is not.
   step = h.begin('source-wave');
   const agent = selectAgent(cfg);
-  if (!agent.path || !supported(agent.agent)) {
-    h.set(step, 'failed');
-    return h.finish('blocked', `source-wave: no agent done-done can start (${agent.agent}${agent.path ? ' is not supported yet' : ' is not on PATH'}); run done-done doctor`);
-  }
+  const agentBlock = !agent.path || !supported(agent.agent) ? `source-wave: no agent done-done can start (${agent.agent}${agent.path ? ' is not supported yet' : ' is not on PATH'}); run done-done doctor` : '';
   let calls = 0;
   const record = (name: string) => join(dir, 'agents', `${++calls}-${name}.json`);
-  const read = features.slice(0, MAX_CALLS - 1);
-  if (read.length < features.length) add({ kind: 'coverage', file: rel(featDir), what: `${features.length - read.length} feature files not read: the run's call cap is ${MAX_CALLS}` });
+  const read = agentBlock ? [] : features.slice(0, MAX_CALLS - 1);
+  if (!agentBlock && read.length < features.length) add({ kind: 'coverage', file: rel(featDir), what: `${features.length - read.length} feature files not read: the run's call cap is ${MAX_CALLS}` });
   const readers = read.map((name): { feature: string; ok: boolean; record?: string } & Record<string, unknown> => {
     const file = join(featDir, name);
+    const text = readFileSync(file, 'utf8');
+    if (text.length > FEATURE_CHARS) add({ kind: 'truncated', file: rel(file), what: `the reader saw only the first ${FEATURE_CHARS} characters of this feature file` });
     const prompt = `You are a read-only source reader for done-done maintain. Do not edit, create or delete any file, and do not run the app or any command.
 The repository is your working directory. Below is one feature file from the verification skill at ${cfg.skill} (app ${cfg.app}).
 Read the product's source code, not the skill, and explain how this user-facing feature works today.
-- summary: how the feature works, from source, in two to four sentences.
-- entry_points: where the feature starts in source, each {file: a repo-relative path, line: a line number}.
 - drift: each statement in the feature file that the source contradicts or no longer supports, each {claim: the feature file's words, why: what the source does instead, file, line: the source location that shows it}. Empty when the file is right.
 - recipe: one short recipe to verify the feature live, the way a user reaches it.
 
 Feature file ${rel(file)}:
-${readFileSync(file, 'utf8').slice(0, 20_000)}`;
+${text.slice(0, FEATURE_CHARS)}`;
     const a = askAgent({ agent: agent.agent, model: agent.model, prompt, schema: READER_SCHEMA, cwd: repo, timeoutMs: CALL_MS, tools: 'read', record: record(`reader-${name.replace(/\.md$/, '')}`) });
     if (!a.ok) add({ kind: 'coverage', file: rel(file), what: `the reader did not answer: ${a.error}` });
     return { feature: rel(file), ok: a.ok, ...a.answer, ...(a.error && { error: a.error }), record: a.record, ...(a.recordError && { record_error: a.recordError }) };
   });
   h.log('source-wave', { agent: agent.agent, model: agent.model, readers });
-  h.set(step, 'completed', { outputs: readers.flatMap((r) => r.record ?? []) });
+  h.set(step, agentBlock ? 'failed' : 'completed', { outputs: readers.flatMap((r) => r.record ?? []) });
 
   // 4 reconcile: plain code checks each file:line the skill and the readers cite; churn comes from git log.
   step = h.begin('reconcile');
+  const tracked = git(repo, 'ls-files').split('\n');
   for (const f of mdFiles(skill))
     lines(f).forEach((text, i) => {
       for (const m of text.matchAll(CITE)) {
         // Repo-relative, or relative to the citing file (a helper in the skill folder).
         const local = resolve(dirname(f), m[1]);
         const path = !existsSync(join(repo, m[1])) && existsSync(local) ? rel(local) : m[1];
-        if (!path.includes('/') && !existsSync(join(repo, path))) continue;
-        const why = citeProblem(repo, path, Number(m[2]), Number(m[3] ?? m[2]));
+        // A bare file name is checked against the tracked files it ends; the line must exist in one of them.
+        const cited = path.includes('/') ? [path] : tracked.filter((p) => p === path || p.endsWith(`/${path}`));
+        const whys = cited.map((p) => citeProblem(repo, p, Number(m[2]), Number(m[3] ?? m[2])));
+        const why = !cited.length ? `no tracked file is named ${path}` : whys.includes('') ? '' : whys[0];
         if (why) add({ kind: 'citation', file: rel(f), line: i + 1, what: `cites ${m[0]}, but ${why}` });
       }
     });
   const unverified: string[] = [];
   for (const r of readers.filter((r) => r.ok)) {
-    for (const c of items<{ file: string; line: number }>(r.entry_points, isCite)) {
-      const why = citeProblem(repo, c.file, c.line);
-      if (why) unverified.push(`${r.feature}: entry point ${c.file}:${c.line}: ${why}`);
-    }
     for (const d of items<{ claim: string; why: string; file: string; line: number }>(r.drift, (x) => isCite(x) && typeof x.claim === 'string' && typeof x.why === 'string')) {
       const why = citeProblem(repo, d.file, d.line);
       if (why) unverified.push(`${r.feature}: drift "${d.claim}" cites ${d.file}:${d.line}: ${why}`);
@@ -193,7 +187,7 @@ ${readFileSync(file, 'utf8').slice(0, 20_000)}`;
 - recipes: merge the readers' recipes below into as few app states as practical, each {state: what to set up once, features: the feature files it covers, steps: the drive steps in order}.
 - missing: from the recently changed source files listed below, each one that is a user-facing surface no feature covers, as {file: the path exactly as listed, why}. Empty when none.
 
-Features (JSON): ${JSON.stringify(answered.map((r) => ({ feature: r.feature, summary: r.summary, entry_points: r.entry_points, recipe: r.recipe })))}
+Features (JSON): ${JSON.stringify(answered.map((r) => ({ feature: r.feature, recipe: r.recipe })))}
 
 Recently changed source files (git log since ${CHURN_SINCE}): ${churn.length ? churn.join(', ') : 'none'}`;
     const a = askAgent({ agent: agent.agent, model: agent.model, prompt, schema: RECONCILE_SCHEMA, cwd: repo, timeoutMs: CALL_MS, tools: 'none', record: record('reconcile') });
@@ -211,5 +205,6 @@ Recently changed source files (git log since ${CHURN_SINCE}): ${churn.length ? c
 
   const stop = findings.find((f) => BLOCKING.has(f.kind));
   if (stop) return h.finish('blocked', `${stop.kind}: ${stop.file}: ${stop.what}`);
+  if (agentBlock) return h.finish('blocked', agentBlock);
   h.finish(findings.length ? 'drift' : 'clean', findings.length ? `${findings.length} findings` : undefined);
 }

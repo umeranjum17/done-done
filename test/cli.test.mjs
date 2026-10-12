@@ -855,14 +855,12 @@ test('init --agent opencode adds a session plugin that shows the bare state, mer
   const prevHome = process.env.DONE_DONE_HOME;
   process.env.PATH = `${bin}:${prevPath}`;
   process.env.DONE_DONE_HOME = env.DONE_DONE_HOME;
-  const prevTmp = process.env.TMPDIR;
   try {
     const { DoneDonePlugin } = await import(pathToFileURL(plugin).href);
     const id = () => `ses_${randomUUID()}`;
     const ses1 = id();
     const ses2 = id();
     const ses3 = id();
-    for (const sessionID of [ses1, ses2, ses3]) rmSync(join(tmpdir(), `done-done-opencode-${sessionID}`), { force: true });
     const hooks = await DoneDonePlugin({ directory: repo });
     const parts = [];
     await hooks['chat.message']({ sessionID: ses1 }, { message: { id: 'msg_1' }, parts });
@@ -874,11 +872,11 @@ test('init --agent opencode adds a session plugin that shows the bare state, mer
     assert.equal(parts[0].sessionID, ses1, 'the appended part carries the hook session id');
     await hooks['chat.message']({ sessionID: ses1 }, { message: { id: 'msg_2' }, parts });
     assert.equal(parts.length, 1, 'later messages in the same session gain nothing');
-    // A continued session (opencode run -s) starts a new plugin instance in a new process; it must not re-add the state.
-    const resumed = await DoneDonePlugin({ directory: repo });
+    const { DoneDonePlugin: ResumedPlugin } = await import(`${pathToFileURL(plugin).href}?resumed`);
+    const resumed = await ResumedPlugin({ directory: repo });
     const afterResume = [];
     await resumed['chat.message']({ sessionID: ses1 }, { message: { id: 'msg_5' }, parts: afterResume });
-    assert.deepEqual(afterResume, [], 'a resumed session in a new plugin instance gains nothing');
+    assert.equal(afterResume.length, 1, 'a resumed session in a new plugin instance shows the state again on its first message');
     const fresh = [];
     await hooks['chat.message']({ sessionID: ses2 }, { message: { id: 'msg_3' }, parts: fresh });
     assert.equal(fresh.length, 1, 'a new session gains the state again');
@@ -888,17 +886,8 @@ test('init --agent opencode adds a session plugin that shows the bare state, mer
     const silent = [];
     await hooks['chat.message']({ sessionID: ses3 }, { message: { id: 'msg_4' }, parts: silent });
     assert.deepEqual(silent, [], 'without done-done on PATH the hook appends nothing and never throws');
-    process.env.PATH = `${bin}:${prevPath}`;
-    const notADir = join(dir, 'not-a-dir');
-    writeFileSync(notADir, '');
-    process.env.TMPDIR = notADir;
-    const unrecorded = [];
-    await hooks['chat.message']({ sessionID: id() }, { message: { id: 'msg_7' }, parts: unrecorded });
-    assert.deepEqual(unrecorded, [], 'when the session marker cannot be written the hook appends nothing, so the state is never repeated');
   } finally {
     process.env.PATH = prevPath;
-    if (prevTmp === undefined) delete process.env.TMPDIR;
-    else process.env.TMPDIR = prevTmp;
     if (prevHome === undefined) delete process.env.DONE_DONE_HOME;
     else process.env.DONE_DONE_HOME = prevHome;
   }

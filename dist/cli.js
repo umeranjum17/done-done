@@ -778,15 +778,14 @@ function opencodePlugin(repo) {
 // a session. Other files in .opencode/plugins/ are untouched; delete this file to opt out.
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 
 const COMMAND = "${CLAUDE_HOOK}";
 
-// One marker file per session, so a continued session (a new opencode process) is not treated as new.
+const seen = new Set();
 const firstMessage = (sessionID) => {
-  try { writeFileSync(join(tmpdir(), \`done-done-opencode-\${sessionID}\`), "", { flag: "wx" }); return true; } catch { return false; }
+  if (seen.has(sessionID)) return false;
+  seen.add(sessionID);
+  return true;
 };
 
 const run = (cwd) => new Promise((resolve) => {

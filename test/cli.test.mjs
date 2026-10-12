@@ -2282,6 +2282,36 @@ test('rerun refuses a run whose runner is still open', () => {
   assert.match(toon(r).help[0], /abort --run/);
 });
 
+test('rerun refuses while a dead runner left its journey running, and starts no second run', async () => {
+  const { dd, runs, runningAt, release } = slowRepo();
+  assert.equal(dd('verify', 'slow', '--outcome', 'home and settings render', '--no-wait').code, 4);
+  const run = await runningAt('drive');
+  process.kill(run.runner.pid, 'SIGKILL');
+  for (let i = 0; i < 100; i++) {
+    try {
+      process.kill(run.runner.pid, 0);
+    } catch {
+      break;
+    }
+    await new Promise((r) => setTimeout(r, 50));
+  }
+  try {
+    const before = readdirSync(runs).length;
+    const r = dd('rerun', '--run', run.run_id);
+    assert.equal(r.code, 2, r.out);
+    assert.match(toon(r).help[0], /status --run/);
+    assert.equal(readdirSync(runs).length, before, 'no run was started');
+    assert.doesNotThrow(() => process.kill(-run.runner.journey_pgid, 0), 'the orphan journey is still running');
+  } finally {
+    writeFileSync(release, '');
+    try {
+      process.kill(-run.runner.journey_pgid, 'SIGKILL');
+    } catch {
+      // The journey already exited.
+    }
+  }
+});
+
 test('attach streams a running run to its end', async () => {
   const { repo, env, release, dd } = slowRepo();
   assert.equal(dd('verify', 'slow', '--outcome', 'home renders', '--no-wait').code, 4);

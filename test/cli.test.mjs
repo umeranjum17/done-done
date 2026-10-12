@@ -1608,11 +1608,8 @@ test('judge pass exits 0, sends one downscaled image and the outcome only, and a
   const cacheDir = join(j.env.DONE_DONE_HOME, 'runs', 'notes', 'judge');
   const cache = readFileSync(join(cacheDir, readdirSync(cacheDir)[0]), 'utf8');
   assert.doesNotMatch(cache, /token|key|secret/i, 'the cache in the run store holds verdicts only');
-  const records = readdirSync(join(j.env.DONE_DONE_HOME, 'agents')).filter((n) => n.startsWith('judge-'));
-  assert.equal(records.length, 2, 'one call record per model call, none for a cache hit');
-  const rec = readFileSync(join(j.env.DONE_DONE_HOME, 'agents', records[0]), 'utf8');
-  assert.deepEqual(['route', 'model', 'verdict'].map((k) => JSON.parse(rec)[k]), ['claude-code', 'claude-test-1', 'pass']);
-  assert.doesNotMatch(rec, /notes list shows three notes/, 'the record keeps no prompt text');
+  const agents = join(j.env.DONE_DONE_HOME, 'agents');
+  assert.deepEqual(existsSync(agents) ? readdirSync(agents).filter((n) => n.startsWith('judge-')) : [], [], 'the claude-code route starts no agent of ours, so it writes no call record');
 });
 
 test('judge wrong screen fails with exit 1, unsure and low confidence are inconclusive with exit 3', () => {
@@ -1763,15 +1760,14 @@ test('verify --judge with judge.route auto: opencode judges a claude author thro
   const judgeLog = decode(readFileSync(join(runDir, 'logs', 'judge.log'), 'utf8'));
   assert.deepEqual([judgeLog.route, judgeLog.independence, judgeLog.author], ['answerer:opencode', 'agent', 'claude (model claude-haiku-5-5)']);
   const records = readdirSync(join(runDir, 'agents')).sort();
-  assert.equal(records.length, 4, 'a judge record and its agent call record per capture');
+  assert.equal(records.length, 2, 'one agent call record per capture, and no judge record');
   for (const n of records) {
     const text = readFileSync(join(runDir, 'agents', n), 'utf8');
     assert.doesNotMatch(text, /home and settings render|Answer the typed questions/, `${n} keeps no prompt text`);
   }
-  assert.equal(JSON.parse(readFileSync(join(runDir, 'agents', records.find((n) => !n.endsWith('.agent.json'))), 'utf8')).verdict, 'pass');
   const v = t.dd('receipt', '--verify', t.head());
   assert.equal(v.code, 0, v.out);
-  assert.deepEqual([toon(v).schema, toon(v).judge.route, toon(v).judge.verdicts.length], [2, 'answerer:opencode', 2]);
+  assert.deepEqual([toon(v).schema, toon(v).judge.route, toon(v).judge.verdicts.map((x) => x.verdict)], [2, 'answerer:opencode', ['pass', 'pass']]);
   const wrong = agents({ correct: 0.04, wrong: 0.93, unclear: 0.03 });
   const bad = verify(wrong.env, 'the settings page shows dark mode on');
   assert.equal(bad.code, 1, bad.out);
@@ -1980,6 +1976,19 @@ test('doctor finds agent, judge and ffprobe binaries from PATH; missing optional
   assert.deepEqual([same.checks[7].status, /judge\.allow_same accepts it/.test(same.checks[7].detail)], ['warn', true]);
 });
 
+test('with no agent installed, the judge has no author to keep apart: doctor records none, the agent row still names the first agent', () => {
+  const { repo, env } = setup();
+  const claudeHome = join(env.DONE_DONE_HOME, 'claude');
+  mkdirSync(claudeHome, { recursive: true });
+  const bin = join(env.DONE_DONE_HOME, 'claude-bin');
+  writeFileSync(bin, '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+  writeFileSync(join(env.DONE_DONE_HOME, 'config.yaml'), `judge:\n  claude_code: { bin: ${JSON.stringify(bin)}, config_dir: ${JSON.stringify(claudeHome)} }\n`);
+  const d = toon(doctorIn(repo, pathEnv(env, []), 'doctor'));
+  assert.match(d.checks[4].detail, /^claude \(model claude-haiku-5-5; agent: auto\) is not on PATH/);
+  assert.equal(d.checks[7].status, 'ok', 'a judge with no author to keep apart is another agent');
+  assert.match(d.checks[7].detail, /judges the author none \(model none\)/);
+});
+
 // Stub agent CLIs that log how they were started (argv, stdin, cwd) and answer like the real ones:
 // claude -p prints its JSON result with structured_output; opencode run reads the attached prompt file and
 // prints JSON events (after a wrapper's banner line) whose text part holds the answer, fenced as models often do.
@@ -2079,7 +2088,9 @@ test('the agent comes from config (a fallback list moves past missing agents), a
   assert.equal(doctor('agent: opencode\n').by('judge_choice').status, 'warn', 'allow_same runs a session-only judge, and doctor says so');
   routeCfg('');
   writeFileSync(join(env.DONE_DONE_HOME, 'config.yaml'), 'judge:\n  route: answerer:claude\n');
-  assert.match(doctor('').out, /judge\.route must be auto, claude-code \(for claude\), or answerer:<agent>/, 'claude judges through claude-code');
+  assert.match(doctor('').out, /judge\.route must be auto, claude-code \(for claude\), or answerer:<agent> for one of opencode/, 'claude judges through claude-code');
+  writeFileSync(join(env.DONE_DONE_HOME, 'config.yaml'), 'judge:\n  route: answerer:codex\n');
+  assert.match(doctor('').out, /judge\.route must be auto, claude-code \(for claude\), or answerer:<agent> for one of opencode/, 'codex cannot read an image, so it is a config error');
   writeFileSync(join(env.DONE_DONE_HOME, 'config.yaml'), 'judge:\n  route: opencode-go\n');
   assert.match(doctor('').out, /judge\.route must be auto, claude-code \(for claude\), or answerer:<agent>/);
   writeFileSync(join(env.DONE_DONE_HOME, 'config.yaml'), 'judge:\n  model: x\n');

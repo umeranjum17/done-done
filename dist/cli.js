@@ -658,7 +658,7 @@ function verifyReceipt(repo, cfg, headArg) {
     }
     if (bad.length)
         return fail(`cited evidence no longer matches the receipt: ${bad.join('; ')}`);
-    emit({ command: 'receipt', result: 'pass', head: commit, tree: rec.tree, claim: rec.claim, files: rec.files.length, at: rec.at, schema: rec.schema, ...(j && { judge: j }), help: ['This receipt is valid for this head.'] });
+    emit({ command: 'receipt', result: 'pass', head: commit, tree: rec.tree, claim: rec.claim, files: rec.files.length, at: rec.at, schema: rec.schema, ...(rec.schema === 2 && { judge: j }), help: ['This receipt is valid for this head.'] });
     return PASS;
 }
 async function cmdReceipt(argv) {
@@ -1845,7 +1845,7 @@ async function cmdDoctor(argv) {
         checks.push({
             check: 'judge_choice',
             status: apartOk ? 'ok' : 'warn',
-            detail: `${choice.route} (model ${choice.model}; ${choice.from === 'auto' ? 'judge.route auto' : 'from config'}) judges the author ${agent.agent} (model ${agent.model || 'none'}): ${apart}${accepted}`,
+            detail: `${choice.route} (model ${choice.model}; ${choice.from === 'auto' ? 'judge.route auto' : 'from config'}) judges the author ${choice.author.agent} (model ${choice.author.model || 'none'}): ${apart}${accepted}`,
             fix: apartOk ? '' : `Install another agent that can judge (${JUDGES.join(' or ')}) so the judge is apart from the author`,
         });
     }

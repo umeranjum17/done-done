@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { stripVTControlCharacters } from 'node:util';
-import { AGENTS, CHEAP_MODELS, type Config, UsageError } from './config.js';
+import { AGENTS, ANSWERER_JUDGES, CHEAP_MODELS, type Config, UsageError } from './config.js';
 import { onPath } from './judge.js';
 
 // How done-done starts a coding agent for one step: a fresh, single-shot session that
@@ -20,7 +20,7 @@ export type AgentCall = {
   timeoutMs: number;
   tools: 'none' | 'read' | 'edit'; // none for the judge and readers
   record: string; // where the call record is written
-  files?: string[]; // images attached to the prompt (only for an adapter with images: true)
+  files?: string[]; // images attached to the prompt, for the answerer judge
 };
 export type AgentAnswer = { ok: boolean; answer?: Record<string, unknown>; error?: string; record?: string; recordError?: string };
 
@@ -43,8 +43,7 @@ class ProviderError extends Error {
     this.detail = `${prefix}${text.slice(0, 500)}${suffix}`;
   }
 }
-// images: the agent can read attached image files, so it can be the judge.
-type Adapter = { argv: (c: AgentCall, dir: string) => string[]; answer: (stdout: string) => unknown; file?: boolean; images?: boolean; hint?: string; env?: (c: AgentCall) => Record<string, string> };
+type Adapter = { argv: (c: AgentCall, dir: string) => string[]; answer: (stdout: string) => unknown; file?: boolean; hint?: string; env?: (c: AgentCall) => Record<string, string> };
 
 // The one JSON object inside free model text (often fenced): shared by the adapters that answer in text.
 export function extractJsonObject(text: string): unknown {
@@ -77,7 +76,6 @@ const ADAPTERS: Record<string, Adapter> = {
   // and the answer is the JSON object in the text parts of its JSON event stream.
   opencode: {
     file: true,
-    images: true,
     argv: (c, dir) => ['run', 'Follow the attached instructions.', '--format', 'json', '-m', c.model, '-f', join(dir, 'prompt.md'), ...(c.files ?? []).flatMap((f) => ['-f', f])],
     answer: (out) => {
       const events = out.split('\n').filter((l) => l.startsWith('{')).map((l) => JSON.parse(l));
@@ -158,10 +156,11 @@ export type JudgeChoice = { route: string; agent: string; model: string; indepen
 
 export const claudeBin = (cfg: Config) => cfg.judge.claude_code.bin || onPath('claude');
 const routeOf = (agent: string) => (agent === 'claude' ? 'claude-code' : `answerer:${agent}`);
-const canJudge = (agent: string) => agent === 'claude' || !!ADAPTERS[agent]?.images;
+const canJudge = (agent: string) => agent === 'claude' || ANSWERER_JUDGES.includes(agent);
 export const JUDGES = AGENTS.filter(canJudge);
 
-export function selectJudge(cfg: Config, author: { agent: string; model: string }): JudgeChoice {
+export function selectJudge(cfg: Config, found: { agent: string; model: string; path: string }): JudgeChoice {
+  const author = found.path ? found : { agent: 'none', model: '', path: '' };
   const pick = (agent: string, model: string, from: JudgeChoice['from']): JudgeChoice => {
     const independence = agent !== author.agent ? 'agent' : model !== author.model ? 'model' : 'session-only';
     return { route: routeOf(agent), agent, model, independence, from, author: { agent: author.agent, model: author.model } };
@@ -176,7 +175,7 @@ export function selectJudge(cfg: Config, author: { agent: string; model: string 
     throw new UsageError(`judge: no installed agent can judge (judge.route auto looks for ${JUDGES.join(', ')})`, 'Install one of them, or set judge.route in ~/.done-done/config.yaml');
   }
   const agent = route === 'claude-code' ? 'claude' : route.slice('answerer:'.length);
-  if (route !== 'claude-code' && !ADAPTERS[agent]?.images) throw new UsageError(`judge: done-done cannot judge through ${agent} yet (done-done cannot send its CLI an image)`, `Set judge.route to claude-code or answerer:<one of ${JUDGES.filter((a) => a !== 'claude').join(', ')}>`);
+  if (route !== 'claude-code' && !ANSWERER_JUDGES.includes(agent)) throw new UsageError(`judge: done-done cannot judge through ${agent} yet (done-done cannot send its CLI an image)`, `Set judge.route to claude-code or answerer:<one of ${ANSWERER_JUDGES.join(', ')}>`);
   const model = cfg.judge.model || CHEAP_MODELS[agent] || '';
   if (!model) throw new UsageError(`judge: no model for ${route}`, `Set judge.model in ~/.done-done/config.yaml`);
   const choice = pick(agent, model, 'config');

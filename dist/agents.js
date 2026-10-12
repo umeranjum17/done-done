@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { stripVTControlCharacters } from 'node:util';
-import { AGENTS, CHEAP_MODELS, UsageError } from './config.js';
+import { AGENTS, ANSWERER_JUDGES, CHEAP_MODELS, UsageError } from './config.js';
 import { onPath } from './judge.js';
 // argv never carries the prompt: it goes on stdin, or (file: true) into a 0600 prompt file the argv points at.
 // done-done parses the answer, validates it against the schema, and asks a tool-less call again, at most ASK_ATTEMPTS calls.
@@ -57,7 +57,6 @@ const ADAPTERS = {
     // and the answer is the JSON object in the text parts of its JSON event stream.
     opencode: {
         file: true,
-        images: true,
         argv: (c, dir) => ['run', 'Follow the attached instructions.', '--format', 'json', '-m', c.model, '-f', join(dir, 'prompt.md'), ...(c.files ?? []).flatMap((f) => ['-f', f])],
         answer: (out) => {
             const events = out.split('\n').filter((l) => l.startsWith('{')).map((l) => JSON.parse(l));
@@ -137,9 +136,10 @@ export function supported(agent) {
 }
 export const claudeBin = (cfg) => cfg.judge.claude_code.bin || onPath('claude');
 const routeOf = (agent) => (agent === 'claude' ? 'claude-code' : `answerer:${agent}`);
-const canJudge = (agent) => agent === 'claude' || !!ADAPTERS[agent]?.images;
+const canJudge = (agent) => agent === 'claude' || ANSWERER_JUDGES.includes(agent);
 export const JUDGES = AGENTS.filter(canJudge);
-export function selectJudge(cfg, author) {
+export function selectJudge(cfg, found) {
+    const author = found.path ? found : { agent: 'none', model: '', path: '' };
     const pick = (agent, model, from) => {
         const independence = agent !== author.agent ? 'agent' : model !== author.model ? 'model' : 'session-only';
         return { route: routeOf(agent), agent, model, independence, from, author: { agent: author.agent, model: author.model } };
@@ -156,8 +156,8 @@ export function selectJudge(cfg, author) {
         throw new UsageError(`judge: no installed agent can judge (judge.route auto looks for ${JUDGES.join(', ')})`, 'Install one of them, or set judge.route in ~/.done-done/config.yaml');
     }
     const agent = route === 'claude-code' ? 'claude' : route.slice('answerer:'.length);
-    if (route !== 'claude-code' && !ADAPTERS[agent]?.images)
-        throw new UsageError(`judge: done-done cannot judge through ${agent} yet (done-done cannot send its CLI an image)`, `Set judge.route to claude-code or answerer:<one of ${JUDGES.filter((a) => a !== 'claude').join(', ')}>`);
+    if (route !== 'claude-code' && !ANSWERER_JUDGES.includes(agent))
+        throw new UsageError(`judge: done-done cannot judge through ${agent} yet (done-done cannot send its CLI an image)`, `Set judge.route to claude-code or answerer:<one of ${ANSWERER_JUDGES.join(', ')}>`);
     const model = cfg.judge.model || CHEAP_MODELS[agent] || '';
     if (!model)
         throw new UsageError(`judge: no model for ${route}`, `Set judge.model in ~/.done-done/config.yaml`);

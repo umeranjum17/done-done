@@ -25,6 +25,8 @@ export type Config = {
 
 // The coding agents done-done can start, in the order `agent: auto` looks for them on PATH.
 export const AGENTS = ['claude', 'codex', 'opencode', 'pi', 'gemini'];
+// The agents whose CLI can read an attached image, so they judge through the answerer route; claude judges through claude-code.
+export const ANSWERER_JUDGES = ['opencode'];
 // The cost guard is this table: a default model is always the agent's cheap one, never a flagship,
 // whatever the vendor; any other model runs only when the user names it. gemini's is the CLI's own
 // `flash-lite` alias (its cli-reference.md: the fastest model for simple tasks). pi has no default here:
@@ -92,11 +94,11 @@ function apply(target: Record<string, any>, text: string | undefined, file: stri
       : spec.type === 'boolean' ? typeof value === 'boolean'
       : spec.type === 'string[]' ? Array.isArray(value) && value.every((v) => typeof v === 'string')
       : spec.type === 'agent' ? value === 'auto' || [value].flat().every((v) => AGENTS.includes(v as string)) && [value].flat().length > 0
-      : spec.type === 'route' ? typeof value === 'string' && (['auto', 'claude-code'].includes(value) || AGENTS.some((a) => a !== 'claude' && value === `answerer:${a}`))
+      : spec.type === 'route' ? typeof value === 'string' && (['auto', 'claude-code'].includes(value) || ANSWERER_JUDGES.some((a) => value === `answerer:${a}`))
       : spec.type === 'claude_code' ? !!value && typeof value === 'object' && !Array.isArray(value) && Object.entries(value).every(([k, v]) => ['bin', 'config_dir'].includes(k) && typeof v === 'string')
       : spec.type === 'agent_config' ? !!value && typeof value === 'object' && Object.entries(value).every(([a, c]) => AGENTS.includes(a) && !!c && typeof c === 'object' && Object.entries(c).every(([k, m]) => k === 'model' && typeof m === 'string'))
       : !!value && typeof value === 'object' && Object.values(value).every((j: any) => j && typeof j.command === 'string');
-    const want = { journeys: 'a map of name: {command: <string>}', agent: `auto, or one or a list of ${AGENTS.join(', ')}`, agent_config: `a map of <agent>: {model: <string>} for ${AGENTS.join(', ')}`, route: `auto, claude-code (for claude), or answerer:<agent> for one of ${AGENTS.filter((a) => a !== 'claude').join(', ')}`, claude_code: 'a map with bin and config_dir, each a string' } as Record<string, string>;
+    const want = { journeys: 'a map of name: {command: <string>}', agent: `auto, or one or a list of ${AGENTS.join(', ')}`, agent_config: `a map of <agent>: {model: <string>} for ${AGENTS.join(', ')}`, route: `auto, claude-code (for claude), or answerer:<agent> for one of ${ANSWERER_JUDGES.join(', ')}`, claude_code: 'a map with bin and config_dir, each a string' } as Record<string, string>;
     if (!ok) throw new UsageError(`${file}: ${key} must be ${want[spec.type] ?? `a ${spec.type}`}`);
     if (key === 'checks.not_proven' && value !== 'inconclusive' && value !== 'allow') throw new UsageError(`${file}: checks.not_proven must be inconclusive or allow`);
     const [a, b] = key.split('.');

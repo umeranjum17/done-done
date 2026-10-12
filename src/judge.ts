@@ -2,7 +2,7 @@ import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { accessSync, constants, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { delimiter, dirname, isAbsolute, join } from 'node:path';
+import { delimiter, isAbsolute, join } from 'node:path';
 import type { Backend, Question } from '@byokit/decide';
 import { askAgent, claudeBin, type JudgeChoice } from './agents.js';
 import { type Config, home, UsageError } from './config.js';
@@ -147,7 +147,7 @@ function prepare(c: Capture): { mime: string; bytes: Buffer } | string {
 }
 
 // Verdicts are cached in the run store, per app, so a re-run or a later run of the same capture and claim asks no model.
-// Every model call leaves a record in `records` (judge-<n>.json; the answerer's agent call beside it), never the prompt.
+// The answerer's agent call leaves a record in `records` (judge-<stamp>-<n>.agent.json), never the prompt.
 export async function judge(cfg: Config, choice: JudgeChoice, outcome: string, captures: Capture[], records: string): Promise<{ judged: Judged[]; notJudged: string[] }> {
   const { route, model } = choice;
   const dir = join(home(), 'runs', cfg.app, 'judge');
@@ -182,21 +182,17 @@ export async function judge(cfg: Config, choice: JudgeChoice, outcome: string, c
     }
     call = join(records, `judge-${stamp}-${calls}`);
     be ??= await backend(cfg, choice, () => `${call}.agent.json`);
-    const started = Date.now();
     let row: Judged;
-    let usage: unknown;
     try {
       const dataUrl = `data:${image.mime};base64,${image.bytes.toString('base64')}`;
       const raw = await be.ask({ outcome }, { relevance: QUESTION }, AbortSignal.timeout(TIMEOUT_MS), [{ id: 'capture', mime: image.mime, dataUrl }]);
       const a = be.resolve(QUESTION, raw.relevance);
-      usage = a.usage;
       const reason = a.personReason || a.rationale || OPTIONS[String(a.answer)] || '';
       row = a.abstained ? { path: c.name, sha256: c.sha256, verdict: 'unsure', reason: `not confident enough (${a.reason})`, cached: false }
         : { path: c.name, sha256: c.sha256, verdict: a.answer === 'correct' ? 'pass' : a.answer === 'wrong' ? 'fail' : 'unsure', reason, cached: false };
     } catch (e) {
       const code = (e as { code?: string }).code;
       const why = be.lastError() || (e as Error).message;
-      writeRecord(call, { route, model, capture: c.name, sha256: c.sha256, ms: Date.now() - started, error: why, agent_record: be.agentRecord?.() || undefined });
       // The kit reports a signed-out binary, a bad model id and a used-up plan all as 'process', so ask the binary which.
       if (route === 'claude-code' && (code === 'subscription_required' || (code === 'process' && !be.signedIn())))
         throw new UsageError(`judge: ${why} (sign-in ${cfg.judge.claude_code.config_dir})`, `Sign in once with your Claude plan: ${be.signIn}`);
@@ -204,7 +200,6 @@ export async function judge(cfg: Config, choice: JudgeChoice, outcome: string, c
       judged.push({ path: c.name, sha256: c.sha256, verdict: 'unsure', reason: `the judge did not answer: ${why}${hint}`, cached: false });
       continue;
     }
-    writeRecord(call, { route, model, capture: c.name, sha256: c.sha256, ms: Date.now() - started, verdict: row.verdict, reason: row.reason, usage, agent_record: be.agentRecord?.() || undefined });
     try {
       mkdirSync(dir, { recursive: true });
       writeFileSync(`${file}.tmp`, `${JSON.stringify({ verdict: row.verdict, reason: row.reason, route, model })}\n`, { mode: 0o600 });
@@ -213,12 +208,4 @@ export async function judge(cfg: Config, choice: JudgeChoice, outcome: string, c
     judged.push(row);
   }
   return { judged, notJudged };
-}
-
-// A call record holds what was asked about and what came back, never the prompt or the image.
-function writeRecord(path: string, rec: Record<string, unknown>) {
-  try {
-    mkdirSync(dirname(path), { recursive: true });
-    writeFileSync(`${path}.json`, `${JSON.stringify(rec, null, 2)}\n`, { mode: 0o600 });
-  } catch {} // a lost record never changes the verdict
 }

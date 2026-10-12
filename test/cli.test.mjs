@@ -862,7 +862,7 @@ test('init --agent opencode adds a session plugin that shows the bare state, mer
     const ses1 = id();
     const ses2 = id();
     const ses3 = id();
-    for (const sessionID of [ses1, ses2, ses3]) rmSync(join(tmpdir(), 'done-done-opencode', sessionID), { force: true });
+    for (const sessionID of [ses1, ses2, ses3]) rmSync(join(tmpdir(), `done-done-opencode-${sessionID}`), { force: true });
     const hooks = await DoneDonePlugin({ directory: repo });
     const parts = [];
     await hooks['chat.message']({ sessionID: ses1 }, { message: { id: 'msg_1' }, parts });

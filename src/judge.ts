@@ -42,14 +42,30 @@ function onPath(name: string): string {
   return '';
 }
 
-async function backend(cfg: Config): Promise<{ ask: Backend['ask']; signIn: string; signedIn: () => boolean }> {
+const KIT = '@byokit/decide@0.6.5';
+const quote = (a: string) => (/^[\w@%+=:,./-]+$/.test(a) ? a : `'${a.replaceAll("'", `'\\''`)}'`);
+
+// The kit is an optional peer dependency, so a plain install stays small; it loads only when a capture needs judging.
+async function kit() {
+  const [major, minor] = process.versions.node.split('.').map(Number);
+  if (major < 22 || (major === 22 && minor < 18))
+    throw new UsageError(`judge: the judge needs Node 22.18 or later (this is ${process.versions.node})`, 'Install Node 22.18 or later, then re-run this command');
+  try {
+    return { ...(await import('@byokit/decide/claude-code')), ...(await import('@byokit/decide')) };
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code !== 'ERR_MODULE_NOT_FOUND') throw e;
+    throw new UsageError(`judge: the judge needs the optional ${KIT} kit, which is not installed`, `Run this check with the kit: npx -y -p done-done -p ${KIT} done-done ${process.argv.slice(2).map(quote).join(' ')}`);
+  }
+}
+
+async function backend(cfg: Config): Promise<{ ask: Backend['ask']; resolve: typeof import('@byokit/decide').resolve; signIn: string; signedIn: () => boolean }> {
   const bin = cfg.judge.bin || onPath('claude');
   const dir = cfg.judge.config_dir;
   const signIn = `CLAUDE_CONFIG_DIR=${dir} ${bin || 'claude'} auth login`;
   if (!bin) throw new UsageError('judge: no claude binary on PATH; install Claude Code or set judge.bin in ~/.done-done/config.yaml', 'Install Claude Code, or set judge.bin to its absolute path');
   if (!isAbsolute(bin) || !isAbsolute(dir)) throw new UsageError(`judge: judge.bin and judge.config_dir must be absolute paths (got ${bin}, ${dir})`, 'Fix judge.bin or judge.config_dir in ~/.done-done/config.yaml');
   if (!existsSync(dir)) throw new UsageError(`judge: no Claude sign-in at ${dir}`, `Sign in once with your Claude plan: mkdir -p ${dir} && ${signIn}`);
-  const { claudeCode } = await import('@byokit/decide/claude-code');
+  const { claudeCode, resolve } = await kit();
   // The real folder, so a link to ~/.claude is refused here as a config error, not later per capture.
   const real = realpathSync(dir);
   // After a failed request: is the binary still signed in? Reads only the binary's non-secret auth status, as the kit does.
@@ -65,7 +81,7 @@ async function backend(cfg: Config): Promise<{ ask: Backend['ask']; signIn: stri
     }
   };
   try {
-    return { ask: claudeCode({ bin, configDir: real, model: cfg.judge.model, timeoutMs: TIMEOUT_MS }).ask, signIn, signedIn };
+    return { ask: claudeCode({ bin, configDir: real, model: cfg.judge.model, timeoutMs: TIMEOUT_MS }).ask, resolve, signIn, signedIn };
   } catch (e) {
     throw new UsageError(`judge: ${(e as Error).message} (judge.bin ${bin}, judge.config_dir ${dir})`, 'Set judge.config_dir to a folder of its own, not your ~/.claude');
   }
@@ -114,8 +130,7 @@ export async function judge(cfg: Config, outcome: string, captures: Capture[]): 
     try {
       const dataUrl = `data:${image.mime};base64,${image.bytes.toString('base64')}`;
       const raw = await be.ask({ outcome }, { relevance: QUESTION }, AbortSignal.timeout(TIMEOUT_MS), [{ id: 'capture', mime: image.mime, dataUrl }]);
-      const { resolve } = await import('@byokit/decide');
-      const a = resolve(QUESTION, raw.relevance);
+      const a = be.resolve(QUESTION, raw.relevance);
       const reason = a.personReason || a.rationale || OPTIONS[String(a.answer)] || '';
       row = a.abstained ? { path: c.name, verdict: 'unsure', reason: `not confident enough (${a.reason})`, cached: false }
         : { path: c.name, verdict: a.answer === 'correct' ? 'pass' : a.answer === 'wrong' ? 'fail' : 'unsure', reason, cached: false };

@@ -9,7 +9,7 @@
 
 done-done won't accept "done" without real, fresh proof from your product, captured at the exact commit being called done.
 
-[![Node 22.18+](https://img.shields.io/badge/node-22.18%2B-3fb950?logo=nodedotjs&logoColor=white)](https://nodejs.org) [![Status: early preview](https://img.shields.io/badge/status-early%20preview-d29922)](#whats-next) [![npm: not published yet](https://img.shields.io/badge/npm-not%20published%20yet-8b949e?logo=npm&logoColor=white)](#quick-start)
+[![Node 22.5+](https://img.shields.io/badge/node-22.5%2B-3fb950?logo=nodedotjs&logoColor=white)](https://nodejs.org) [![Status: early preview](https://img.shields.io/badge/status-early%20preview-d29922)](#whats-next) [![npm: not published yet](https://img.shields.io/badge/npm-not%20published%20yet-8b949e?logo=npm&logoColor=white)](#quick-start)
 
 <br>
 
@@ -45,7 +45,7 @@ Four moments from a demo notes app. Every picture is real output from the curren
 
 ## Quick start
 
-You need Node 22.18 or later and git. done-done is not on npm yet, so install it from source.
+You need Node 22.5 or later and git. done-done is not on npm yet, so install it from source.
 
 **1. Install**
 

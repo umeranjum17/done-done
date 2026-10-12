@@ -4,7 +4,7 @@ Everything `init`, `run`, `check`, `receipt` and the config files do. For the ov
 
 ## Install
 
-For the install steps, see the [README quick start](../README.md#quick-start). done-done needs Node 22.18 or later and git. `ffprobe` is optional. Without it, videos are reported as "not verified" and the check is inconclusive, never a pass.
+For the install steps, see the [README quick start](../README.md#quick-start). done-done needs Node 22.5 or later and git (the opt-in judge needs Node 22.18). `ffprobe` is optional. Without it, videos are reported as "not verified" and the check is inconclusive, never a pass.
 
 ## Use
 
@@ -105,7 +105,13 @@ done-done receipt --judge --from pr-body.md
 
 - **Off by default.** Turn it on per run with `--judge`, or for a project with `judge.enabled: true`. With it off, nothing changes and no model is asked.
 - **One question per capture.** Each cited PNG or JPEG that is in a done-done run record goes to the model with the claim's `outcome:` line and nothing else: no repo, no paths, no other files. Text, log and video evidence are not judged, and the result says so.
-- **Your own Claude plan, through BYOKit.** The judge uses [`@byokit/decide`](https://www.npmjs.com/package/@byokit/decide)'s Claude Code backend, which runs your own `claude` binary against a sign-in folder kept only for done-done. done-done never reads, copies or stores a credential. Sign in once:
+- **Your own Claude plan, through BYOKit.** The judge uses [`@byokit/decide`](https://www.npmjs.com/package/@byokit/decide)'s Claude Code backend, which runs your own `claude` binary against a sign-in folder kept only for done-done. done-done never reads, copies or stores a credential. The kit is an optional peer dependency, so a plain install stays small; the judge needs it and Node 22.18 or later. Without it, `--judge` exits 2 with the command to run the same check with the kit:
+
+  ```sh
+  npx -y -p done-done -p @byokit/decide@0.6.5 done-done check --judge --from pr-body.md
+  ```
+
+  In a project that installs done-done, `npm install -D @byokit/decide@0.6.5` adds it for good. Sign in once:
 
   ```sh
   mkdir -p ~/.done-done/claude && CLAUDE_CONFIG_DIR=~/.done-done/claude claude auth login
@@ -121,7 +127,7 @@ done-done receipt --judge --from pr-body.md
 | `fail`: wrong screen | fail | 1 |
 | `unsure`: the model said it cannot tell, was less than 80% sure, or did not answer (a model error or a used-up plan) | inconclusive | 3 |
 
-The result gains a `judge` block with the model and, for each judged file, its verdict, a short reason and whether it came from the cache. A missing or signed-out sign-in folder, a sign-in that is not a Claude subscription, a sign-in folder that is (or links to) your own `~/.claude`, or a missing `claude` binary is a config error (exit 2) whose `help` line is the command to fix it. The kit cannot tell a bad `judge.model` from a used-up plan, so both are `unsure` with a reason naming each. The judge's confidence is the model's own estimate, not a calibrated score.
+The result gains a `judge` block with the model and, for each judged file, its verdict, a short reason and whether it came from the cache. A missing or signed-out sign-in folder, a sign-in that is not a Claude subscription, a sign-in folder that is (or links to) your own `~/.claude`, a missing `claude` binary, a missing `@byokit/decide` kit or a Node older than 22.18 is a config error (exit 2) whose `help` line is the command to fix it. The kit cannot tell a bad `judge.model` from a used-up plan, so both are `unsure` with a reason naming each. The judge's confidence is the model's own estimate, not a calibrated score.
 
 ### Record a receipt
 
@@ -173,7 +179,7 @@ There are two files. Unknown keys are an error in both.
 evidence:
   local_root: ~/.done-done/evidence   # evidence root for repos that set none (<local_root>/<app>)
 judge:                                # used only when the judge is on
-  model: claude-sonnet-5-5            # the default
+  model: claude-opus-5-5              # the default
   bin: /usr/local/bin/claude          # default: the first `claude` on PATH
   config_dir: ~/.done-done/claude     # the default; a sign-in folder for done-done only
 ```

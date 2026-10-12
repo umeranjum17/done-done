@@ -1,7 +1,7 @@
 // End-to-end: drives the built CLI against throwaway git repos with fictional fixtures.
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { appendFileSync, mkdirSync, mkdtempSync, existsSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { appendFileSync, cpSync, mkdirSync, mkdtempSync, existsSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { after, test } from 'node:test';
@@ -655,4 +655,27 @@ test('judge with no sign-in is a config error naming the sign-in command, and wr
   const ok = j.dd('receipt', '--judge', '--outcome', 'the notes list shows three notes', files[0]);
   assert.equal(ok.code, 0, ok.out);
   assert.equal(toon(ok).judge.judged[0].verdict, 'pass');
+});
+
+test('without the optional kit, --judge is a config error naming the npx command; the default model is Opus', () => {
+  const j = judgeSetup(CORRECT);
+  const { files } = j.shots();
+  // A plain install: done-done and its dependencies, without the optional @byokit/decide peer.
+  const root = join(dirname(CLI), '..');
+  const pkg = join(j.dir, 'plain');
+  cpSync(join(root, 'dist'), join(pkg, 'dist'), { recursive: true });
+  cpSync(join(root, 'package.json'), join(pkg, 'package.json'));
+  mkdirSync(join(pkg, 'node_modules', '@toon-format'), { recursive: true });
+  symlinkSync(join(root, 'node_modules', 'yaml'), join(pkg, 'node_modules', 'yaml'));
+  symlinkSync(join(root, 'node_modules', '@toon-format', 'toon'), join(pkg, 'node_modules', '@toon-format', 'toon'));
+  const args = ['check', '--judge', '--outcome', "Umer's notes list shows three notes", files[0]];
+  const plain = spawnSync(process.execPath, [join(pkg, 'dist', 'cli.js'), ...args], { cwd: j.repo, env: j.env, encoding: 'utf8' });
+  assert.equal(plain.status, 2, plain.stdout + plain.stderr);
+  const e = toon({ out: plain.stdout });
+  assert.match(e.error, /needs the optional @byokit\/decide@0\.6\.5 kit/);
+  assert.equal(e.help[0], `Run this check with the kit: npx -y -p done-done -p @byokit/decide@0.6.5 done-done check --judge --outcome 'Umer'\\''s notes list shows three notes' ${files[0]}`);
+  assert.equal(j.calls().length, 0);
+  writeFileSync(join(j.env.DONE_DONE_HOME, 'config.yaml'), readFileSync(join(j.env.DONE_DONE_HOME, 'config.yaml'), 'utf8').replace('  model: claude-test-1\n', ''));
+  assert.equal(j.dd(...args).code, 0);
+  assert.equal(j.calls()[0].model, 'claude-opus-5-5');
 });

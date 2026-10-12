@@ -97,7 +97,7 @@ export function loadConfig(repo: string, projectText?: string | null): Config {
     journeys: {},
     evidence: { local_root: join(home(), 'evidence'), root: '', allow_dirty: false, ignore_paths: [] },
     checks: { not_proven: 'inconclusive', fix_title: '^(fix|bugfix|hotfix)\\b' },
-    judge: { enabled: false, model: 'claude-sonnet-5-5', bin: '', config_dir: join(home(), 'claude') },
+    judge: { enabled: false, model: 'claude-opus-5-5', bin: '', config_dir: join(home(), 'claude') },
     trusted: projectText != null,
   };
   const globalFile = join(home(), 'config.yaml');

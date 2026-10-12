@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { execFileSync, spawnSync } from 'node:child_process';
 import { createHash, randomBytes } from 'node:crypto';
-import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, isAbsolute, join, matchesGlob, relative, resolve, sep } from 'node:path';
 import { parseArgs } from 'node:util';
@@ -41,6 +41,7 @@ const COMMANDS = {
     init: {
         usage: [
             ['done-done init', 'write a minimal .done-done.yaml (evidence lives outside the repo)'],
+            ['done-done init', 'scaffold .agents/skills/verify-<app> from this repo (never overwrites)'],
             ['done-done init --agent claude', 'also show this repo\'s done-done state at each Claude Code session start'],
             ['done-done init --agent codex', 'also show this repo\'s done-done state at each Codex session start'],
             ['done-done init --agent opencode', 'also add this repo\'s done-done state to the first message of each opencode session'],
@@ -702,6 +703,208 @@ function ensureIgnored(repo, rel) {
     appendFileSync(file, `${text && !text.endsWith('\n') ? '\n' : ''}${entry}\n`);
     return true;
 }
+// `init` also scaffolds the project's verify skill from the repo's own files: a port of the
+// fleet create-verification-skill interview (surface, run, drive, observe, isolate).
+// Scaffold only: where only a live drive can fill a blank, a TODO marker stands in place of
+// an invented command. An existing skill is never overwritten, so re-run is idempotent.
+function headText(p, max = 12000) {
+    try {
+        if (!lstatSync(p).isFile())
+            return '';
+        return readFileSync(p, 'utf8').slice(0, max);
+    }
+    catch {
+        return '';
+    }
+}
+const slug = (t) => t.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40) || 'feature';
+const SKIP_DIRS = new Set(['node_modules', 'dist', 'build', 'out', 'vendor', 'coverage', 'target', 'venv', '__pycache__', 'bower_components']);
+const SOURCE_FILE = /\.(m?[jt]s|py|go|rb|rs|php)$/;
+// Source files under `dir`, skipping hidden dirs (.git, .venv, .next, ...) and dependency and build output. The cap
+// applies while walking, so a large vendored tree never fills the sample before the app's own files are reached.
+function sourceFiles(dir, max, out = []) {
+    try {
+        for (const e of readdirSync(dir, { withFileTypes: true })) {
+            if (out.length >= max)
+                break;
+            const p = join(dir, e.name);
+            if (e.isDirectory()) {
+                if (!e.name.startsWith('.') && !SKIP_DIRS.has(e.name) && !(e.name === 'components' && dir.endsWith(`${sep}src`)))
+                    sourceFiles(p, max, out);
+            }
+            else if (e.isFile() && SOURCE_FILE.test(e.name))
+                out.push(p);
+        }
+    }
+    catch {
+        // An unreadable directory contributes nothing; the scan runs on the rest.
+    }
+    return out;
+}
+// Surface, run, drive, observe and features read from package.json, Makefile, routes,
+// CLI commands and docs: the repo's own files, never invention.
+function detectApp(repo) {
+    let pkg = {};
+    try {
+        pkg = JSON.parse(headText(join(repo, 'package.json'), Infinity) || '{}');
+    }
+    catch {
+        pkg = {};
+    }
+    if (!pkg || typeof pkg !== 'object' || Array.isArray(pkg))
+        pkg = {};
+    const scripts = pkg.scripts && typeof pkg.scripts === 'object' ? pkg.scripts : {};
+    const deps = Object.keys({ ...(pkg.dependencies ?? {}), ...(pkg.devDependencies ?? {}) });
+    const has = (...names) => names.some((n) => deps.includes(n));
+    const bins = typeof pkg.bin === 'string' ? [pkg.bin] : pkg.bin && typeof pkg.bin === 'object' ? Object.values(pkg.bin).filter((v) => typeof v === 'string') : [];
+    const make = headText(join(repo, 'Makefile'), 4000);
+    let text = `${scripts.dev ?? ''}\n${scripts.start ?? ''}\n${make}`;
+    for (const f of sourceFiles(repo, 40))
+        text += `\n${headText(f, 6000)}`;
+    const routes = [...text.matchAll(/\b(app|router|server|api|fastify|routes|r)\.(get|post|put|patch|delete|del|use)\(\s*['"`](\/[^'"`\s]*)/g)]
+        .map((m) => `${m[2].toUpperCase()} ${m[3]}`)
+        .filter((r, i, a) => a.indexOf(r) === i);
+    const commands = [...text.matchAll(/\.command\(\s*['"`]([^'"`\s\]]+)/g)]
+        .map((m) => m[1])
+        .filter((c, i, a) => a.indexOf(c) === i);
+    const web = has('react', 'next', 'vue', 'nuxt', 'svelte', 'solid', 'vite', 'webpack', 'playwright', '@playwright/test', 'cypress', 'puppeteer');
+    const cliish = bins.length > 0 || commands.length > 0 || has('commander', 'yargs', 'oclif', 'cac');
+    const api = routes.length > 0 || has('express', 'fastify', 'koa', 'hono');
+    const surface = web ? 'web UI' : cliish ? 'CLI' : api ? 'API/service' : 'app (unrecognized surface)';
+    const launch = scripts.dev ? `npm run dev (${scripts.dev})`
+        : scripts.start ? `npm start (${scripts.start})`
+            : bins.length ? `node ${bins[0]} --help`
+                : make ? 'TODO(live drive): pick the dev target from the Makefile and record it here'
+                    : 'TODO(live drive): how the app starts locally (no npm script, bin or Makefile found)';
+    const port = `${scripts.dev ?? ''} ${scripts.start ?? ''}`.match(/(?:localhost:|--port[= ])(\d{4,5})/)?.[1];
+    const ready = port
+        ? `http://localhost:${port} answers (TODO(live drive): confirm the ready log line)`
+        : web || api
+            ? 'TODO(live drive): the URL and ready log line the server prints'
+            : 'TODO(live drive): how to tell the app is ready (log line, port, prompt)';
+    const harness = has('playwright', '@playwright/test', 'cypress', 'puppeteer')
+        ? 'browser/CDP (Playwright)'
+        : cliish ? 'tmux/PTY'
+            : api ? 'plain HTTP (curl)'
+                : 'TODO(live drive)';
+    const observe = web
+        ? 'screenshots of the action and the resulting state, plus the console log'
+        : cliish
+            ? 'terminal transcripts, exit codes and side effects (files written, rows inserted)'
+            : api
+                ? 'response bodies, status codes and side effects (rows inserted, messages sent)'
+                : 'TODO(live drive): what evidence this surface can capture';
+    const isolate = web || port
+        ? 'TODO(live drive): confirm two instances run side by side (ports, data dirs, profiles); until then drive one instance at a time'
+        : 'each run uses its own invocation; never drive a shared session the user owns';
+    const features = [];
+    for (const f of [
+        ...routes.map((r) => ({ base: slug(r), title: r, reach: `the ${r} route`, command: false })),
+        ...commands.map((c) => ({ base: slug(c), title: `\`${c}\` command`, reach: `the CLI run with \`${c}\``, command: true })),
+    ]) {
+        let s = f.base;
+        for (let n = 2; features.some((g) => g.slug === s); n++)
+            s = `${f.base}-${n}`;
+        features.push({ slug: s, title: f.title, reach: f.reach, command: f.command });
+    }
+    const commandsFound = features.filter((f) => f.command);
+    const shown = [...features.filter((f) => !f.command).slice(0, commandsFound.length ? 4 : 5), ...commandsFound].slice(0, 5);
+    return { surface, launch, ready, harness, observe, isolate, features: shown, omitted: features.length - shown.length };
+}
+function verifySkillMd(app, d) {
+    const name = `verify-${app}`;
+    const found = [
+        ...(d.features.length ? d.features.map((f) => `- ${f.title}: ${f.reach}`) : ['- TODO(live drive): no routes or commands found; map the first feature on the first live drive']),
+        ...(d.omitted ? [`- ${d.omitted} more found and not listed; add them by hand or run maintain later.`] : []),
+    ];
+    return `---
+name: ${name}
+description: Drive the ${app} ${d.surface} the way a user does and capture proof it works. Use when proving a ${app} change, capturing evidence, or keeping the feature map honest.
+---
+
+# ${name}
+
+Scaffolded by \`done-done init\` from this repo's own files (surface: ${d.surface}). Lines marked TODO need one live drive before they can be trusted.
+
+## Launch
+
+${d.launch}
+
+Ready when ${d.ready}. Tear down what you started; never kill by process name.
+
+## Doctor
+
+Read-only: is this instance worth driving? Process up, right build, port owned by us, auth valid. ${d.isolate}.
+
+## Drive
+
+Harness: ${d.harness}. Prefer the repo's real handles (routes, commands, labels) over coordinates:
+
+${found.join('\n')}
+
+## Evidence
+
+Capture ${d.observe}. Exercise the real user path, not internal setters; capture the action and the resulting state, not just the final screen; verify side effects alongside what is visible. Evidence goes to the run folder \`done-done run\` prints.
+
+## Cleanup
+
+Stop the instances this run started and remove scratch state. Evidence survives cleanup: never delete the run folder.
+`;
+}
+function verifyFeatureMd(app, d, f) {
+    return `# ${f.title}\n\nPart of the ${app} verification map; reached at ${f.reach}.\n\n## Sub-features\n\nTODO(live drive): list what this covers.\n\n## How to get to it (user POV)\n\n${f.reach}.\n\n## Driving it with ${d.harness}\n\nTODO(live drive): the exact selectors or commands that drive it.\n\n## Gotchas\n\nTODO(live drive): what surprised the first live drive.\n`;
+}
+function verifyFeaturesMd(app, d) {
+    const index = d.features.length
+        ? d.features.map((f) => `- [${f.title}](${f.slug}.md): ${f.reach}`).join('\n')
+        : 'TODO(live drive): no features found in source; map the first one here.';
+    const more = d.omitted ? `\n\n${d.omitted} more found and not listed; add them by hand or run maintain later.` : '';
+    return `# ${app} features\n\nThe repo's maintained verification map; a proof that drives one entry point is incomplete when this lists others.\n\n${index}${more}\n`;
+}
+// The first existing component on the way from the repo to `p` that is a symlink, if any: a cloned repo's symlink
+// would redirect the scaffold's writes out of the repo.
+function symlinkOnPath(repo, p) {
+    let cur = repo;
+    for (const part of relative(repo, p).split(sep)) {
+        cur = join(cur, part);
+        try {
+            if (lstatSync(cur).isSymbolicLink())
+                return cur;
+        }
+        catch {
+            return undefined;
+        }
+    }
+    return undefined;
+}
+// Writes only missing files; an existing skill is left byte-identical. SKILL.md is written last, so it marks a
+// finished scaffold. Every write target is checked before the first write.
+function scaffoldVerify(repo, cfg) {
+    const dir = join(repo, cfg.skill);
+    if (existsSync(join(dir, 'SKILL.md')))
+        return 'unchanged';
+    const d = detectApp(repo);
+    const files = new Map([[join('features', 'README.md'), verifyFeaturesMd(cfg.app, d)]]);
+    for (const f of d.features)
+        files.set(join('features', `${f.slug}.md`), verifyFeatureMd(cfg.app, d, f));
+    files.set('SKILL.md', verifySkillMd(cfg.app, d));
+    const targets = [...files].map(([rel, body]) => ({ p: join(dir, rel), body }));
+    const link = targets.map(({ p }) => symlinkOnPath(repo, p)).find((l) => l !== undefined);
+    if (link !== undefined)
+        return `skipped, ${shown(repo, link)} is a symlink; write it by hand or remove the link`;
+    for (const { p, body } of targets) {
+        if (existsSync(p))
+            continue;
+        try {
+            mkdirSync(dirname(p), { recursive: true });
+            writeFileSync(p, body);
+        }
+        catch (e) {
+            return `skipped, ${shown(repo, p)} could not be written (${e.message}); fix it and re-run init`;
+        }
+    }
+    return 'written';
+}
 // The session-start hook `init --agent <agent>` adds; the agent shows its stdout to the session.
 // Without done-done on PATH it prints nothing and exits 0, so it never breaks a session.
 // Claude Code reads it from the repo's .claude/settings.json, Codex from the repo's .codex/hooks.json
@@ -830,6 +1033,8 @@ function cmdInit(argv) {
     const file = join(repo, '.done-done.yaml');
     const existed = existsSync(file);
     const cfg = loadConfig(repo); // validates the existing project config; malformed -> exit 2, no writes
+    if (cfg.skill.split(/[\\/]/).includes('..'))
+        throw new UsageError(`verify skill ${cfg.skill} has a .. segment; use a path inside the repo`, 'Set skill to a repo-relative path in .done-done.yaml');
     const hook = values.agent === 'claude' ? claudeSettings(repo) : values.agent === 'codex' ? codexSettings(repo) : values.agent === 'opencode' ? opencodePlugin(repo) : undefined; // likewise validated before any write
     if (journey !== null) {
         // Record the capture recipe in the repo so any checkout can re-run the proof.
@@ -852,6 +1057,7 @@ function cmdInit(argv) {
         const added = !!rel && ensureIgnored(repo, rel);
         const root = shown(repo, fresh.evidence.root);
         const check = 'done-done check --outcome "<what you proved>" <files it recorded>';
+        const verify = scaffoldVerify(repo, fresh);
         emit({
             command: 'init',
             result: 'pass',
@@ -860,6 +1066,7 @@ function cmdInit(argv) {
             app: fresh.app,
             evidence_root: root,
             gitignore: added ? `added ${rel.replace(/\/+$/, '')}/` : 'unchanged',
+            verify_skill: verify,
             help: [`Capture proof: done-done run ${journey}, then: ${check}`],
         });
         return PASS;
@@ -881,6 +1088,7 @@ function cmdInit(argv) {
     }
     const root = shown(repo, cfg.evidence.root);
     const check = 'done-done check --outcome "<what you proved>" <files it recorded>';
+    const verify = scaffoldVerify(repo, cfg);
     emit({
         command: 'init',
         result: 'pass',
@@ -888,6 +1096,7 @@ function cmdInit(argv) {
         app: cfg.app,
         evidence_root: root,
         gitignore: added ? `added ${rel.replace(/\/+$/, '')}/` : 'unchanged',
+        verify_skill: verify,
         ...(hook &&
             (values.agent === 'codex'
                 ? { codex_hook: hook.text ? 'added to .codex/hooks.json' : 'unchanged' }

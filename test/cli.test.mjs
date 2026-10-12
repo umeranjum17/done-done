@@ -2036,7 +2036,8 @@ test('rerun after a killed runner reuses resolve and passes', async () => {
   assert.equal(r.code, 0, r.out);
   const s = toon(r);
   assert.equal(s.result, 'pass');
-  assert.match(readFileSync(join(runs, s.run_id, 'events.jsonl'), 'utf8'), /reused/);
+  const rerunEvent = readFileSync(join(runs, s.run_id, 'events.jsonl'), 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l)).find((e) => e.rerun_of);
+  assert.deepEqual(rerunEvent.reused, ['resolve']);
 });
 
 test('a rerun whose check fails does not carry the earlier receipt', () => {
@@ -2058,7 +2059,8 @@ test('a rerun does not reuse a drive recorded from a dirty tree', () => {
   const a = toon(t.dd('verify', 'shots', '--outcome', 'home renders', '--foreground'));
   execFileSync('git', ['checkout', '--', 'src/app.js'], { cwd: t.repo, env: t.env, stdio: 'pipe' });
   const r = toon(t.dd('rerun', '--run', a.run_id));
-  assert.doesNotMatch(readFileSync(join(t.env.DONE_DONE_HOME, 'runs', 'notes', r.run_id, 'events.jsonl'), 'utf8'), /"reused":true/);
+  const rerunEvent = readFileSync(join(t.env.DONE_DONE_HOME, 'runs', 'notes', r.run_id, 'events.jsonl'), 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l)).find((e) => e.rerun_of);
+  assert.deepEqual(rerunEvent.reused, ['resolve']);
 });
 
 test('a rerun whose source record is gone starts a fresh run', () => {

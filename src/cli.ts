@@ -1090,15 +1090,17 @@ async function cmdRerun(argv: string[]): Promise<number> {
   const group = src.runner?.journey_pgid;
   if (['pending', 'running'].includes(src.status) && group && alive(-group)) throw new UsageError(`the journey of run ${srcId} is still running, so it cannot be rerun yet`, `Read it: done-done status --run ${srcId}`);
   const inputs = inputsOf(src.repo, loadConfig(src.repo), src.journey);
-  const reuse = !!src.inputs && (['head', 'journey', 'skill'] as const).every((k) => src.inputs![k] === inputs[k]) && drivesClean(src.record);
+  const same = !!src.inputs && (['head', 'journey', 'skill'] as const).every((k) => src.inputs![k] === inputs[k]);
+  const driveReuse = same && drivesClean(src.record);
+  const reused = (name: string) => (name === 'resolve' && same) || (name === 'drive' && driveReuse);
   const id = newRunId(git(repo, 'rev-parse', 'HEAD'));
   const dir = join(root, id);
   mkdirSync(join(dir, 'logs'), { recursive: true });
-  const steps = src.steps.map((s) => (reuse && ['resolve', 'drive'].includes(s.name) && s.status === 'completed' ? { ...s } : { name: s.name, status: 'pending' as StepState }));
+  const steps = src.steps.map((s) => (reused(s.name) && s.status === 'completed' ? { ...s } : { name: s.name, status: 'pending' as StepState }));
   const created = now();
-  const run: Run = { schema: 2, run_id: id, kind: src.kind, app: cfg.app, repo: src.repo, journey: src.journey, claim: src.claim, claim_id: src.claim_id, status: 'pending', inputs, steps, created, updated: created, ...(reuse && src.record && { record: src.record }) };
+  const run: Run = { schema: 2, run_id: id, kind: src.kind, app: cfg.app, repo: src.repo, journey: src.journey, claim: src.claim, claim_id: src.claim_id, status: 'pending', inputs, steps, created, updated: created, ...(driveReuse && src.record && { record: src.record }) };
   saveRun(dir, run);
-  if (reuse) for (const s of steps) {
+  for (const s of steps) {
     const f = join(root, srcId, 'logs', `${s.name}.log`);
     if (s.status === 'completed' && existsSync(f)) writeFileSync(join(dir, 'logs', `${s.name}.log`), readFileSync(f));
   }
@@ -1156,8 +1158,9 @@ function cmdHistory(argv: string[]): number {
   const cfg = loadConfig(repo);
   const root = runsRoot(cfg.app);
   const mine = existsSync(root) ? readdirSync(root).filter((x) => existsSync(join(root, x, 'run.json'))).map((x) => loadRun(join(root, x))).filter((r) => r.repo === repo).sort((a, b) => b.created.localeCompare(a.created)) : [];
-  const rows = cap(mine.slice(0, n).map((r) => ({ run_id: r.run_id, kind: r.kind, status: shownStatus(r),...(r.result && { result: r.result }), claim: r.claim, journey: r.journey, created: r.created })));
-  emit({ command: 'history', runs: rows.items.length, history: rows.items, ...(rows.omitted && { history_omitted: rows.omitted }), help: rows.items.length ? [`Read the newest run: done-done status --run ${rows.items[0].run_id}`] : ['Start one: done-done verify --outcome "<what a user can now do>"'] });
+  const matched = mine.slice(0, n);
+  const rows = cap(matched.map((r) => ({ run_id: r.run_id, kind: r.kind, status: shownStatus(r),...(r.result && { result: r.result }), claim: r.claim, journey: r.journey, created: r.created })));
+  emit({ command: 'history', runs: matched.length, history: rows.items, ...(rows.omitted && { history_omitted: rows.omitted }), help: rows.items.length ? [`Read the newest run: done-done status --run ${rows.items[0].run_id}`] : ['Start one: done-done verify --outcome "<what a user can now do>"'] });
   return PASS;
 }
 

@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { execFileSync, spawnSync } from 'node:child_process';
 import { createHash, randomBytes } from 'node:crypto';
-import { appendFileSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, statSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, isAbsolute, join, matchesGlob, relative, resolve, sep } from 'node:path';
 import { parseArgs } from 'node:util';
@@ -718,10 +718,10 @@ function headText(p, max = 12000) {
     }
 }
 const slug = (t) => t.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40) || 'feature';
-const SKIP_DIRS = new Set(['node_modules', '.git', 'dist', 'build', 'out', 'vendor', 'coverage', 'target']);
+const SKIP_DIRS = new Set(['node_modules', 'dist', 'build', 'out', 'vendor', 'coverage', 'target', 'venv', '__pycache__', 'bower_components']);
 const SOURCE_FILE = /\.(m?[jt]sx?|py|go|rb|rs|php)$/;
-// Source files under `dir`, skipping dependency and build output. The cap applies while walking, so a large
-// vendored tree never fills the sample before the app's own files are reached.
+// Source files under `dir`, skipping hidden dirs (.git, .venv, .next, ...) and dependency and build output. The cap
+// applies while walking, so a large vendored tree never fills the sample before the app's own files are reached.
 function sourceFiles(dir, max, out = []) {
     try {
         for (const e of readdirSync(dir, { withFileTypes: true })) {
@@ -729,7 +729,7 @@ function sourceFiles(dir, max, out = []) {
                 break;
             const p = join(dir, e.name);
             if (e.isDirectory()) {
-                if (!SKIP_DIRS.has(e.name))
+                if (!e.name.startsWith('.') && !SKIP_DIRS.has(e.name))
                     sourceFiles(p, max, out);
             }
             else if (e.isFile() && SOURCE_FILE.test(e.name))
@@ -770,11 +770,6 @@ function detectApp(repo) {
         .map((m) => m[1])
         .filter((c, i, a) => a.indexOf(c) === i)
         .slice(0, 5);
-    const headings = [...readme.matchAll(/^#{2,3}\s+(.+?)\s*$/gm)]
-        .map((m) => m[1].trim())
-        .filter((h) => h && !/^(install|getting started|usage|quick ?start|development|contributing|license|changelog|roadmap|api reference)\b/i.test(h))
-        .filter((h, i, a) => a.indexOf(h) === i)
-        .slice(0, 5);
     const web = has('react', 'next', 'vue', 'nuxt', 'svelte', 'solid', 'vite', 'webpack', 'playwright', '@playwright/test', 'cypress', 'puppeteer');
     const cliish = bins.length > 0 || commands.length > 0 || has('commander', 'yargs', 'oclif', 'cac');
     const api = routes.length > 0 || has('express', 'fastify', 'koa', 'hono');
@@ -808,13 +803,12 @@ function detectApp(repo) {
     const features = [
         ...routes.map((r) => ({ slug: slug(r), title: r, reach: `the ${r} route` })),
         ...commands.map((c) => ({ slug: slug(c), title: `\`${c}\` command`, reach: `the CLI run with \`${c}\`` })),
-        ...headings.map((h) => ({ slug: slug(h), title: h, reach: `the ${h} flow described in README.md` })),
     ].filter((f, i, a) => a.findIndex((g) => g.slug === f.slug) === i).slice(0, 5);
     return { surface, launch, ready, harness, observe, isolate, features };
 }
 function verifySkillMd(app, d) {
     const name = `verify-${app}`;
-    const found = d.features.length ? d.features.map((f) => `- ${f.title}: ${f.reach}`) : ['- TODO(live drive): no routes, commands or doc flows found; map the first feature on the first live drive'];
+    const found = d.features.length ? d.features.map((f) => `- ${f.title}: ${f.reach}`) : ['- TODO(live drive): no routes or commands found; map the first feature on the first live drive'];
     return `---
 name: ${name}
 description: Drive the ${app} ${d.surface} the way a user does and capture proof it works. Use when proving a ${app} change, capturing evidence, or keeping the feature map honest.
@@ -858,23 +852,30 @@ function verifyFeaturesMd(app, d) {
         : 'TODO(live drive): no features found in source; map the first one here.';
     return `# ${app} features\n\nThe repo's maintained verification map; a proof that drives one entry point is incomplete when this lists others.\n\n${index}\n`;
 }
-// The skill is config from the repo's own .done-done.yaml, so a cloned repo must not steer writes out of it:
-// no '..' segment, and the deepest existing ancestor (after symlinks) stays inside the repo.
-function skillInsideRepo(repo, skill) {
-    if (skill.split(/[\\/]/).includes('..'))
-        return false;
-    let p = join(repo, skill);
-    while (!existsSync(p))
-        p = dirname(p);
-    return !outside(relative(realpathSync(repo), realpathSync(p)));
+// The cloned repo's .done-done.yaml names the skill dir, so a write target must stay in the repo: every existing
+// component from the repo down (the leaf included) must be a real entry, not a symlink that points elsewhere.
+function writableInRepo(repo, p) {
+    let cur = repo;
+    for (const part of relative(repo, p).split(sep)) {
+        cur = join(cur, part);
+        try {
+            if (lstatSync(cur).isSymbolicLink())
+                return false;
+        }
+        catch {
+            return true;
+        }
+    }
+    return true;
 }
 // Writes only missing files; an existing skill is left byte-identical.
 function scaffoldVerify(repo, cfg) {
-    if (!skillInsideRepo(repo, cfg.skill))
-        throw new UsageError(`verify skill ${cfg.skill} must be a path inside the repo`, 'Set skill to a repo-relative path in .done-done.yaml');
+    const outsideRepo = new UsageError(`verify skill ${cfg.skill} must be a path inside the repo`, 'Set skill to a repo-relative path in .done-done.yaml');
+    if (cfg.skill.split(/[\\/]/).includes('..'))
+        throw outsideRepo;
     const dir = join(repo, cfg.skill);
     if (existsSync(join(dir, 'SKILL.md')))
-        return { status: 'unchanged', features: [] };
+        return 'unchanged';
     const d = detectApp(repo);
     const files = new Map([
         ['SKILL.md', verifySkillMd(cfg.app, d)],
@@ -882,14 +883,16 @@ function scaffoldVerify(repo, cfg) {
     ]);
     for (const f of d.features)
         files.set(join('features', `${f.slug}.md`), verifyFeatureMd(cfg.app, d, f));
-    for (const [rel, body] of files) {
-        const p = join(dir, rel);
+    const targets = [...files].map(([rel, body]) => ({ p: join(dir, rel), body }));
+    if (!targets.every(({ p }) => writableInRepo(repo, p)))
+        throw outsideRepo;
+    for (const { p, body } of targets) {
         if (!existsSync(p)) {
             mkdirSync(dirname(p), { recursive: true });
             writeFileSync(p, body);
         }
     }
-    return { status: 'written', features: d.features.map((f) => f.slug) };
+    return 'written';
 }
 // The session-start hook `init --agent <agent>` adds; the agent shows its stdout to the session.
 // Without done-done on PATH it prints nothing and exits 0, so it never breaks a session.
@@ -1050,8 +1053,7 @@ function cmdInit(argv) {
             app: fresh.app,
             evidence_root: root,
             gitignore: added ? `added ${rel.replace(/\/+$/, '')}/` : 'unchanged',
-            verify_skill: verify.status,
-            ...(verify.features.length ? { features: verify.features } : {}),
+            verify_skill: verify,
             help: [`Capture proof: done-done run ${journey}, then: ${check}`],
         });
         return PASS;
@@ -1081,8 +1083,7 @@ function cmdInit(argv) {
         app: cfg.app,
         evidence_root: root,
         gitignore: added ? `added ${rel.replace(/\/+$/, '')}/` : 'unchanged',
-        verify_skill: verify.status,
-        ...(verify.features.length ? { features: verify.features } : {}),
+        verify_skill: verify,
         ...(hook &&
             (values.agent === 'codex'
                 ? { codex_hook: hook.text ? 'added to .codex/hooks.json' : 'unchanged' }

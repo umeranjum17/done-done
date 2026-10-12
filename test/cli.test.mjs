@@ -953,7 +953,8 @@ function shapeRepo(kind, name) {
     writeFileSync(join(repo, 'package.json'), JSON.stringify({ name, scripts: { dev: 'vite --port 5173' }, dependencies: { react: '^19.0.0' }, devDependencies: { '@playwright/test': '^1.0.0' } }));
     mkdirSync(join(repo, 'src'));
     writeFileSync(join(repo, 'src', 'App.jsx'), 'export const App = () => <h1>shop</h1>;\n');
-    writeFileSync(join(repo, 'README.md'), '# shop\n\n## Cart\n\n## Checkout\n');
+    writeFileSync(join(repo, 'server.js'), "app.get('/cart', show);\napp.post('/checkout', pay);\n");
+    writeFileSync(join(repo, 'README.md'), '# shop\n');
   } else {
     writeFileSync(join(repo, 'package.json'), JSON.stringify({ name, bin: { [name]: 'bin/cli.js' }, dependencies: { commander: '^12.0.0' } }));
     mkdirSync(join(repo, 'bin'));
@@ -971,23 +972,25 @@ function shapeRepo(kind, name) {
   return { dir, repo, env, dd };
 }
 
+const featureFiles = (skillDir) => readdirSync(join(skillDir, 'features')).sort();
+
 test('init scaffolds a verify skill with real launch and features for a web app', () => {
   const { repo, dd } = shapeRepo('web', 'shop');
   const r = dd('init');
   assert.equal(r.code, 0, r.out);
   assert.equal(toon(r).verify_skill, 'written');
-  assert.deepEqual(toon(r).features, ['cart', 'checkout']);
   const dir = join(repo, '.agents', 'skills', 'verify-shop');
+  assert.deepEqual(featureFiles(dir), ['README.md', 'get-cart.md', 'post-checkout.md'], 'each route becomes a feature');
   const body = readFileSync(join(dir, 'SKILL.md'), 'utf8');
   assert.match(body, /^name: verify-shop$/m, 'frontmatter registers the skill');
   assert.match(body, /npm run dev \(vite --port 5173\)/, 'launch comes from the repo scripts');
   assert.match(body, /localhost:5173/, 'the detected port becomes the readiness check');
   assert.match(body, /browser\/CDP \(Playwright\)/, 'the harness comes from the repo deps');
-  for (const f of ['cart', 'checkout']) {
+  for (const f of ['get-cart', 'post-checkout']) {
     const feat = readFileSync(join(dir, 'features', `${f}.md`), 'utf8');
     assert.match(feat, /## Driving it with/, 'each feature keeps the four-H2 shape');
   }
-  assert.match(readFileSync(join(dir, 'features', 'README.md'), 'utf8'), /cart\.md/, 'the map indexes its features');
+  assert.match(readFileSync(join(dir, 'features', 'README.md'), 'utf8'), /get-cart\.md/, 'the map indexes its features');
   const before = body;
   assert.equal(toon(dd('init')).verify_skill, 'unchanged');
   assert.equal(readFileSync(join(dir, 'SKILL.md'), 'utf8'), before, 're-run is idempotent');
@@ -1019,20 +1022,20 @@ test('init maps the app, not its dependencies, and lists each feature slug once'
   const { repo, dd } = shapeRepo('cli', 'notes');
   mkdirSync(join(repo, 'node_modules', 'lib'), { recursive: true });
   writeFileSync(join(repo, 'node_modules', 'lib', 'index.js'), "router.get('/vendored/route');\nprogram.command('vendored');\n");
-  writeFileSync(join(repo, 'README.md'), '# notes\n\n## Add\n');
+  writeFileSync(join(repo, 'routes.js'), "app.get('/a/b');\napp.get('/a-b');\n");
   const r = dd('init');
   assert.equal(r.code, 0, r.out);
-  assert.deepEqual(toon(r).features, ['add', 'list'], 'node_modules is skipped and the README heading does not duplicate the add command');
+  assert.deepEqual(featureFiles(join(repo, '.agents', 'skills', 'verify-notes')), ['README.md', 'add.md', 'get-a-b.md', 'list.md'], 'node_modules is skipped and colliding slugs keep one file');
 });
 
 test('init does not read a README that is a symlink out of the repo', () => {
   const { dir, repo, dd } = shapeRepo('cli', 'notes');
-  writeFileSync(join(dir, 'secret.md'), '## Secret flow\n');
+  writeFileSync(join(dir, 'secret.md'), "app.get('/secret');\n");
   rmSync(join(repo, 'README.md'));
   symlinkSync(join(dir, 'secret.md'), join(repo, 'README.md'));
   const r = dd('init');
   assert.equal(r.code, 0, r.out);
-  assert.deepEqual(toon(r).features, ['add', 'list'], 'the symlink target is not scanned');
+  assert.deepEqual(featureFiles(join(repo, '.agents', 'skills', 'verify-notes')), ['README.md', 'add.md', 'list.md'], 'the symlink target is not scanned');
 });
 
 test('init refuses a verify skill path that leaves the repo', () => {
@@ -1048,6 +1051,16 @@ test('init refuses a verify skill path that leaves the repo', () => {
   writeFileSync(join(repo, '.done-done.yaml'), 'skill: .agents/skills/verify-notes\n');
   assert.notEqual(dd('init').code, 0, 'a symlinked ancestor cannot redirect the skill');
   assert.equal(existsSync(join(dir, 'elsewhere', 'skills')), false, 'nothing is written through the symlink');
+});
+
+test('init refuses a symlink beneath the verify skill dir', () => {
+  const { dir, repo, dd } = shapeRepo('cli', 'notes');
+  mkdirSync(join(repo, '.agents', 'skills', 'verify-notes'), { recursive: true });
+  mkdirSync(join(dir, 'elsewhere'));
+  symlinkSync(join(dir, 'elsewhere'), join(repo, '.agents', 'skills', 'verify-notes', 'features'));
+  const r = dd('init');
+  assert.notEqual(r.code, 0, r.out);
+  assert.deepEqual(readdirSync(join(dir, 'elsewhere')), [], 'no feature file is written through the symlink');
 });
 
 test('init outside a git repository reports a clear usage error', () => {

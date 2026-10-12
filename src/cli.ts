@@ -765,7 +765,8 @@ function codexSettings(repo: string): { file: string; text?: string } {
 // .opencode/plugins/ (auto-loaded; the home config is never touched) whose chat.message
 // hook runs the session command below on the first message of each session and appends
 // the bare `done-done` state to the message parts. The appended part carries the prt_ id
-// plus the session and message ids from the hook input, because opencode validates every
+// plus the session id from the hook input and the message id from the hook output (opencode
+// passes no messageID to the hook), because opencode validates every
 // part before save and drops the whole first message when one is invalid. Without
 // done-done on PATH it appends nothing and never throws, so it never breaks a session.
 function opencodePlugin(repo: string): { file: string; text?: string } {
@@ -791,7 +792,7 @@ export const DoneDonePlugin = async ({ directory }) => {
       if (seen.has(input.sessionID)) return;
       seen.add(input.sessionID);
       const state = await run(directory);
-      if (state) output.parts.push({ id: \`prt_\${randomUUID()}\`, messageID: input.messageID, sessionID: input.sessionID, type: "text", text: state });
+      if (state) output.parts.push({ id: \`prt_\${randomUUID()}\`, messageID: output.message.id, sessionID: input.sessionID, type: "text", text: state });
     },
   };
 };

@@ -859,23 +859,23 @@ test('init --agent opencode adds a session plugin that shows the bare state, mer
     const { DoneDonePlugin } = await import(pathToFileURL(plugin).href);
     const hooks = await DoneDonePlugin({ directory: repo });
     const parts = [];
-    await hooks['chat.message']({ sessionID: 'ses_1', messageID: 'msg_1' }, { message: {}, parts });
+    await hooks['chat.message']({ sessionID: 'ses_1' }, { message: { id: 'msg_1' }, parts });
     assert.equal(parts.length, 1);
     assert.equal(parts[0].type, 'text');
     assert.equal(parts[0].text, dd().out.trim(), 'the first message of a session gains the bare done-done state');
     assert.match(parts[0].id, /^prt_/, 'the appended part carries a part id opencode accepts');
-    assert.equal(parts[0].messageID, 'msg_1', 'the appended part carries the hook message id');
+    assert.equal(parts[0].messageID, 'msg_1', 'the appended part carries the message id from output.message, since opencode passes no messageID to the hook');
     assert.equal(parts[0].sessionID, 'ses_1', 'the appended part carries the hook session id');
-    await hooks['chat.message']({ sessionID: 'ses_1', messageID: 'msg_2' }, { message: {}, parts });
+    await hooks['chat.message']({ sessionID: 'ses_1' }, { message: { id: 'msg_2' }, parts });
     assert.equal(parts.length, 1, 'later messages in the same session gain nothing');
     const fresh = [];
-    await hooks['chat.message']({ sessionID: 'ses_2', messageID: 'msg_3' }, { message: {}, parts: fresh });
+    await hooks['chat.message']({ sessionID: 'ses_2' }, { message: { id: 'msg_3' }, parts: fresh });
     assert.equal(fresh.length, 1, 'a new session gains the state again');
     assert.match(fresh[0].id, /^prt_/);
     assert.notEqual(fresh[0].id, parts[0].id, 'each appended part gets its own id');
     process.env.PATH = join(dir, 'empty');
     const silent = [];
-    await hooks['chat.message']({ sessionID: 'ses_3', messageID: 'msg_4' }, { message: {}, parts: silent });
+    await hooks['chat.message']({ sessionID: 'ses_3' }, { message: { id: 'msg_4' }, parts: silent });
     assert.deepEqual(silent, [], 'without done-done on PATH the hook appends nothing and never throws');
   } finally {
     process.env.PATH = prevPath;

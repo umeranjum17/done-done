@@ -184,6 +184,6 @@ To try an unreleased commit without cloning, run it straight from GitHub (npm 12
 npx -y --allow-git=all github:umeranjum17/done-done-axi --help
 ```
 
-`dist/` is committed, so installing from GitHub needs no build step. `npm test` rebuilds it and fails while the rebuilt `dist/` differs from the commit, so commit `dist/` with your change.
+`dist/` is committed, so installing from GitHub needs no build step. `npm test` rebuilds it and fails while the rebuilt `dist/` differs from the commit or has files git does not track, so `git add` the new `dist/` files with your change.
 
 The terminal pictures (hero, run, pass, reasons, config) are real output from the current build; redraw them with `npx tsc && node docs/media/make.mjs`. The wordmark and the flow picture are hand-made SVGs.

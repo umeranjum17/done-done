@@ -2389,6 +2389,21 @@ for (const text of ['Here is the code: function foo() { return 1; }', '{"ok":tru
   assert.equal(s.calls().length, 1, 'the final answer is accepted on the first try');
 });
 
+test('a repo step that gemini refuses as untrusted fails with the trust fix line', async () => {
+  const { repo, env } = setup();
+  const s = stubPiGemini(env, '{"ok":true}', 'auth');
+  const { askAgent } = await import(pathToFileURL(join(dirname(fileURLToPath(import.meta.url)), '..', 'dist', 'agents.js')).href);
+  const old = process.env.PATH;
+  process.env.PATH = s.env.PATH;
+  try {
+    const out = askAgent({ agent: 'gemini', model: 'flash-lite', prompt: 'p', schema: { type: 'object', properties: { ok: { type: 'boolean' } }, required: ['ok'] }, cwd: repo, timeoutMs: 60_000, record: join(s.env.PATH, 'rec.json'), tools: 'edit' });
+    assert.equal(out.ok, false);
+    assert.match(out.error, /trust it in Gemini CLI first, then retry/);
+  } finally {
+    process.env.PATH = old;
+  }
+});
+
 test('an edit step whose answer is not JSON is never asked again, while a tool-less probe is', async () => {
   const { repo, env } = setup();
   const s = stubPiGemini(env, '{"ok":true}', 'bad');

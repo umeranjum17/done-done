@@ -26,7 +26,7 @@ export type AgentAnswer = { ok: boolean; answer?: Record<string, unknown>; error
 // done-done parses the answer, validates it against the schema, and asks a tool-less call again, at most ASK_ATTEMPTS calls.
 const ASK_ATTEMPTS = 3;
 class ProviderError extends Error {}
-type Adapter = { argv: (c: AgentCall, dir: string) => string[]; answer: (stdout: string) => unknown; file?: boolean; env?: (c: AgentCall) => Record<string, string> };
+type Adapter = { argv: (c: AgentCall, dir: string) => string[]; answer: (stdout: string) => unknown; file?: boolean; hint?: string; env?: (c: AgentCall) => Record<string, string> };
 
 // The one JSON object inside free model text (often fenced): shared by the adapters that answer in text.
 export function extractJsonObject(text: string): unknown {
@@ -104,6 +104,7 @@ const ADAPTERS: Record<string, Adapter> = {
   // never runs interactively, so the trust dialog could never be answered there. Repo calls keep Gemini's trust gate.
   gemini: {
     argv: (c) => ['-p', 'Follow the instructions on stdin.', '-o', 'json', '-m', c.model, '--approval-mode', c.tools === 'edit' ? 'auto_edit' : 'plan', ...(c.tools === 'none' ? ['--skip-trust'] : [])],
+    hint: 'if gemini refused this folder as untrusted, trust it in Gemini CLI first, then retry',
     answer: (out) => {
       const r = JSON.parse(out);
       if (!r.response && r.error) throw new ProviderError(JSON.stringify(r.error).slice(0, 500));
@@ -159,7 +160,7 @@ export function askAgent(c: AgentCall): AgentAnswer {
         } catch (e) {
           if (!(e instanceof SyntaxError)) why = (e as Error).message;
         }
-        throw new Error(`${c.agent} exited ${res.status}: ${why}`);
+        throw new Error(`${c.agent} exited ${res.status}: ${why}${adapter.hint && c.tools !== 'none' ? `; ${adapter.hint}` : ''}`);
       }
       try {
         const answer = adapter.answer(String(res.stdout));

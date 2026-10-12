@@ -95,6 +95,7 @@ const ADAPTERS = {
     // never runs interactively, so the trust dialog could never be answered there. Repo calls keep Gemini's trust gate.
     gemini: {
         argv: (c) => ['-p', 'Follow the instructions on stdin.', '-o', 'json', '-m', c.model, '--approval-mode', c.tools === 'edit' ? 'auto_edit' : 'plan', ...(c.tools === 'none' ? ['--skip-trust'] : [])],
+        hint: 'if gemini refused this folder as untrusted, trust it in Gemini CLI first, then retry',
         answer: (out) => {
             const r = JSON.parse(out);
             if (!r.response && r.error)
@@ -152,7 +153,7 @@ export function askAgent(c) {
                     if (!(e instanceof SyntaxError))
                         why = e.message;
                 }
-                throw new Error(`${c.agent} exited ${res.status}: ${why}`);
+                throw new Error(`${c.agent} exited ${res.status}: ${why}${adapter.hint && c.tools !== 'none' ? `; ${adapter.hint}` : ''}`);
             }
             try {
                 const answer = adapter.answer(String(res.stdout));

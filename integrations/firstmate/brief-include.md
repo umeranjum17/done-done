@@ -1,8 +1,9 @@
 
 ## Proof with done-done
-Before you report done, load the done-done skill and follow it. Install it once per machine with
-`npx skills add umeranjum17/done-done --skill done-done -g -y`. The CLI is `done-done` (`done-done --help`);
-if that fails, report that the CLI is missing instead of writing proof by hand.
+Before you report done, load the done-done skill and follow it; it says how to run the `done-done` CLI (on PATH,
+or through npx). If the skill is missing, install it with
+`npx skills add umeranjum17/done-done --skill done-done -g -a <your agent: claude-code, codex or opencode> -y`.
+If done-done cannot run, report that instead of writing proof by hand.
 
 1. If the repo has no `.done-done.yaml`, run `done-done init`, then add a journey to it that drives the real
    app and writes its screenshots, recordings or logs under `$DONE_DONE_EVIDENCE_ROOT/$DONE_DONE_RUN_ID`

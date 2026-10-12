@@ -9,7 +9,7 @@
 
 done-done won't accept "done" without real, fresh proof from your product, captured at the exact commit being called done.
 
-[![Node 22.5+](https://img.shields.io/badge/node-22.5%2B-3fb950?logo=nodedotjs&logoColor=white)](https://nodejs.org) [![Status: early preview](https://img.shields.io/badge/status-early%20preview-d29922)](#whats-next) [![npm: not published yet](https://img.shields.io/badge/npm-not%20published%20yet-8b949e?logo=npm&logoColor=white)](#quick-start)
+[![Node 22.5+](https://img.shields.io/badge/node-22.5%2B-3fb950?logo=nodedotjs&logoColor=white)](https://nodejs.org) [![Status: early preview](https://img.shields.io/badge/status-early%20preview-d29922)](#whats-next) [![npm: not published yet](https://img.shields.io/badge/npm-not%20published%20yet-8b949e?logo=npm&logoColor=white)](#use-it-from-your-agent)
 
 <br>
 
@@ -49,16 +49,20 @@ done-done is an [AXI](https://axi.md), which means -
 - It's built for agents: [TOON](https://github.com/toon-format/spec) output by default (`--json` and `--full` when needed), and every result names the next command in its `help` lines.
 - The skill below only handles discovery; agents learn done-done by using it.
 
-## Quick Start
+## Use It From Your Agent
 
-You need Node 22.5 or later and git. Install the done-done skill in the [Agent Skills](https://agentskills.io) format with [`npx skills`](https://github.com/vercel-labs/skills):
+You need Node 22.5 or later and git. Give your agent the done-done skill in the [Agent Skills](https://agentskills.io) format with [`npx skills`](https://github.com/vercel-labs/skills), naming your agent with `-a`:
 
 ```sh
-npx skills add umeranjum17/done-done --skill done-done
+npx skills add umeranjum17/done-done --skill done-done -a claude-code -y
 ```
 
+Use `-a codex` or `-a opencode` for those agents. `-a` and `-y` skip the installer's four prompts and keep it from writing skill folders for agents you do not use.
+
+The skill lands in this project (`.claude/skills/done-done/` for Claude Code) next to a `skills-lock.json`: commit both so teammates and CI get it too. Add `-g` instead to install it once for all your projects (`~/.claude/skills/`).
+
 That is the entire setup - no npm install needed.
-The skill teaches your agent to run done-done through `npx`, so the CLI comes along on demand.
+The skill tells your agent to use `done-done` if it is on PATH and otherwise run it through `npx`, so the CLI comes along on demand.
 It stays a short stub and sends the agent to `--help` and the bare command for current instructions, so an installed copy cannot go stale against a newer CLI.
 
 done-done is not on npm yet, so today the skill runs it straight from GitHub. This is the command that works now:
@@ -76,8 +80,6 @@ Then, in agents that expose skills as slash commands (Claude Code, for example),
 ```
 
 Or just ask in plain words - "prove the app in this repo works", "is this really done?", "gate this PR on proof" - and the agent loads the skill on its own.
-
-By default the skill lands in the current project's skills directory (`.claude/skills/`, for example); add `-g` to install it for all projects (`~/.claude/skills/`).
 
 ## Other Ways to Use done-done
 

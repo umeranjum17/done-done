@@ -1,6 +1,7 @@
 ---
 name: done-done
 description: "Prove the real app works before work is called done: done-done runs a capture of the real product, ties every screenshot, recording and log it writes to the exact commit, then checks that cited evidence is real, fresh and not reused. Use when the user asks to prove a change or app works, asks whether a task is really done, wants screenshots, recordings or logs captured as evidence, or wants a pull request gated on proof."
+license: Apache-2.0
 argument-hint: "[what to prove, e.g. the app in this repo works]"
 metadata:
   author: umeranjum17
@@ -18,14 +19,14 @@ the user; they only say what should be proven.
 ## Current guidance lives in the CLI
 
 Do not follow command or config details from memory or from this file - installed copies go stale.
-Get the current source of truth from the CLI:
+Get the current source of truth from the CLI.
 
-- `npx -y --allow-git=all github:umeranjum17/done-done` (no arguments, inside the repo) for this repo's proof setup and the next step
-- `npx -y --allow-git=all github:umeranjum17/done-done --help` for every command and flag
+First run `command -v done-done`. If it prints a path, run `done-done` as shown below. If not, run
+`npx -y --allow-git=all github:umeranjum17/done-done` wherever this file or done-done output says `done-done` - nothing to install (the first
+run builds it, about 20 seconds).
 
-You do not need done-done installed - invoke it as `npx -y --allow-git=all github:umeranjum17/done-done <args>` (the first run builds it, about
-20 seconds). If `done-done` is already on PATH, use it directly. If done-done output shows a follow-up
-command starting with `done-done`, run it the same way.
+- `done-done` (no arguments, inside the repo) for this repo's proof setup and the next step
+- `done-done --help` for every command and flag
 
 Results are TOON (`init` prints plain text): read `result` and follow the `help` lines through
 `init`, `run`, `check` and `receipt`. Proof comes from driving the real product, not from a unit test run, and counts only from a committed

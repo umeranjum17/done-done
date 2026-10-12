@@ -1,6 +1,7 @@
 {
   "name": "done-done",
   "version": "0.1.0",
+  "license": "Apache-2.0",
   "description": "Proof that the real product works before a task is called done: commit-bound evidence runs and evidence checks.",
   "type": "module",
   "repository": { "type": "git", "url": "git+https://github.com/umeranjum17/done-done.git" },

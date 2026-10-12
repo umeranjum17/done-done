@@ -1837,6 +1837,23 @@ test('auto judge skips a claude judge with no sign-in folder, so doctor and veri
   assert.ok(calls.every((c) => c.agent === 'opencode'), 'no request goes to claude');
 });
 
+test('auto judge with claude as the only agent and no sign-in folder has no judge: doctor is missing and verify --judge exits 2', () => {
+  const t = setup();
+  mkdirSync(t.env.DONE_DONE_HOME, { recursive: true });
+  writeFileSync(join(t.env.DONE_DONE_HOME, 'config.yaml'), 'agent: auto\n');
+  const env = pathEnv(t.env, ['claude']);
+  symlinkSync(process.execPath, join(env.PATH, 'node'));
+  const d = toon(doctorIn(t.repo, env, 'doctor'));
+  const choice = d.checks.find((c) => c.check === 'judge_choice');
+  assert.equal(choice.status, 'missing');
+  assert.match(choice.detail, /no installed agent can judge/);
+  const v = spawnSync(process.execPath, [CLI, 'verify', 'shots', '--outcome', 'home and settings render', '--judge', '--foreground'], { cwd: t.repo, env, encoding: 'utf8' });
+  assert.equal(v.status, 1, v.stdout + v.stderr);
+  const run = toon({ out: v.stdout });
+  assert.equal(run.steps.find((x) => x.name === 'judge').status, 'failed');
+  assert.match(run.reason, /no installed agent can judge/);
+});
+
 // doctor: read-only health check. Required items (git, config, evidence root) gate
 // exit 0/2; the skill, agent, judge and ffprobe items are optional and never fail it.
 // An isolated PATH holding only git plus the named stub binaries, so agent/judge/ffprobe
@@ -1934,6 +1951,7 @@ test('doctor in a bare repo fails with the init fix; a malformed config names th
 
 test('with no agent key, doctor names agent: auto and the cheap default judge model', () => {
   const { repo, env } = setup();
+  mkdirSync(join(env.DONE_DONE_HOME, 'claude'), { recursive: true });
   const d = toon(doctorIn(repo, pathEnv(env, ['claude']), 'doctor'));
   assert.match(d.checks[4].detail, /^claude \(model claude-haiku-5-5; agent: auto\)/);
   assert.match(d.checks[7].detail, /^claude-code \(model claude-haiku-5-5; judge\.route auto\) judges the author claude/);
@@ -1942,14 +1960,13 @@ test('with no agent key, doctor names agent: auto and the cheap default judge mo
 test('doctor reports the judge missing when claude has no sign-in or judge.claude_code.bin is relative', () => {
   const { repo, env, dd } = setup();
   const noSignIn = toon(doctorIn(repo, pathEnv(env, ['claude']), 'doctor'));
-  assert.equal(noSignIn.checks[5].status, 'missing', 'a claude binary alone is not a working judge');
-  assert.match(noSignIn.checks[5].detail, /no Claude sign-in/);
-  assert.match(noSignIn.checks[5].fix, /auth login/);
+  assert.equal(noSignIn.checks[5].status, 'missing', 'a claude binary alone with no sign-in is not a judge');
+  assert.match(noSignIn.checks[5].detail, /no installed agent can judge/);
   mkdirSync(env.DONE_DONE_HOME, { recursive: true });
   writeFileSync(join(env.DONE_DONE_HOME, 'config.yaml'), 'judge:\n  claude_code: { bin: claude }\n');
   const relative = toon(doctorIn(repo, pathEnv(env, ['claude']), 'doctor'));
   assert.equal(relative.checks[5].status, 'missing');
-  assert.match(relative.checks[5].detail, /judge\.claude_code\.bin and judge\.claude_code\.config_dir must be absolute paths \(got claude/);
+  assert.match(relative.checks[5].detail, /no installed agent can judge/);
   writeFileSync(join(env.DONE_DONE_HOME, 'config.yaml'), 'judge:\n  bin: /usr/bin/claude\n');
   assert.match(toon(dd('doctor')).checks[1].detail, /unknown key judge\.bin/, 'a key that never shipped is unknown');
 });
@@ -1960,8 +1977,7 @@ test('doctor reports the judge missing when judge.claude_code.bin does not exist
   writeFileSync(join(env.DONE_DONE_HOME, 'config.yaml'), `judge:\n  claude_code: { bin: ${JSON.stringify(join(env.DONE_DONE_HOME, 'gone', 'claude'))} }\n`);
   const j = toon(doctorIn(repo, pathEnv(env, ['claude']), 'doctor'));
   assert.equal(j.checks[5].status, 'missing');
-  assert.match(j.checks[5].detail, /is not an executable file/);
-  assert.match(j.checks[5].fix, /judge\.claude_code/);
+  assert.match(j.checks[5].detail, /no installed agent can judge/);
 });
 
 test('doctor reports the judge missing when judge.claude_code.bin is a directory', () => {
@@ -1972,7 +1988,7 @@ test('doctor reports the judge missing when judge.claude_code.bin is a directory
   writeFileSync(join(env.DONE_DONE_HOME, 'config.yaml'), `judge:\n  claude_code: { bin: ${JSON.stringify(dirBin)} }\n`);
   const j = toon(doctorIn(repo, pathEnv(env, ['claude']), 'doctor'));
   assert.equal(j.checks[5].status, 'missing');
-  assert.match(j.checks[5].detail, /is not an executable file/);
+  assert.match(j.checks[5].detail, /no installed agent can judge/);
 });
 
 test('doctor reports the judge missing when its sign-in folder is a ~/.claude', () => {
@@ -2043,6 +2059,7 @@ test('with no agent installed, the judge has no author to keep apart: doctor rec
 test('judge.route empty is auto, and a judge.model under auto is ignored with a warning', () => {
   const { repo, env } = setup();
   mkdirSync(env.DONE_DONE_HOME, { recursive: true });
+  mkdirSync(join(env.DONE_DONE_HOME, 'claude'), { recursive: true });
   writeFileSync(join(env.DONE_DONE_HOME, 'config.yaml'), "judge:\n  route: ''\n");
   assert.equal(toon(doctorIn(repo, pathEnv(env, ['claude']), 'doctor')).checks[1].status, 'ok');
   writeFileSync(join(env.DONE_DONE_HOME, 'config.yaml'), 'judge:\n  model: x\n');

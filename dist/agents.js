@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { stripVTControlCharacters } from 'node:util';
 import { AGENTS, ANSWERER_JUDGES, CHEAP_MODELS, UsageError } from './config.js';
-import { onPath } from './judge.js';
+import { isExecutable, onPath } from './judge.js';
 // argv never carries the prompt: it goes on stdin, or (file: true) into a 0600 prompt file the argv points at.
 // done-done parses the answer, validates it against the schema, and asks a tool-less call again, at most ASK_ATTEMPTS calls.
 const ASK_ATTEMPTS = 3;
@@ -135,7 +135,10 @@ export function supported(agent) {
     return Object.hasOwn(ADAPTERS, agent);
 }
 export const claudeBin = (cfg) => cfg.judge.claude_code.bin || onPath('claude');
-const claudeSignedIn = (cfg) => existsSync(cfg.judge.claude_code.config_dir);
+const claudeReady = (cfg) => {
+    const bin = claudeBin(cfg);
+    return !!bin && isExecutable(bin) && existsSync(cfg.judge.claude_code.config_dir);
+};
 const routeOf = (agent) => (agent === 'claude' ? 'claude-code' : `answerer:${agent}`);
 const canJudge = (agent) => agent === 'claude' || ANSWERER_JUDGES.includes(agent);
 export const JUDGES = AGENTS.filter(canJudge);
@@ -148,11 +151,11 @@ export function selectJudge(cfg, found) {
     const route = cfg.judge.route;
     if (route === 'auto') {
         // The first installed agent that can judge and is not the author, at its cheap model; else the author's agent.
-        const installed = AGENTS.filter((a) => canJudge(a) && (a === 'claude' ? claudeBin(cfg) : onPath(a)));
-        const other = installed.find((a) => a !== author.agent && (a !== 'claude' || claudeSignedIn(cfg)));
+        const ready = AGENTS.filter((a) => canJudge(a) && (a === 'claude' ? claudeReady(cfg) : onPath(a)));
+        const other = ready.find((a) => a !== author.agent);
         if (other)
             return pick(other, CHEAP_MODELS[other], 'auto');
-        if (installed.includes(author.agent))
+        if (ready.includes(author.agent))
             return pick(author.agent, CHEAP_MODELS[author.agent], 'auto');
         throw new UsageError(`judge: no installed agent can judge (judge.route auto looks for ${JUDGES.join(', ')})`, 'Install one of them, or set judge.route in ~/.done-done/config.yaml');
     }

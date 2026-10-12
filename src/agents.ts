@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { stripVTControlCharacters } from 'node:util';
 import { AGENTS, ANSWERER_JUDGES, CHEAP_MODELS, type Config, UsageError } from './config.js';
-import { onPath } from './judge.js';
+import { isExecutable, onPath } from './judge.js';
 
 // How done-done starts a coding agent for one step: a fresh, single-shot session that
 // answers one JSON-schema question. The prompt goes on stdin or in a 0600 prompt file, never in
@@ -156,7 +156,10 @@ export function supported(agent: string) {
 export type JudgeChoice = { route: string; agent: string; model: string; independence: 'agent' | 'model' | 'session-only'; from: 'config' | 'auto'; author: { agent: string; model: string } };
 
 export const claudeBin = (cfg: Config) => cfg.judge.claude_code.bin || onPath('claude');
-const claudeSignedIn = (cfg: Config) => existsSync(cfg.judge.claude_code.config_dir);
+const claudeReady = (cfg: Config) => {
+  const bin = claudeBin(cfg);
+  return !!bin && isExecutable(bin) && existsSync(cfg.judge.claude_code.config_dir);
+};
 const routeOf = (agent: string) => (agent === 'claude' ? 'claude-code' : `answerer:${agent}`);
 const canJudge = (agent: string) => agent === 'claude' || ANSWERER_JUDGES.includes(agent);
 export const JUDGES = AGENTS.filter(canJudge);
@@ -170,10 +173,10 @@ export function selectJudge(cfg: Config, found: { agent: string; model: string; 
   const route = cfg.judge.route;
   if (route === 'auto') {
     // The first installed agent that can judge and is not the author, at its cheap model; else the author's agent.
-    const installed = AGENTS.filter((a) => canJudge(a) && (a === 'claude' ? claudeBin(cfg) : onPath(a)));
-    const other = installed.find((a) => a !== author.agent && (a !== 'claude' || claudeSignedIn(cfg)));
+    const ready = AGENTS.filter((a) => canJudge(a) && (a === 'claude' ? claudeReady(cfg) : onPath(a)));
+    const other = ready.find((a) => a !== author.agent);
     if (other) return pick(other, CHEAP_MODELS[other], 'auto');
-    if (installed.includes(author.agent)) return pick(author.agent, CHEAP_MODELS[author.agent], 'auto');
+    if (ready.includes(author.agent)) return pick(author.agent, CHEAP_MODELS[author.agent], 'auto');
     throw new UsageError(`judge: no installed agent can judge (judge.route auto looks for ${JUDGES.join(', ')})`, 'Install one of them, or set judge.route in ~/.done-done/config.yaml');
   }
   const agent = route === 'claude-code' ? 'claude' : route.slice('answerer:'.length);

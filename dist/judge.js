@@ -29,7 +29,7 @@ const QUESTION = {
     personReason: true,
     images: ['capture'],
 };
-function isExecutable(path) {
+export function isExecutable(path) {
     try {
         accessSync(path, constants.X_OK);
         return statSync(path).isFile();

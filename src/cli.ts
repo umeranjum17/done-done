@@ -764,8 +764,10 @@ function codexSettings(repo: string): { file: string; text?: string } {
 // The opencode session plugin `init --agent opencode` adds: a project-scope file in
 // .opencode/plugins/ (auto-loaded; the home config is never touched) whose chat.message
 // hook runs the session command below on the first message of each session and appends
-// the bare `done-done` state to the message parts. Without done-done on PATH it appends
-// nothing and never throws, so it never breaks a session.
+// the bare `done-done` state to the message parts. The appended part carries the prt_ id
+// plus the session and message ids from the hook input, because opencode validates every
+// part before save and drops the whole first message when one is invalid. Without
+// done-done on PATH it appends nothing and never throws, so it never breaks a session.
 function opencodePlugin(repo: string): { file: string; text?: string } {
   const file = join(repo, '.opencode', 'plugins', 'done-done.js');
   const text = `// Written by \`done-done init --agent opencode\`: shows this repo's bare \`done-done\`
@@ -774,6 +776,7 @@ function opencodePlugin(repo: string): { file: string; text?: string } {
 // Without done-done on PATH it appends nothing and never throws, so it never breaks
 // a session. Other files in .opencode/plugins/ are untouched; delete this file to opt out.
 import { execFile } from "node:child_process";
+import { randomUUID } from "node:crypto";
 
 const COMMAND = "${CLAUDE_HOOK}";
 
@@ -788,7 +791,7 @@ export const DoneDonePlugin = async ({ directory }) => {
       if (seen.has(input.sessionID)) return;
       seen.add(input.sessionID);
       const state = await run(directory);
-      if (state) output.parts.push({ type: "text", text: state });
+      if (state) output.parts.push({ id: \`prt_\${randomUUID()}\`, messageID: input.messageID, sessionID: input.sessionID, type: "text", text: state });
     },
   };
 };
@@ -866,7 +869,6 @@ function cmdInit(argv: string[]): number {
   }
   const root = shown(repo, cfg.evidence.root);
   const check = 'done-done check --outcome "<what you proved>" <files it recorded>';
-  emit({
   emit({
     command: 'init',
     result: 'pass',

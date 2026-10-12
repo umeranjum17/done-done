@@ -33,7 +33,7 @@ const AGENTS = ['claude', 'codex', 'opencode'];
 const DOCTOR_TEXT = `doctor is read-only and exits 0 when every required item is ok, 2 otherwise.
   required: git (inside a repository), config (a valid .done-done.yaml), evidence_root (writable).
   optional: verify_skill (.agents/skills/verify-<app>/), agent (claude, codex or opencode on PATH),
-  judge (a claude binary, a sign-in folder and the judge kit; the model is never called), ffprobe (video evidence only).
+  judge (an executable claude binary, a sign-in folder and the judge kit; the model is never called), ffprobe (video evidence only).
   doctor lists every check; --full changes nothing. Missing optionals never fail the run.`;
 
 // One table drives `--help` and every `<command> --help`: each command's usage lines and the flags it takes.

@@ -50,7 +50,7 @@ done-done init --agent opencode
 done-done doctor
 ```
 
-`doctor` answers "is this repo worth driving" and changes nothing. It checks seven items, each reported `ok` or `missing` with the exact fix command: `git` (inside a repository), `config` (a valid `.done-done.yaml`), `evidence_root` (writable), `verify_skill` (`.agents/skills/verify-<app>/SKILL.md`), `agent` (`claude`, `codex` or `opencode` on PATH; the first one wins), `judge` (a `claude` binary, a sign-in folder and the judge kit are present, and login is checked only when a capture is judged; the model is never called) and `ffprobe` (video evidence only). Only the first three are required: `doctor` exits 0 when they are all ok and 2 otherwise, so missing optionals never fail the run. In a fresh repo with nothing set up, `doctor` names each missing piece, starting with `done-done init`.
+`doctor` answers "is this repo worth driving" and changes nothing. It checks seven items, each reported `ok` or `missing` with the exact fix command: `git` (inside a repository), `config` (a valid `.done-done.yaml`), `evidence_root` (writable), `verify_skill` (`.agents/skills/verify-<app>/SKILL.md`), `agent` (`claude`, `codex` or `opencode` on PATH; the first one wins), `judge` (an executable `claude` binary, a sign-in folder and the judge kit are present, and login is checked only when a capture is judged; the model is never called) and `ffprobe` (video evidence only). Only the first three are required: `doctor` exits 0 when they are all ok and 2 otherwise, so missing optionals never fail the run. In a fresh repo with nothing set up, `doctor` names each missing piece, starting with `done-done init`.
 
 ### Run a journey
 

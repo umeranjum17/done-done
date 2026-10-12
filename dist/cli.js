@@ -802,8 +802,9 @@ function inputsOf(repo, cfg, journey) {
 }
 function saveRun(dir, run) {
     run.updated = now();
-    writeFileSync(join(dir, 'run.json.tmp'), `${JSON.stringify(run, null, 2)}\n`);
-    renameSync(join(dir, 'run.json.tmp'), join(dir, 'run.json'));
+    const tmp = join(dir, `run.json.${process.pid}.tmp`);
+    writeFileSync(tmp, `${JSON.stringify(run, null, 2)}\n`);
+    renameSync(tmp, join(dir, 'run.json'));
 }
 const loadRun = (dir) => JSON.parse(readFileSync(join(dir, 'run.json'), 'utf8'));
 const logEvent = (dir, e) => appendFileSync(join(dir, 'events.jsonl'), `${JSON.stringify({ at: now(), ...e })}\n`);
@@ -1104,7 +1105,7 @@ async function cmdRerun(argv) {
         }
     logEvent(dir, { status: 'pending', rerun_of: srcId, reused: steps.filter((s) => s.status === 'completed').map((s) => s.name) });
     const fd = openSync(join(dir, 'logs', 'runner.log'), 'a');
-    const child = spawn(process.execPath, [CLI_PATH, '__runner', dir], { cwd: repo, detached: true, stdio: ['ignore', fd, fd] });
+    const child = spawn(process.execPath, [CLI_PATH, '__runner', dir], { cwd: src.repo, detached: true, stdio: ['ignore', fd, fd] });
     child.unref();
     closeSync(fd);
     while (['pending', 'running'].includes(loadRun(dir).status) && alive(child.pid))

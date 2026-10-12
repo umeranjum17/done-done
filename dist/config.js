@@ -36,6 +36,11 @@ export const DEFAULT_JUDGE_MODEL = 'claude-haiku-5-5';
 // Flagship models must never become a default again; the cheap-default test guards this.
 export const FLAGSHIP_MODEL_PATTERN = /opus|sonnet/i;
 export const home = () => process.env.DONE_DONE_HOME || join(homedir(), '.done-done');
+// A duration such as 90s or 30m, in milliseconds; null when the text is not one.
+export const parseDuration = (text) => {
+    const m = /^(\d+)(s|m)$/.exec(text);
+    return m ? Number(m[1]) * (m[2] === 'm' ? 60_000 : 1000) : null;
+};
 function flatten(doc, file) {
     const out = new Map();
     if (doc == null)

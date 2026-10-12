@@ -174,11 +174,11 @@ done-done receipt --verify <head>         # read-only: check a recorded receipt
 ### Verify a change in one run
 
 ```sh
-done-done verify [<journey>] --outcome "<what a user can now do>"   # --no-wait, --wait 90s, or --foreground (CI)
+done-done verify [<journey>] --outcome "<what a user can now do>"   # --no-wait, --wait (the default), or --foreground (CI)
 done-done status [--run <run-id>]                                   # the newest run by default
 ```
 
-`verify` writes `$DONE_DONE_HOME/runs/<app>/<run-id>/run.json` (schema 2), then starts a detached runner that drives the journey, checks the files it wrote and records a receipt (steps `resolve`, `drive`, `check`, `receipt`, `report`). The runner goes on when the command or shell that started it ends. It writes its pid and a heartbeat to `run.json`, each step to `events.jsonl`, and step output to `logs/`. `verify` waits up to 8 minutes, then prints the run like `status`. `status` only reads the store; a run whose runner is gone shows as `failed` at the step it was on.
+`verify` writes `$DONE_DONE_HOME/runs/<app>/<run-id>/run.json` (schema 2), then starts a detached runner that drives the journey, checks the files it wrote and records a receipt (steps `resolve`, `drive`, `check`, `receipt`, `report`). The runner goes on when the command or shell that started it ends. It writes its pid, the journey's process group and a heartbeat to `run.json`, each step to `events.jsonl`, and step output to `logs/`. `run.json` keeps the run's inputs and step state; the head, tree, dirty flag and evidence come from the evidence run record it points to. `verify` waits until the run ends (`--wait`, the default), then prints it like `status`; `--no-wait` returns at once. A journey still running after `journeys.<name>.timeout` (default `30m`, e.g. `90s`) is killed with everything it started, and the run ends inconclusive (exit 3) with `journey timed out after <timeout>`. `status` only reads the store, except that a run whose runner is gone is shown as `failed` at the step it was on and its journey's process group is killed.
 
 ### Output
 
@@ -239,6 +239,7 @@ judge:                                # used only when the judge is on
 | `app` | repo directory name |
 | `skill` | `.agents/skills/verify-<app>` |
 | `journeys.<name>.command` | none |
+| `journeys.<name>.timeout` | `30m`; a duration such as `90s` or `30m`, used by `verify` |
 | `evidence.root` | `<local_root>/<app>`, outside the repo. A relative path is under the repo; an absolute path is used as-is |
 | `evidence.allow_dirty` | `false` |
 | `evidence.ignore_paths` | `[]` |

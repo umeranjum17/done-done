@@ -13,7 +13,7 @@ export class UsageError extends Error {
 export type Config = {
   app: string;
   skill: string;
-  journeys: Record<string, { command: string }>;
+  journeys: Record<string, { command: string; timeout?: string }>;
   evidence: { local_root: string; root: string; allow_dirty: boolean; ignore_paths: string[] };
   checks: { not_proven: 'inconclusive' | 'allow'; fix_title: string };
   judge: { enabled: boolean; model: string; bin: string; config_dir: string };
@@ -48,6 +48,12 @@ export const DEFAULT_JUDGE_MODEL = 'claude-haiku-5-5';
 export const FLAGSHIP_MODEL_PATTERN = /opus|sonnet/i;
 
 export const home = () => process.env.DONE_DONE_HOME || join(homedir(), '.done-done');
+
+// A duration such as 90s or 30m, in milliseconds; null when the text is not one.
+export const parseDuration = (text: string): number | null => {
+  const m = /^(\d+)(s|m)$/.exec(text);
+  return m ? Number(m[1]) * (m[2] === 'm' ? 60_000 : 1000) : null;
+};
 
 function flatten(doc: unknown, file: string): Map<string, unknown> {
   const out = new Map<string, unknown>();

@@ -1315,7 +1315,7 @@ function slowRepo() {
     for (let i = 0; i < 200; i++) {
       const id = existsSync(runs) && readdirSync(runs).sort().pop();
       const run = id && existsSync(join(runs, id, 'run.json')) && JSON.parse(readFileSync(join(runs, id, 'run.json'), 'utf8'));
-      if (run?.runner && run.steps.find((s) => s.name === step).status === 'running') return run;
+      if (run?.runner?.journey_pgid && run.steps.find((s) => s.name === step).status === 'running') return run;
       await new Promise((r) => setTimeout(r, 50));
     }
     assert.fail(`no run reached step ${step}`);
@@ -1353,7 +1353,20 @@ test('verify goes on in a detached runner after the calling shell is killed, and
   assert.ok(existsSync(join(runs, run.run_id, 'logs', 'check.log')));
 });
 
-test('a runner killed mid-step shows as failed at that step', async () => {
+// Resolves true once the process group is gone, false if it outlives the poll.
+async function groupGone(pgid) {
+  for (let i = 0; i < 100; i++) {
+    try {
+      process.kill(-pgid, 0);
+    } catch {
+      return true;
+    }
+    await new Promise((res) => setTimeout(res, 50));
+  }
+  return false;
+}
+
+test('a runner killed mid-step shows as failed at that step, and status stops the journey it left', async () => {
   const { dd, runs, runningAt } = slowRepo();
   const started = dd('verify', 'slow', '--outcome', 'home and settings render', '--no-wait');
   assert.equal(started.code, 4, started.out);
@@ -1362,14 +1375,54 @@ test('a runner killed mid-step shows as failed at that step', async () => {
   process.kill(run.runner.pid, 'SIGKILL');
   let r;
   for (let i = 0; i < 100 && (r = dd('status')).code === 4; i++) await new Promise((res) => setTimeout(res, 50));
-  spawnSync('kill', ['-KILL', `-${run.runner.pid}`]); // the journey the killed runner left behind
   assert.equal(r.code, 1, r.out);
+  assert.ok(await groupGone(run.runner.journey_pgid), 'status killed the journey the killed runner left behind');
   const s = toon(r);
   assert.equal(s.status, 'failed');
   assert.equal(s.steps[1].status, 'failed');
   assert.match(s.reason, new RegExp(`^the runner died at step drive \\(pid ${run.runner.pid},`));
   assert.equal(JSON.parse(readFileSync(join(runs, run.run_id, 'run.json'), 'utf8')).status, 'running', 'status only reads the store');
   assert.match(s.help[1], /^Fix the cause, commit, then start a new run: done-done verify slow --outcome 'home and settings render'$/);
+});
+
+test('a journey past its timeout is killed and the run ends inconclusive', async () => {
+  const { repo, dd, env } = setup();
+  appendFileSync(join(repo, '.done-done.yaml'), '  hang:\n    command: node -e "setInterval(() => {}, 1000)"\n    timeout: 2s\n');
+  const r = dd('verify', 'hang', '--outcome', 'the app starts', '--foreground');
+  assert.equal(r.code, 3, r.out);
+  const s = toon(r);
+  assert.equal(s.result, 'inconclusive');
+  assert.equal(s.reason, 'drive: journey timed out after 2s');
+  assert.deepEqual(s.steps.map((x) => x.status), ['completed', 'failed', 'skipped', 'skipped', 'completed']);
+  const pgid = JSON.parse(readFileSync(join(env.DONE_DONE_HOME, 'runs', 'notes', s.run_id, 'run.json'), 'utf8')).runner.journey_pgid;
+  assert.ok(await groupGone(pgid), 'the timed-out journey is gone');
+});
+
+test('the run store and check log keep every finding, not only the five shown', () => {
+  const t = setup();
+  writeFileSync(
+    join(t.repo, 'dup.mjs'),
+    `import { copyFileSync, mkdirSync } from 'node:fs';\nconst out = '.proof/' + process.argv[2];\nmkdirSync(out, { recursive: true });\nfor (let i = 0; i < 7; i++) copyFileSync(${JSON.stringify(join(t.dir, 'screen.png'))}, out + '/copy' + i + '.png');\n`,
+  );
+  appendFileSync(join(t.repo, '.done-done.yaml'), '  dup:\n    command: node dup.mjs ${RUN_ID}\n');
+  t.sh('add', '-A');
+  t.sh('commit', '-qm', 'dup journey');
+  const r = t.dd('verify', 'dup', '--outcome', 'the copies render', '--foreground');
+  assert.equal(r.code, 1, r.out);
+  const s = toon(r);
+  const runDir = join(t.env.DONE_DONE_HOME, 'runs', 'notes', s.run_id);
+  const check = JSON.parse(readFileSync(join(runDir, 'run.json'), 'utf8')).steps.find((x) => x.name === 'check');
+  assert.equal(check.findings.length, 6, 'run.json keeps all six findings');
+  const log = decode(readFileSync(join(runDir, 'logs', 'check.log'), 'utf8'));
+  assert.equal(log.findings.length, 6, 'check.log keeps all six findings');
+  assert.equal(log.findings_omitted, undefined);
+});
+
+test('verify waits until the run ends by default', () => {
+  const { dd } = setup();
+  const r = dd('verify', 'shots', '--outcome', 'home and settings render');
+  assert.equal(r.code, 0, r.out);
+  assert.equal(toon(r).result, 'pass');
 });
 
 test('verify --foreground fails at a broken journey and skips the rest; usage errors name the next step', () => {
@@ -1380,7 +1433,7 @@ test('verify --foreground fails at a broken journey and skips the rest; usage er
   assert.equal(none.code, 2, none.out);
   assert.equal(toon(none).help[0], 'Run: done-done verify <shots|slow|broken> --outcome "<what a user can now do>"');
   assert.equal(dd('verify', 'shots', '--outcome', 'x', '--no-wait', '--foreground').code, 2);
-  assert.equal(dd('verify', 'shots', '--outcome', 'x', '--wait', 'soon').code, 2);
+  assert.equal(dd('verify', 'shots', '--outcome', 'x', '--wait', '90s').code, 2, 'a wait duration is no longer accepted');
   const r = dd('verify', 'broken', '--outcome', 'the app starts', '--foreground');
   assert.equal(r.code, 1, r.out);
   const s = toon(r);

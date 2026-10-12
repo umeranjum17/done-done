@@ -1779,8 +1779,22 @@ test('doctor in a bare repo fails with the init fix; a malformed config names th
   assert.match(toon(outside).checks[0].fix, /inside a git repository/);
 });
 
+test('doctor reports the judge missing when claude has no sign-in or judge.bin is relative', () => {
+  const { repo, env, dd } = setup();
+  const noSignIn = toon(doctorIn(repo, pathEnv(env, ['claude']), 'doctor'));
+  assert.equal(noSignIn.checks[5].status, 'missing', 'a claude binary alone is not a working judge');
+  assert.match(noSignIn.checks[5].detail, /no Claude sign-in/);
+  assert.match(noSignIn.checks[5].fix, /auth login/);
+  mkdirSync(env.DONE_DONE_HOME, { recursive: true });
+  writeFileSync(join(env.DONE_DONE_HOME, 'config.yaml'), 'judge:\n  bin: claude\n');
+  const relative = toon(dd('doctor'));
+  assert.equal(relative.checks[5].status, 'missing');
+  assert.match(relative.checks[5].detail, /must be absolute paths \(got claude/);
+});
+
 test('doctor finds agent, judge and ffprobe binaries from PATH; missing optionals never fail it', () => {
   const { repo, env } = setup();
+  mkdirSync(join(env.DONE_DONE_HOME, 'claude'), { recursive: true });
   const full = doctorIn(repo, pathEnv(env, ['claude', 'codex', 'opencode', 'ffprobe']), 'doctor');
   assert.equal(full.code, 0, full.out);
   const f = toon(full);

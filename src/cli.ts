@@ -9,7 +9,7 @@ import { parseArgs } from 'node:util';
 import { encode } from '@toon-format/toon';
 import { Document, parseDocument } from 'yaml';
 import { type Config, home, loadConfig, parseDuration, UsageError } from './config.js';
-import { type Capture, judge, type Judged } from './judge.js';
+import { type Capture, judge, type Judged, onPath } from './judge.js';
 import { checkMedia } from './media.js';
 
 const PASS = 0, FAIL = 1, USAGE = 2, INCONCLUSIVE = 3, WAITING = 4;
@@ -1376,18 +1376,6 @@ function errorHelp(msg: string, cmd?: string): string[] {
   return [`Run \`done-done ${cmd} --help\` for its usage and flags`];
 }
 
-// The first executable `name` on PATH, or '' when there is none. Never runs it.
-function onPath(name: string): string {
-  for (const dir of (process.env.PATH ?? '').split(delimiter)) {
-    const path = join(dir, name);
-    try {
-      accessSync(path, constants.X_OK);
-      if (isAbsolute(path)) return path;
-    } catch {}
-  }
-  return '';
-}
-
 // Whether `p` could hold evidence without writing anything: the nearest existing
 // ancestor must be a writable directory. Read-only, so doctor creates nothing.
 function writableDir(p: string): boolean {
@@ -1466,11 +1454,18 @@ function cmdDoctor(argv: string[]): number {
       : { check: 'agent', status: 'missing', detail: 'no claude, codex or opencode binary on PATH', fix: 'Install an agent CLI (claude, codex or opencode); without one, init stays scaffold-only' },
   );
   const bin = cfg?.judge.bin || onPath('claude');
-  checks.push(
-    bin && isAbsolute(bin)
-      ? { check: 'judge', status: 'ok', detail: `claude binary at ${bin}; the model is never called`, fix: '' }
-      : { check: 'judge', status: 'missing', detail: 'no claude binary on PATH and no judge.bin set', fix: 'Install Claude Code, or set judge.bin to its absolute path in ~/.done-done/config.yaml' },
-  );
+  if (!cfg) {
+    checks.push({ check: 'judge', status: 'missing', detail: 'unknown without a valid config', fix: 'Run `done-done init` to write a minimal .done-done.yaml' });
+  } else if (!bin) {
+    checks.push({ check: 'judge', status: 'missing', detail: 'no claude binary on PATH and no judge.bin set', fix: 'Install Claude Code, or set judge.bin to its absolute path in ~/.done-done/config.yaml' });
+  } else if (!isAbsolute(bin) || !isAbsolute(cfg.judge.config_dir)) {
+    checks.push({ check: 'judge', status: 'missing', detail: `judge.bin and judge.config_dir must be absolute paths (got ${bin}, ${cfg.judge.config_dir})`, fix: 'Fix judge.bin or judge.config_dir in ~/.done-done/config.yaml' });
+  } else if (!existsSync(cfg.judge.config_dir)) {
+    const dir = cfg.judge.config_dir;
+    checks.push({ check: 'judge', status: 'missing', detail: `no Claude sign-in at ${dir}`, fix: `Sign in once with your Claude plan: mkdir -p ${dir} && CLAUDE_CONFIG_DIR=${dir} ${bin} auth login` });
+  } else {
+    checks.push({ check: 'judge', status: 'ok', detail: `claude binary at ${bin} with a Claude sign-in; the model is never called`, fix: '' });
+  }
   const ffprobe = onPath('ffprobe');
   checks.push(
     ffprobe

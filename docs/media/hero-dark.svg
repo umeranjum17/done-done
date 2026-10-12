@@ -1,86 +1,168 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="505" height="382" viewBox="0 0 505 382" role="img" aria-label="done-done in a demo notes app">
+<svg xmlns="http://www.w3.org/2000/svg" width="505" height="742" viewBox="0 0 505 742" role="img" aria-label="done-done in a demo notes app">
 <title>done-done in a demo notes app</title>
 <style>
 text{font:16px ui-monospace,SFMono-Regular,'SF Mono',Menlo,Consolas,'Liberation Mono',monospace;fill:#e6edf3;white-space:pre}
 .d{fill:#8b949e}.c{fill:#d2a8ff}.p{fill:#3fb950}.f{fill:#ff7b72}.b{font-weight:600}
 .t{font-size:14px;font-weight:600;fill:#8b949e}
-@keyframes l0{0%,26.69%{opacity:1}26.73%,100%{opacity:0}}.l0{animation:l0 27.73s linear infinite}
-@keyframes l1{0%,26.69%{opacity:1}26.73%,100%{opacity:0}}.l1{animation:l1 27.73s linear infinite}
-@keyframes l2{0%,26.69%{opacity:1}26.73%,100%{opacity:0}}.l2{animation:l2 27.73s linear infinite}
-@keyframes l3{0%,26.69%{opacity:1}26.73%,100%{opacity:0}}.l3{animation:l3 27.73s linear infinite}
-@keyframes l4{0%,26.69%{opacity:1}26.73%,100%{opacity:0}}.l4{animation:l4 27.73s linear infinite}
-@keyframes l5{0%,26.69%{opacity:1}26.73%,100%{opacity:0}}.l5{animation:l5 27.73s linear infinite}
-@keyframes l6{0%,26.69%{opacity:1}26.73%,100%{opacity:0}}.l6{animation:l6 27.73s linear infinite}
-@keyframes l7{0%,26.69%{opacity:1}26.73%,100%{opacity:0}}.l7{animation:l7 27.73s linear infinite}
-@keyframes l8{0%,26.69%{opacity:1}26.73%,100%{opacity:0}}.l8{animation:l8 27.73s linear infinite}
-@keyframes l9{0%,26.69%{opacity:1}26.73%,100%{opacity:0}}.l9{animation:l9 27.73s linear infinite}
-@keyframes l10{0%,29.58%{opacity:0}29.61%,65.27%{opacity:1}65.30%,100%{opacity:0}}.l10{opacity:0;animation:l10 27.73s linear infinite}
-@keyframes k10{0%,29.58%{transform:translateX(0)}32.50%,100%{transform:translateX(172.8px)}}.k10{animation:k10 27.73s steps(18,end) infinite}
-@keyframes h10{0%,34.12%{opacity:1}34.16%,100%{opacity:0}}.h10{animation:h10 27.73s linear infinite}
-@keyframes l11{0%,34.12%{opacity:0}34.16%,65.27%{opacity:1}65.30%,100%{opacity:0}}.l11{opacity:0;animation:l11 27.73s linear infinite}
-@keyframes l12{0%,34.37%{opacity:0}34.41%,65.27%{opacity:1}65.30%,100%{opacity:0}}.l12{opacity:0;animation:l12 27.73s linear infinite}
-@keyframes l13{0%,34.63%{opacity:0}34.66%,65.27%{opacity:1}65.30%,100%{opacity:0}}.l13{opacity:0;animation:l13 27.73s linear infinite}
-@keyframes l14{0%,34.88%{opacity:0}34.91%,65.27%{opacity:1}65.30%,100%{opacity:0}}.l14{opacity:0;animation:l14 27.73s linear infinite}
-@keyframes l15{0%,35.13%{opacity:0}35.17%,65.27%{opacity:1}65.30%,100%{opacity:0}}.l15{opacity:0;animation:l15 27.73s linear infinite}
-@keyframes l16{0%,35.38%{opacity:0}35.42%,65.27%{opacity:1}65.30%,100%{opacity:0}}.l16{opacity:0;animation:l16 27.73s linear infinite}
-@keyframes l17{0%,35.64%{opacity:0}35.67%,65.27%{opacity:1}65.30%,100%{opacity:0}}.l17{opacity:0;animation:l17 27.73s linear infinite}
-@keyframes l18{0%,35.89%{opacity:0}35.92%,65.27%{opacity:1}65.30%,100%{opacity:0}}.l18{opacity:0;animation:l18 27.73s linear infinite}
-@keyframes l19{0%,36.14%{opacity:0}36.18%,65.27%{opacity:1}65.30%,100%{opacity:0}}.l19{opacity:0;animation:l19 27.73s linear infinite}
-@keyframes l20{0%,43.97%{opacity:0}44.00%,65.27%{opacity:1}65.30%,100%{opacity:0}}.l20{opacity:0;animation:l20 27.73s linear infinite}
-@keyframes k20{0%,43.97%{transform:translateX(0)}49.32%,100%{transform:translateX(316.8px)}}.k20{animation:k20 27.73s steps(33,end) infinite}
-@keyframes h20{0%,50.95%{opacity:1}50.98%,100%{opacity:0}}.h20{animation:h20 27.73s linear infinite}
-@keyframes l21{0%,50.95%{opacity:0}50.98%,65.27%{opacity:1}65.30%,100%{opacity:0}}.l21{opacity:0;animation:l21 27.73s linear infinite}
-@keyframes l22{0%,56.97%{opacity:0}57.01%,65.27%{opacity:1}65.30%,100%{opacity:0}}.l22{opacity:0;animation:l22 27.73s linear infinite}
-@keyframes l23{0%,68.15%{opacity:0}68.19%,98.92%{opacity:1}98.95%,100%{opacity:0}}.l23{opacity:0;animation:l23 27.73s linear infinite}
-@keyframes k23{0%,68.15%{transform:translateX(0)}73.18%,100%{transform:translateX(297.6px)}}.k23{animation:k23 27.73s steps(31,end) infinite}
-@keyframes h23{0%,74.81%{opacity:1}74.84%,100%{opacity:0}}.h23{animation:h23 27.73s linear infinite}
-@keyframes l24{0%,76.61%{opacity:0}76.65%,98.92%{opacity:1}98.95%,100%{opacity:0}}.l24{opacity:0;animation:l24 27.73s linear infinite}
-@keyframes k24{0%,76.61%{transform:translateX(0)}81.97%,100%{transform:translateX(316.8px)}}.k24{animation:k24 27.73s steps(33,end) infinite}
-@keyframes h24{0%,83.59%{opacity:1}83.62%,100%{opacity:0}}.h24{animation:h24 27.73s linear infinite}
-@keyframes l25{0%,83.59%{opacity:0}83.62%,98.92%{opacity:1}98.95%,100%{opacity:0}}.l25{opacity:0;animation:l25 27.73s linear infinite}
-@keyframes l26{0%,83.84%{opacity:0}83.88%,98.92%{opacity:1}98.95%,100%{opacity:0}}.l26{opacity:0;animation:l26 27.73s linear infinite}
-@keyframes l27{0%,84.09%{opacity:0}84.13%,98.92%{opacity:1}98.95%,100%{opacity:0}}.l27{opacity:0;animation:l27 27.73s linear infinite}
-@keyframes l28{0%,84.35%{opacity:0}84.38%,98.92%{opacity:1}98.95%,100%{opacity:0}}.l28{opacity:0;animation:l28 27.73s linear infinite}
-@keyframes l29{0%,84.60%{opacity:0}84.63%,98.92%{opacity:1}98.95%,100%{opacity:0}}.l29{opacity:0;animation:l29 27.73s linear infinite}
-@keyframes l30{0%,90.62%{opacity:0}90.66%,98.92%{opacity:1}98.95%,100%{opacity:0}}.l30{opacity:0;animation:l30 27.73s linear infinite}
+@keyframes l0{0%,25.23%{opacity:1}25.26%,100%{opacity:0}}.l0{animation:l0 29.34s linear infinite}
+@keyframes l1{0%,25.23%{opacity:1}25.26%,100%{opacity:0}}.l1{animation:l1 29.34s linear infinite}
+@keyframes l2{0%,25.23%{opacity:1}25.26%,100%{opacity:0}}.l2{animation:l2 29.34s linear infinite}
+@keyframes l3{0%,25.23%{opacity:1}25.26%,100%{opacity:0}}.l3{animation:l3 29.34s linear infinite}
+@keyframes l4{0%,25.23%{opacity:1}25.26%,100%{opacity:0}}.l4{animation:l4 29.34s linear infinite}
+@keyframes l5{0%,25.23%{opacity:1}25.26%,100%{opacity:0}}.l5{animation:l5 29.34s linear infinite}
+@keyframes l6{0%,25.23%{opacity:1}25.26%,100%{opacity:0}}.l6{animation:l6 29.34s linear infinite}
+@keyframes l7{0%,25.23%{opacity:1}25.26%,100%{opacity:0}}.l7{animation:l7 29.34s linear infinite}
+@keyframes l8{0%,25.23%{opacity:1}25.26%,100%{opacity:0}}.l8{animation:l8 29.34s linear infinite}
+@keyframes l9{0%,25.23%{opacity:1}25.26%,100%{opacity:0}}.l9{animation:l9 29.34s linear infinite}
+@keyframes l10{0%,25.23%{opacity:1}25.26%,100%{opacity:0}}.l10{animation:l10 29.34s linear infinite}
+@keyframes l11{0%,25.23%{opacity:1}25.26%,100%{opacity:0}}.l11{animation:l11 29.34s linear infinite}
+@keyframes l12{0%,25.23%{opacity:1}25.26%,100%{opacity:0}}.l12{animation:l12 29.34s linear infinite}
+@keyframes l13{0%,25.23%{opacity:1}25.26%,100%{opacity:0}}.l13{animation:l13 29.34s linear infinite}
+@keyframes l14{0%,25.23%{opacity:1}25.26%,100%{opacity:0}}.l14{animation:l14 29.34s linear infinite}
+@keyframes l15{0%,25.23%{opacity:1}25.26%,100%{opacity:0}}.l15{animation:l15 29.34s linear infinite}
+@keyframes l16{0%,25.23%{opacity:1}25.26%,100%{opacity:0}}.l16{animation:l16 29.34s linear infinite}
+@keyframes l17{0%,25.23%{opacity:1}25.26%,100%{opacity:0}}.l17{animation:l17 29.34s linear infinite}
+@keyframes l18{0%,25.23%{opacity:1}25.26%,100%{opacity:0}}.l18{animation:l18 29.34s linear infinite}
+@keyframes l19{0%,25.23%{opacity:1}25.26%,100%{opacity:0}}.l19{animation:l19 29.34s linear infinite}
+@keyframes l20{0%,25.23%{opacity:1}25.26%,100%{opacity:0}}.l20{animation:l20 29.34s linear infinite}
+@keyframes l21{0%,25.23%{opacity:1}25.26%,100%{opacity:0}}.l21{animation:l21 29.34s linear infinite}
+@keyframes l22{0%,25.23%{opacity:1}25.26%,100%{opacity:0}}.l22{animation:l22 29.34s linear infinite}
+@keyframes l23{0%,25.23%{opacity:1}25.26%,100%{opacity:0}}.l23{animation:l23 29.34s linear infinite}
+@keyframes l24{0%,25.23%{opacity:1}25.26%,100%{opacity:0}}.l24{animation:l24 29.34s linear infinite}
+@keyframes l25{0%,25.23%{opacity:1}25.26%,100%{opacity:0}}.l25{animation:l25 29.34s linear infinite}
+@keyframes l26{0%,25.23%{opacity:1}25.26%,100%{opacity:0}}.l26{animation:l26 29.34s linear infinite}
+@keyframes l27{0%,25.23%{opacity:1}25.26%,100%{opacity:0}}.l27{animation:l27 29.34s linear infinite}
+@keyframes l28{0%,27.95%{opacity:0}27.99%,64.79%{opacity:1}64.82%,100%{opacity:0}}.l28{opacity:0;animation:l28 29.34s linear infinite}
+@keyframes k28{0%,27.95%{transform:translateX(0)}30.71%,100%{transform:translateX(172.8px)}}.k28{animation:k28 29.34s steps(18,end) infinite}
+@keyframes h28{0%,32.25%{opacity:1}32.28%,100%{opacity:0}}.h28{animation:h28 29.34s linear infinite}
+@keyframes l29{0%,32.25%{opacity:0}32.28%,64.79%{opacity:1}64.82%,100%{opacity:0}}.l29{opacity:0;animation:l29 29.34s linear infinite}
+@keyframes l30{0%,32.49%{opacity:0}32.52%,64.79%{opacity:1}64.82%,100%{opacity:0}}.l30{opacity:0;animation:l30 29.34s linear infinite}
+@keyframes l31{0%,32.73%{opacity:0}32.76%,64.79%{opacity:1}64.82%,100%{opacity:0}}.l31{opacity:0;animation:l31 29.34s linear infinite}
+@keyframes l32{0%,38.42%{opacity:0}38.45%,64.79%{opacity:1}64.82%,100%{opacity:0}}.l32{opacity:0;animation:l32 29.34s linear infinite}
+@keyframes l33{0%,38.66%{opacity:0}38.69%,64.79%{opacity:1}64.82%,100%{opacity:0}}.l33{opacity:0;animation:l33 29.34s linear infinite}
+@keyframes l34{0%,38.90%{opacity:0}38.93%,64.79%{opacity:1}64.82%,100%{opacity:0}}.l34{opacity:0;animation:l34 29.34s linear infinite}
+@keyframes l35{0%,39.13%{opacity:0}39.17%,64.79%{opacity:1}64.82%,100%{opacity:0}}.l35{opacity:0;animation:l35 29.34s linear infinite}
+@keyframes l36{0%,39.37%{opacity:0}39.41%,64.79%{opacity:1}64.82%,100%{opacity:0}}.l36{opacity:0;animation:l36 29.34s linear infinite}
+@keyframes l37{0%,39.61%{opacity:0}39.65%,64.79%{opacity:1}64.82%,100%{opacity:0}}.l37{opacity:0;animation:l37 29.34s linear infinite}
+@keyframes l38{0%,39.85%{opacity:0}39.88%,64.79%{opacity:1}64.82%,100%{opacity:0}}.l38{opacity:0;animation:l38 29.34s linear infinite}
+@keyframes l39{0%,40.09%{opacity:0}40.12%,64.79%{opacity:1}64.82%,100%{opacity:0}}.l39{opacity:0;animation:l39 29.34s linear infinite}
+@keyframes l40{0%,40.33%{opacity:0}40.36%,64.79%{opacity:1}64.82%,100%{opacity:0}}.l40{opacity:0;animation:l40 29.34s linear infinite}
+@keyframes l41{0%,40.57%{opacity:0}40.60%,64.79%{opacity:1}64.82%,100%{opacity:0}}.l41{opacity:0;animation:l41 29.34s linear infinite}
+@keyframes l42{0%,40.80%{opacity:0}40.84%,64.79%{opacity:1}64.82%,100%{opacity:0}}.l42{opacity:0;animation:l42 29.34s linear infinite}
+@keyframes l43{0%,42.75%{opacity:0}42.78%,64.79%{opacity:1}64.82%,100%{opacity:0}}.l43{opacity:0;animation:l43 29.34s linear infinite}
+@keyframes k43{0%,42.75%{transform:translateX(0)}47.81%,100%{transform:translateX(316.8px)}}.k43{animation:k43 29.34s steps(33,end) infinite}
+@keyframes h43{0%,49.34%{opacity:1}49.38%,100%{opacity:0}}.h43{animation:h43 29.34s linear infinite}
+@keyframes l44{0%,49.34%{opacity:0}49.38%,64.79%{opacity:1}64.82%,100%{opacity:0}}.l44{opacity:0;animation:l44 29.34s linear infinite}
+@keyframes l45{0%,49.58%{opacity:0}49.62%,64.79%{opacity:1}64.82%,100%{opacity:0}}.l45{opacity:0;animation:l45 29.34s linear infinite}
+@keyframes l46{0%,55.28%{opacity:0}55.31%,64.79%{opacity:1}64.82%,100%{opacity:0}}.l46{opacity:0;animation:l46 29.34s linear infinite}
+@keyframes l47{0%,55.51%{opacity:0}55.55%,64.79%{opacity:1}64.82%,100%{opacity:0}}.l47{opacity:0;animation:l47 29.34s linear infinite}
+@keyframes l48{0%,55.75%{opacity:0}55.79%,64.79%{opacity:1}64.82%,100%{opacity:0}}.l48{opacity:0;animation:l48 29.34s linear infinite}
+@keyframes l49{0%,55.99%{opacity:0}56.03%,64.79%{opacity:1}64.82%,100%{opacity:0}}.l49{opacity:0;animation:l49 29.34s linear infinite}
+@keyframes l50{0%,56.23%{opacity:0}56.26%,64.79%{opacity:1}64.82%,100%{opacity:0}}.l50{opacity:0;animation:l50 29.34s linear infinite}
+@keyframes l51{0%,56.47%{opacity:0}56.50%,64.79%{opacity:1}64.82%,100%{opacity:0}}.l51{opacity:0;animation:l51 29.34s linear infinite}
+@keyframes l52{0%,56.71%{opacity:0}56.74%,64.79%{opacity:1}64.82%,100%{opacity:0}}.l52{opacity:0;animation:l52 29.34s linear infinite}
+@keyframes l53{0%,56.95%{opacity:0}56.98%,64.79%{opacity:1}64.82%,100%{opacity:0}}.l53{opacity:0;animation:l53 29.34s linear infinite}
+@keyframes l54{0%,67.51%{opacity:0}67.55%,98.98%{opacity:1}99.01%,100%{opacity:0}}.l54{opacity:0;animation:l54 29.34s linear infinite}
+@keyframes k54{0%,67.51%{transform:translateX(0)}72.27%,100%{transform:translateX(297.6px)}}.k54{animation:k54 29.34s steps(31,end) infinite}
+@keyframes h54{0%,73.80%{opacity:1}73.84%,100%{opacity:0}}.h54{animation:h54 29.34s linear infinite}
+@keyframes l55{0%,75.51%{opacity:0}75.54%,98.98%{opacity:1}99.01%,100%{opacity:0}}.l55{opacity:0;animation:l55 29.34s linear infinite}
+@keyframes k55{0%,75.51%{transform:translateX(0)}80.57%,100%{transform:translateX(316.8px)}}.k55{animation:k55 29.34s steps(33,end) infinite}
+@keyframes h55{0%,82.10%{opacity:1}82.14%,100%{opacity:0}}.h55{animation:h55 29.34s linear infinite}
+@keyframes l56{0%,82.10%{opacity:0}82.14%,98.98%{opacity:1}99.01%,100%{opacity:0}}.l56{opacity:0;animation:l56 29.34s linear infinite}
+@keyframes l57{0%,82.34%{opacity:0}82.38%,98.98%{opacity:1}99.01%,100%{opacity:0}}.l57{opacity:0;animation:l57 29.34s linear infinite}
+@keyframes l58{0%,88.03%{opacity:0}88.07%,98.98%{opacity:1}99.01%,100%{opacity:0}}.l58{opacity:0;animation:l58 29.34s linear infinite}
+@keyframes l59{0%,88.27%{opacity:0}88.31%,98.98%{opacity:1}99.01%,100%{opacity:0}}.l59{opacity:0;animation:l59 29.34s linear infinite}
+@keyframes l60{0%,88.51%{opacity:0}88.55%,98.98%{opacity:1}99.01%,100%{opacity:0}}.l60{opacity:0;animation:l60 29.34s linear infinite}
+@keyframes l61{0%,88.75%{opacity:0}88.78%,98.98%{opacity:1}99.01%,100%{opacity:0}}.l61{opacity:0;animation:l61 29.34s linear infinite}
+@keyframes l62{0%,88.99%{opacity:0}89.02%,98.98%{opacity:1}99.01%,100%{opacity:0}}.l62{opacity:0;animation:l62 29.34s linear infinite}
+@keyframes l63{0%,89.23%{opacity:0}89.26%,98.98%{opacity:1}99.01%,100%{opacity:0}}.l63{opacity:0;animation:l63 29.34s linear infinite}
+@keyframes l64{0%,89.47%{opacity:0}89.50%,98.98%{opacity:1}99.01%,100%{opacity:0}}.l64{opacity:0;animation:l64 29.34s linear infinite}
+@keyframes l65{0%,89.71%{opacity:0}89.74%,98.98%{opacity:1}99.01%,100%{opacity:0}}.l65{opacity:0;animation:l65 29.34s linear infinite}
+@keyframes l66{0%,89.94%{opacity:0}89.98%,98.98%{opacity:1}99.01%,100%{opacity:0}}.l66{opacity:0;animation:l66 29.34s linear infinite}
+@keyframes l67{0%,90.18%{opacity:0}90.22%,98.98%{opacity:1}99.01%,100%{opacity:0}}.l67{opacity:0;animation:l67 29.34s linear infinite}
+@keyframes l68{0%,90.42%{opacity:0}90.46%,98.98%{opacity:1}99.01%,100%{opacity:0}}.l68{opacity:0;animation:l68 29.34s linear infinite}
+@keyframes l69{0%,90.66%{opacity:0}90.69%,98.98%{opacity:1}99.01%,100%{opacity:0}}.l69{opacity:0;animation:l69 29.34s linear infinite}
+@keyframes l70{0%,90.90%{opacity:0}90.93%,98.98%{opacity:1}99.01%,100%{opacity:0}}.l70{opacity:0;animation:l70 29.34s linear infinite}
+@keyframes l71{0%,91.14%{opacity:0}91.17%,98.98%{opacity:1}99.01%,100%{opacity:0}}.l71{opacity:0;animation:l71 29.34s linear infinite}
 @keyframes blink{50%{opacity:0}}.cur{animation:blink 1s steps(1) infinite}
 @media (prefers-reduced-motion:reduce){g[class]{animation:none!important}}
 </style>
-<rect x="0.5" y="0.5" width="504" height="381" rx="10" fill="#161b22" stroke="#30363d"/>
+<rect x="0.5" y="0.5" width="504" height="741" rx="10" fill="#161b22" stroke="#30363d"/>
 <path d="M0.5 40V10.5a10 10 0 0 1 10-10h484a10 10 0 0 1 10 10V40z" fill="#21262d" stroke="#30363d"/>
 <circle cx="20" cy="20" r="6" fill="#ff5f57"/><circle cx="40" cy="20" r="6" fill="#febc2e"/><circle cx="60" cy="20" r="6" fill="#28c840"/>
 <text class="t" x="252.5" y="25" text-anchor="middle">done-done in a demo notes app</text>
-<clipPath id="body"><rect x="1" y="41" width="503" height="340"/></clipPath>
+<clipPath id="body"><rect x="1" y="41" width="503" height="700"/></clipPath>
 <g clip-path="url(#body)">
 <g class="l0"><text xml:space="preserve" x="22" y="72" textLength="412.8" lengthAdjust="spacing"><tspan class="c">~/notes $ </tspan><tspan class="b">done-done check --from pr-body.md</tspan></text></g>
-<g class="l1"><text xml:space="preserve" x="22" y="96" textLength="288.0" lengthAdjust="spacing"><tspan class="d">result: </tspan><tspan class="p b">PASS (1 evidence file)</tspan></text></g>
-<g class="l2"><text xml:space="preserve" x="22" y="120" textLength="393.6" lengthAdjust="spacing"><tspan class="c">~/notes $ </tspan><tspan class="b">git commit -qam "Speed up sync"</tspan></text></g>
-<g class="l3"><text xml:space="preserve" x="22" y="144" textLength="412.8" lengthAdjust="spacing"><tspan class="c">~/notes $ </tspan><tspan class="b">done-done check --from pr-body.md</tspan></text></g>
-<g class="l4"><text xml:space="preserve" x="22" y="168" textLength="374.4" lengthAdjust="spacing"><tspan class="f b">fail: </tspan>.proof/20261011T062108Z-8d4667e2/</text></g>
-<g class="l5"><text xml:space="preserve" x="22" y="192" textLength="355.2" lengthAdjust="spacing">    after.png: evidence is for commit</text></g>
-<g class="l6"><text xml:space="preserve" x="22" y="216" textLength="460.8" lengthAdjust="spacing">    8d4667e2a010, HEAD is 559fb7bfe76a (changed:</text></g>
-<g class="l7"><text xml:space="preserve" x="22" y="240" textLength="460.8" lengthAdjust="spacing">    src/sync.js) (run 20261011T062108Z-8d4667e2)</text></g>
-<g class="l8"><text xml:space="preserve" x="22" y="264" textLength="115.2" lengthAdjust="spacing"><tspan class="d">result: </tspan><tspan class="f b">FAIL</tspan></text></g>
-<g class="l9"><text xml:space="preserve" x="22" y="288" textLength="96.0" lengthAdjust="spacing"><tspan class="c">~/notes $ </tspan></text><rect class="cur" x="118" y="272" width="9.6" height="20" fill="#e6edf3" opacity=".7"/></g>
-<g class="l10"><text xml:space="preserve" x="22" y="72" textLength="268.8" lengthAdjust="spacing"><tspan class="c">~/notes $ </tspan><tspan class="b">done-done run sync</tspan></text><g class="k10"><rect x="118" y="55" width="192.8" height="24" fill="#161b22"/><rect class="h10" x="118" y="56" width="9.6" height="20" fill="#e6edf3" opacity=".7"/></g></g>
-<g class="l11"><text xml:space="preserve" x="22" y="96" textLength="451.2" lengthAdjust="spacing">  synced a note on two devices, saved after.png</text></g>
-<g class="l12"><text xml:space="preserve" x="22" y="120" textLength="288.0" lengthAdjust="spacing"><tspan class="d">run: </tspan>20261011T062108Z-8d4667e2</text></g>
-<g class="l13"><text xml:space="preserve" x="22" y="144" textLength="374.4" lengthAdjust="spacing"><tspan class="d">record: </tspan>~/notes/.proof/.done-done/runs/</text></g>
-<g class="l14"><text xml:space="preserve" x="22" y="168" textLength="326.4" lengthAdjust="spacing">    20261011T062108Z-8d4667e2.json</text></g>
-<g class="l15"><text xml:space="preserve" x="22" y="192" textLength="460.8" lengthAdjust="spacing"><tspan class="d">commit: </tspan>8d4667e2a0104ce1d63d8a284013cefd206ea624</text></g>
-<g class="l16"><text xml:space="preserve" x="22" y="216" textLength="76.8" lengthAdjust="spacing"><tspan class="d">files: </tspan>1</text></g>
-<g class="l17"><text xml:space="preserve" x="22" y="240" textLength="412.8" lengthAdjust="spacing">  ~/notes/.proof/20261011T062108Z-8d4667e2/</text></g>
-<g class="l18"><text xml:space="preserve" x="22" y="264" textLength="124.8" lengthAdjust="spacing">    after.png</text></g>
-<g class="l19"><text xml:space="preserve" x="22" y="288" textLength="115.2" lengthAdjust="spacing"><tspan class="d">result: </tspan><tspan class="p b">PASS</tspan></text></g>
-<g class="l20"><text xml:space="preserve" x="22" y="312" textLength="412.8" lengthAdjust="spacing"><tspan class="c">~/notes $ </tspan><tspan class="b">done-done check --from pr-body.md</tspan></text><g class="k20"><rect x="118" y="295" width="336.8" height="24" fill="#161b22"/><rect class="h20" x="118" y="296" width="9.6" height="20" fill="#e6edf3" opacity=".7"/></g></g>
-<g class="l21"><text xml:space="preserve" x="22" y="336" textLength="288.0" lengthAdjust="spacing"><tspan class="d">result: </tspan><tspan class="p b">PASS (1 evidence file)</tspan></text></g>
-<g class="l22"><text xml:space="preserve" x="22" y="360" textLength="96.0" lengthAdjust="spacing"><tspan class="c">~/notes $ </tspan></text><rect class="cur" x="118" y="344" width="9.6" height="20" fill="#e6edf3" opacity=".7"/></g>
-<g class="l23"><text xml:space="preserve" x="22" y="72" textLength="393.6" lengthAdjust="spacing"><tspan class="c">~/notes $ </tspan><tspan class="b">git commit -qam "Speed up sync"</tspan></text><g class="k23"><rect x="118" y="55" width="317.6" height="24" fill="#161b22"/><rect class="h23" x="118" y="56" width="9.6" height="20" fill="#e6edf3" opacity=".7"/></g></g>
-<g class="l24"><text xml:space="preserve" x="22" y="96" textLength="412.8" lengthAdjust="spacing"><tspan class="c">~/notes $ </tspan><tspan class="b">done-done check --from pr-body.md</tspan></text><g class="k24"><rect x="118" y="79" width="336.8" height="24" fill="#161b22"/><rect class="h24" x="118" y="80" width="9.6" height="20" fill="#e6edf3" opacity=".7"/></g></g>
-<g class="l25"><text xml:space="preserve" x="22" y="120" textLength="374.4" lengthAdjust="spacing"><tspan class="f b">fail: </tspan>.proof/20261011T062108Z-8d4667e2/</text></g>
-<g class="l26"><text xml:space="preserve" x="22" y="144" textLength="355.2" lengthAdjust="spacing">    after.png: evidence is for commit</text></g>
-<g class="l27"><text xml:space="preserve" x="22" y="168" textLength="460.8" lengthAdjust="spacing">    8d4667e2a010, HEAD is 559fb7bfe76a (changed:</text></g>
-<g class="l28"><text xml:space="preserve" x="22" y="192" textLength="460.8" lengthAdjust="spacing">    src/sync.js) (run 20261011T062108Z-8d4667e2)</text></g>
-<g class="l29"><text xml:space="preserve" x="22" y="216" textLength="115.2" lengthAdjust="spacing"><tspan class="d">result: </tspan><tspan class="f b">FAIL</tspan></text></g>
-<g class="l30"><text xml:space="preserve" x="22" y="240" textLength="96.0" lengthAdjust="spacing"><tspan class="c">~/notes $ </tspan></text><rect class="cur" x="118" y="224" width="9.6" height="20" fill="#e6edf3" opacity=".7"/></g></g>
+<g class="l1"><text xml:space="preserve" x="22" y="96" textLength="134.4" lengthAdjust="spacing"><tspan class="d">command: </tspan>check</text></g>
+<g class="l2"><text xml:space="preserve" x="22" y="120" textLength="115.2" lengthAdjust="spacing"><tspan class="d">result: </tspan><tspan class="p b">pass</tspan></text></g>
+<g class="l3"><text xml:space="preserve" x="22" y="144" textLength="355.2" lengthAdjust="spacing"><tspan class="d">claim: </tspan>notes sync between two devices</text></g>
+<g class="l4"><text xml:space="preserve" x="22" y="168" textLength="172.8" lengthAdjust="spacing"><tspan class="d">source: </tspan>pr-body.md</text></g>
+<g class="l5"><text xml:space="preserve" x="22" y="192" textLength="76.8" lengthAdjust="spacing"><tspan class="d">files: </tspan>1</text></g>
+<g class="l6"><text xml:space="preserve" x="22" y="216" textLength="441.6" lengthAdjust="spacing"><tspan class="d">evidence[1]: </tspan>.proof/20261012T005507Z-7083df3e/</text></g>
+<g class="l7"><text xml:space="preserve" x="22" y="240" textLength="124.8" lengthAdjust="spacing">    after.png</text></g>
+<g class="l8"><text xml:space="preserve" x="22" y="264" textLength="460.8" lengthAdjust="spacing"><tspan class="d">help[1]: </tspan>"Gate CI on this proof: done-done check</text></g>
+<g class="l9"><text xml:space="preserve" x="22" y="288" textLength="441.6" lengthAdjust="spacing">    --from &lt;PR URL&gt; --trusted-ref origin/main"</text></g>
+<g class="l10"><text xml:space="preserve" x="22" y="312" textLength="393.6" lengthAdjust="spacing"><tspan class="c">~/notes $ </tspan><tspan class="b">git commit -qam "Speed up sync"</tspan></text></g>
+<g class="l11"><text xml:space="preserve" x="22" y="336" textLength="412.8" lengthAdjust="spacing"><tspan class="c">~/notes $ </tspan><tspan class="b">done-done check --from pr-body.md</tspan></text></g>
+<g class="l12"><text xml:space="preserve" x="22" y="360" textLength="134.4" lengthAdjust="spacing"><tspan class="d">command: </tspan>check</text></g>
+<g class="l13"><text xml:space="preserve" x="22" y="384" textLength="115.2" lengthAdjust="spacing"><tspan class="d">result: </tspan><tspan class="f b">fail</tspan></text></g>
+<g class="l14"><text xml:space="preserve" x="22" y="408" textLength="355.2" lengthAdjust="spacing"><tspan class="d">claim: </tspan>notes sync between two devices</text></g>
+<g class="l15"><text xml:space="preserve" x="22" y="432" textLength="172.8" lengthAdjust="spacing"><tspan class="d">source: </tspan>pr-body.md</text></g>
+<g class="l16"><text xml:space="preserve" x="22" y="456" textLength="76.8" lengthAdjust="spacing"><tspan class="d">files: </tspan>1</text></g>
+<g class="l17"><text xml:space="preserve" x="22" y="480" textLength="441.6" lengthAdjust="spacing"><tspan class="d">evidence[1]: </tspan>.proof/20261012T005507Z-7083df3e/</text></g>
+<g class="l18"><text xml:space="preserve" x="22" y="504" textLength="124.8" lengthAdjust="spacing">    after.png</text></g>
+<g class="l19"><text xml:space="preserve" x="22" y="528" textLength="220.8" lengthAdjust="spacing">findings[1]{level,why}:</text></g>
+<g class="l20"><text xml:space="preserve" x="22" y="552" textLength="384.0" lengthAdjust="spacing">  fail<tspan class="f b">".proof/20261012T005507Z-7083df3e/</tspan></text></g>
+<g class="l21"><text xml:space="preserve" x="22" y="576" textLength="355.2" lengthAdjust="spacing">    <tspan class="f b">after.png: evidence is for commit</tspan></text></g>
+<g class="l22"><text xml:space="preserve" x="22" y="600" textLength="460.8" lengthAdjust="spacing">    <tspan class="f b">7083df3e1395, HEAD is fbdf8610609a (changed:</tspan></text></g>
+<g class="l23"><text xml:space="preserve" x="22" y="624" textLength="460.8" lengthAdjust="spacing">    <tspan class="f b">src/sync.js) (run 20261012T005507Z-7083df3e)</tspan></text></g>
+<g class="l24"><text xml:space="preserve" x="22" y="648" textLength="48.0" lengthAdjust="spacing">    <tspan class="f b">"</tspan></text></g>
+<g class="l25"><text xml:space="preserve" x="22" y="672" textLength="441.6" lengthAdjust="spacing"><tspan class="d">help[1]: </tspan>"Capture fresh proof, commit it, then</text></g>
+<g class="l26"><text xml:space="preserve" x="22" y="696" textLength="403.2" lengthAdjust="spacing">    re-run this check: done-done run sync"</text></g>
+<g class="l27"><text xml:space="preserve" x="22" y="720" textLength="96.0" lengthAdjust="spacing"><tspan class="c">~/notes $ </tspan></text><rect class="cur" x="118" y="704" width="9.6" height="20" fill="#e6edf3" opacity=".7"/></g>
+<g class="l28"><text xml:space="preserve" x="22" y="72" textLength="268.8" lengthAdjust="spacing"><tspan class="c">~/notes $ </tspan><tspan class="b">done-done run sync</tspan></text><g class="k28"><rect x="118" y="55" width="192.8" height="24" fill="#161b22"/><rect class="h28" x="118" y="56" width="9.6" height="20" fill="#e6edf3" opacity=".7"/></g></g>
+<g class="l29"><text xml:space="preserve" x="22" y="96" textLength="451.2" lengthAdjust="spacing">  synced a note on two devices, saved after.png</text></g>
+<g class="l30"><text xml:space="preserve" x="22" y="120" textLength="115.2" lengthAdjust="spacing"><tspan class="d">command: </tspan>run</text></g>
+<g class="l31"><text xml:space="preserve" x="22" y="144" textLength="115.2" lengthAdjust="spacing"><tspan class="d">result: </tspan><tspan class="p b">pass</tspan></text></g>
+<g class="l32"><text xml:space="preserve" x="22" y="168" textLength="316.8" lengthAdjust="spacing"><tspan class="d">run_id: </tspan>20261012T005507Z-7083df3e</text></g>
+<g class="l33"><text xml:space="preserve" x="22" y="192" textLength="460.8" lengthAdjust="spacing"><tspan class="d">commit: </tspan>7083df3e139534b85728896dcea6ea4ef2a4fc88</text></g>
+<g class="l34"><text xml:space="preserve" x="22" y="216" textLength="115.2" lengthAdjust="spacing"><tspan class="d">dirty: </tspan>false</text></g>
+<g class="l35"><text xml:space="preserve" x="22" y="240" textLength="76.8" lengthAdjust="spacing"><tspan class="d">files: </tspan>1</text></g>
+<g class="l36"><text xml:space="preserve" x="22" y="264" textLength="297.6" lengthAdjust="spacing"><tspan class="d">record: </tspan>.proof/.done-done/runs/</text></g>
+<g class="l37"><text xml:space="preserve" x="22" y="288" textLength="326.4" lengthAdjust="spacing">    20261012T005507Z-7083df3e.json</text></g>
+<g class="l38"><text xml:space="preserve" x="22" y="312" textLength="441.6" lengthAdjust="spacing"><tspan class="d">evidence[1]: </tspan>.proof/20261012T005507Z-7083df3e/</text></g>
+<g class="l39"><text xml:space="preserve" x="22" y="336" textLength="124.8" lengthAdjust="spacing">    after.png</text></g>
+<g class="l40"><text xml:space="preserve" x="22" y="360" textLength="412.8" lengthAdjust="spacing"><tspan class="d">help[1]: </tspan>"Check this proof: done-done check</text></g>
+<g class="l41"><text xml:space="preserve" x="22" y="384" textLength="412.8" lengthAdjust="spacing">    --outcome \"&lt;what you proved&gt;\" .proof/</text></g>
+<g class="l42"><text xml:space="preserve" x="22" y="408" textLength="384.0" lengthAdjust="spacing">    20261012T005507Z-7083df3e/after.png"</text></g>
+<g class="l43"><text xml:space="preserve" x="22" y="432" textLength="412.8" lengthAdjust="spacing"><tspan class="c">~/notes $ </tspan><tspan class="b">done-done check --from pr-body.md</tspan></text><g class="k43"><rect x="118" y="415" width="336.8" height="24" fill="#161b22"/><rect class="h43" x="118" y="416" width="9.6" height="20" fill="#e6edf3" opacity=".7"/></g></g>
+<g class="l44"><text xml:space="preserve" x="22" y="456" textLength="134.4" lengthAdjust="spacing"><tspan class="d">command: </tspan>check</text></g>
+<g class="l45"><text xml:space="preserve" x="22" y="480" textLength="115.2" lengthAdjust="spacing"><tspan class="d">result: </tspan><tspan class="p b">pass</tspan></text></g>
+<g class="l46"><text xml:space="preserve" x="22" y="504" textLength="355.2" lengthAdjust="spacing"><tspan class="d">claim: </tspan>notes sync between two devices</text></g>
+<g class="l47"><text xml:space="preserve" x="22" y="528" textLength="172.8" lengthAdjust="spacing"><tspan class="d">source: </tspan>pr-body.md</text></g>
+<g class="l48"><text xml:space="preserve" x="22" y="552" textLength="76.8" lengthAdjust="spacing"><tspan class="d">files: </tspan>1</text></g>
+<g class="l49"><text xml:space="preserve" x="22" y="576" textLength="441.6" lengthAdjust="spacing"><tspan class="d">evidence[1]: </tspan>.proof/20261012T005507Z-7083df3e/</text></g>
+<g class="l50"><text xml:space="preserve" x="22" y="600" textLength="124.8" lengthAdjust="spacing">    after.png</text></g>
+<g class="l51"><text xml:space="preserve" x="22" y="624" textLength="460.8" lengthAdjust="spacing"><tspan class="d">help[1]: </tspan>"Gate CI on this proof: done-done check</text></g>
+<g class="l52"><text xml:space="preserve" x="22" y="648" textLength="441.6" lengthAdjust="spacing">    --from &lt;PR URL&gt; --trusted-ref origin/main"</text></g>
+<g class="l53"><text xml:space="preserve" x="22" y="672" textLength="96.0" lengthAdjust="spacing"><tspan class="c">~/notes $ </tspan></text><rect class="cur" x="118" y="656" width="9.6" height="20" fill="#e6edf3" opacity=".7"/></g>
+<g class="l54"><text xml:space="preserve" x="22" y="72" textLength="393.6" lengthAdjust="spacing"><tspan class="c">~/notes $ </tspan><tspan class="b">git commit -qam "Speed up sync"</tspan></text><g class="k54"><rect x="118" y="55" width="317.6" height="24" fill="#161b22"/><rect class="h54" x="118" y="56" width="9.6" height="20" fill="#e6edf3" opacity=".7"/></g></g>
+<g class="l55"><text xml:space="preserve" x="22" y="96" textLength="412.8" lengthAdjust="spacing"><tspan class="c">~/notes $ </tspan><tspan class="b">done-done check --from pr-body.md</tspan></text><g class="k55"><rect x="118" y="79" width="336.8" height="24" fill="#161b22"/><rect class="h55" x="118" y="80" width="9.6" height="20" fill="#e6edf3" opacity=".7"/></g></g>
+<g class="l56"><text xml:space="preserve" x="22" y="120" textLength="134.4" lengthAdjust="spacing"><tspan class="d">command: </tspan>check</text></g>
+<g class="l57"><text xml:space="preserve" x="22" y="144" textLength="115.2" lengthAdjust="spacing"><tspan class="d">result: </tspan><tspan class="f b">fail</tspan></text></g>
+<g class="l58"><text xml:space="preserve" x="22" y="168" textLength="355.2" lengthAdjust="spacing"><tspan class="d">claim: </tspan>notes sync between two devices</text></g>
+<g class="l59"><text xml:space="preserve" x="22" y="192" textLength="172.8" lengthAdjust="spacing"><tspan class="d">source: </tspan>pr-body.md</text></g>
+<g class="l60"><text xml:space="preserve" x="22" y="216" textLength="76.8" lengthAdjust="spacing"><tspan class="d">files: </tspan>1</text></g>
+<g class="l61"><text xml:space="preserve" x="22" y="240" textLength="441.6" lengthAdjust="spacing"><tspan class="d">evidence[1]: </tspan>.proof/20261012T005507Z-7083df3e/</text></g>
+<g class="l62"><text xml:space="preserve" x="22" y="264" textLength="124.8" lengthAdjust="spacing">    after.png</text></g>
+<g class="l63"><text xml:space="preserve" x="22" y="288" textLength="220.8" lengthAdjust="spacing">findings[1]{level,why}:</text></g>
+<g class="l64"><text xml:space="preserve" x="22" y="312" textLength="384.0" lengthAdjust="spacing">  fail<tspan class="f b">".proof/20261012T005507Z-7083df3e/</tspan></text></g>
+<g class="l65"><text xml:space="preserve" x="22" y="336" textLength="355.2" lengthAdjust="spacing">    <tspan class="f b">after.png: evidence is for commit</tspan></text></g>
+<g class="l66"><text xml:space="preserve" x="22" y="360" textLength="460.8" lengthAdjust="spacing">    <tspan class="f b">7083df3e1395, HEAD is fbdf8610609a (changed:</tspan></text></g>
+<g class="l67"><text xml:space="preserve" x="22" y="384" textLength="460.8" lengthAdjust="spacing">    <tspan class="f b">src/sync.js) (run 20261012T005507Z-7083df3e)</tspan></text></g>
+<g class="l68"><text xml:space="preserve" x="22" y="408" textLength="48.0" lengthAdjust="spacing">    <tspan class="f b">"</tspan></text></g>
+<g class="l69"><text xml:space="preserve" x="22" y="432" textLength="441.6" lengthAdjust="spacing"><tspan class="d">help[1]: </tspan>"Capture fresh proof, commit it, then</text></g>
+<g class="l70"><text xml:space="preserve" x="22" y="456" textLength="403.2" lengthAdjust="spacing">    re-run this check: done-done run sync"</text></g>
+<g class="l71"><text xml:space="preserve" x="22" y="480" textLength="96.0" lengthAdjust="spacing"><tspan class="c">~/notes $ </tspan></text><rect class="cur" x="118" y="464" width="9.6" height="20" fill="#e6edf3" opacity=".7"/></g></g>
 </svg>

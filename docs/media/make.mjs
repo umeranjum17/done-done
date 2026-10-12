@@ -52,7 +52,7 @@ const term = (cmd) => {
 const checks = (evidence) => `## Checks\noutcome: notes sync between two devices\nrepro: n/a: no bug\nproof: no verify skill - done-done run sync\nevidence: ${evidence}\n`;
 
 const run = term('done-done run sync');
-const id = run.out.match(/^run: (\S+)/m)?.[1];
+const id = run.out.match(/^run_id: (\S+)/m)?.[1];
 if (run.code !== 0 || !id) throw new Error(`done-done run sync failed (exit ${run.code}):\n${run.out}`);
 writeFileSync(join(repo, 'pr-body.md'), checks(`.proof/${id}/after.png`));
 const body = term('cat pr-body.md');
@@ -86,10 +86,11 @@ const PROMPT = '~/notes $ ';
 // One output line -> [class, text] spans.
 function spans(line) {
   let m;
-  if ((m = line.match(/^(result: )(PASS.*)$/))) return [['d', m[1]], ['p b', m[2]]];
-  if ((m = line.match(/^(result: )(FAIL.*)$/))) return [['d', m[1]], ['f b', m[2]]];
-  if ((m = line.match(/^(fail: |error: )(.*)$/))) return [['f b', m[1]], ['', m[2]]];
-  if ((m = line.match(/^(run: |record: |commit: |files: )(.*)$/))) return [['d', m[1]], ['', m[2]]];
+  if ((m = line.match(/^(result: )(pass.*)$/))) return [['d', m[1]], ['p b', m[2]]];
+  if ((m = line.match(/^(result: )(fail.*|inconclusive.*)$/))) return [['d', m[1]], ['f b', m[2]]];
+  if ((m = line.match(/^(error: )(.*)$/))) return [['f b', m[1]], ['', m[2]]];
+  if ((m = line.match(/^(\s*)(fail|inconclusive),(.*)$/))) return [['', m[1] + m[2]], ['f b', m[3]]];
+  if ((m = line.match(/^([a-z_]+(?:\[\d+\](?:\{[^}]*\})?)?: )(.*)$/))) return [['d', m[1]], ['', m[2]]];
   return [['', line]];
 }
 
@@ -209,7 +210,8 @@ for (const [name, t] of Object.entries(THEMES)) {
   put('run', still(t, [run], 'Record a run'));
   put('pass', still(t, [body, pass], 'Fresh proof passes'));
   put('reasons', still(t, [reasons], 'Weak proof is blocked'));
-  // Only the error line: the usage help that follows it adds nothing here.
-  put('config', still(t, [{ ...config, out: config.out.split('\n')[0] }], 'Mistakes stop early'));
+  // Only the error line: the help hint that follows it adds nothing here.
+  const errLine = config.out.split('\n').find((l) => l.startsWith('error: ')) ?? config.out.split('\n')[0];
+  put('config', still(t, [{ ...config, out: errLine }], 'Mistakes stop early'));
 }
 console.log(`wrote hero, run, pass, reasons and config (light and dark) to ${OUT}`);

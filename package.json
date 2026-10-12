@@ -13,6 +13,6 @@
     "prepare": "npm run build",
     "test": "tsc && node --test"
   },
-  "dependencies": { "yaml": "^2.9.1" },
+  "dependencies": { "@toon-format/toon": "^4.4.0", "yaml": "^2.9.1" },
   "devDependencies": { "@types/node": "^26.6.5", "typescript": "^7.0.2" }
 }

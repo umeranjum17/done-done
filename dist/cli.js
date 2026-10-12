@@ -1118,12 +1118,16 @@ function cmdAbort(argv) {
     const cfg = loadConfig(repo);
     const id = pickId(runsRoot(cfg.app), repo, 'abort', cfg, values.run);
     const dir = join(runsRoot(cfg.app), id);
-    const run = loadRun(dir);
-    const status = shownStatus(run);
-    if (status !== 'pending' && status !== 'running') {
+    const closed = (r) => {
+        const status = shownStatus(r);
+        if (status === 'pending' || status === 'running')
+            return false;
         emit({ command: 'abort', run_id: id, status, reason: `run ${id} is already ${status}`, help: [`List past runs: done-done history`, `Start again: done-done rerun --run ${id}`] });
+        return true;
+    };
+    const run = loadRun(dir);
+    if (closed(run))
         return FAIL;
-    }
     const ours = !!run.runner && isOurRunner(run.runner.pid, dir);
     if (ours) {
         try {
@@ -1133,11 +1137,14 @@ function cmdAbort(argv) {
         if (run.runner.journey_pgid)
             killGroup(run.runner.journey_pgid);
     }
-    run.status = 'cancelled';
-    run.reason = run.runner && !ours ? `aborted; pid ${run.runner.pid} is not this run's runner, so nothing was killed` : 'aborted';
+    const latest = loadRun(dir);
+    if (closed(latest))
+        return FAIL;
+    latest.status = 'cancelled';
+    latest.reason = latest.runner && !ours ? `aborted; pid ${latest.runner.pid} is not this run's runner, so nothing was killed` : 'aborted';
     logEvent(dir, { status: 'cancelled' });
-    saveRun(dir, run);
-    emit({ command: 'abort', run_id: id, status: 'cancelled', reason: run.reason, help: [`Read the run: done-done status --run ${id}`, `Start again: done-done rerun --run ${id}`] });
+    saveRun(dir, latest);
+    emit({ command: 'abort', run_id: id, status: 'cancelled', reason: latest.reason, help: [`Read the run: done-done status --run ${id}`, `Start again: done-done rerun --run ${id}`] });
     return PASS;
 }
 function cmdHistory(argv) {

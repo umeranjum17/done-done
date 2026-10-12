@@ -127,9 +127,19 @@ export async function maintainSteps<S>(run: { repo: string; findings?: Finding[]
     }
   };
 
+  const linked = (p: string) => {
+    if (!lstatSync(p, { throwIfNoEntry: false })?.isSymbolicLink()) return false;
+    add({ kind: 'coverage', file: rel(p), what: 'a symlink on the skill path, so maintain does not read through it' });
+    return true;
+  };
+
   // 1 locate
   let step = h.begin('locate');
   const skill = join(repo, cfg.skill);
+  if (lstatSync(skill, { throwIfNoEntry: false })?.isSymbolicLink()) {
+    h.set(step, 'failed');
+    return h.finish('blocked', `locate: ${cfg.skill} is a symlink; maintain does not read through it`);
+  }
   if (!existsSync(join(skill, 'SKILL.md'))) {
     h.set(step, 'failed');
     return h.finish('blocked', `locate: no verify skill at ${cfg.skill}/SKILL.md`);
@@ -148,9 +158,9 @@ export async function maintainSteps<S>(run: { repo: string; findings?: Finding[]
     });
   const featDir = join(skill, 'features');
   const index = join(featDir, 'README.md');
-  const features = existsSync(featDir) ? tryRead<string[]>(featDir, [], () => readdirSync(featDir)).filter((n) => n.endsWith('.md') && n !== 'README.md').sort() : [];
+  const features = existsSync(featDir) && !linked(featDir) ? tryRead<string[]>(featDir, [], () => readdirSync(featDir)).filter((n) => n.endsWith('.md') && n !== 'README.md').sort() : [];
   if (!statSync(index, { throwIfNoEntry: false })?.isFile()) add({ kind: 'index', file: rel(index), what: 'the feature map has no index' });
-  else {
+  else if (!linked(index)) {
     const listed = new Map<string, number>();
     tryRead<string[]>(index, [], () => lines(index)).forEach((text, i) => {
       for (const m of text.matchAll(LINK)) {
@@ -179,11 +189,9 @@ export async function maintainSteps<S>(run: { repo: string; findings?: Finding[]
   const regular = read.flatMap((name) => {
     const file = join(featDir, name);
     const text = tryRead<string | undefined>(file, undefined, () => {
-      if (!statSync(file, { throwIfNoEntry: false })?.isFile()) {
-        add({ kind: 'coverage', file: rel(file), what: 'the feature entry is not a readable file, so no reader covers it' });
-        return undefined;
-      }
-      return readFileSync(file, 'utf8');
+      if (lstatSync(file, { throwIfNoEntry: false })?.isFile()) return readFileSync(file, 'utf8');
+      if (!linked(file)) add({ kind: 'coverage', file: rel(file), what: 'the feature entry is not a readable file, so no reader covers it' });
+      return undefined;
     });
     return text === undefined ? [] : [{ name, text }];
   });

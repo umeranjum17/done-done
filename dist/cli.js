@@ -800,11 +800,17 @@ function detectApp(repo) {
     const isolate = web || port
         ? 'TODO(live drive): confirm two instances run side by side (ports, data dirs, profiles); until then drive one instance at a time'
         : 'each run uses its own invocation; never drive a shared session the user owns';
-    const features = [
-        ...routes.map((r) => ({ slug: slug(r), title: r, reach: `the ${r} route` })),
-        ...commands.map((c) => ({ slug: slug(c), title: `\`${c}\` command`, reach: `the CLI run with \`${c}\`` })),
-    ].filter((f, i, a) => a.findIndex((g) => g.slug === f.slug) === i).slice(0, 5);
-    return { surface, launch, ready, harness, observe, isolate, features };
+    const features = [];
+    for (const f of [
+        ...routes.map((r) => ({ base: slug(r), title: r, reach: `the ${r} route` })),
+        ...commands.map((c) => ({ base: slug(c), title: `\`${c}\` command`, reach: `the CLI run with \`${c}\`` })),
+    ]) {
+        let s = f.base;
+        for (let n = 2; features.some((g) => g.slug === s); n++)
+            s = `${f.base}-${n}`;
+        features.push({ slug: s, title: f.title, reach: f.reach });
+    }
+    return { surface, launch, ready, harness, observe, isolate, features: features.slice(0, 5) };
 }
 function verifySkillMd(app, d) {
     const name = `verify-${app}`;

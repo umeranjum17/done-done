@@ -1025,7 +1025,21 @@ test('init maps the app, not its dependencies, and lists each feature slug once'
   writeFileSync(join(repo, 'routes.js'), "app.get('/a/b');\napp.get('/a-b');\n");
   const r = dd('init');
   assert.equal(r.code, 0, r.out);
-  assert.deepEqual(featureFiles(join(repo, '.agents', 'skills', 'verify-notes')), ['README.md', 'add.md', 'get-a-b.md', 'list.md'], 'node_modules is skipped and colliding slugs keep one file');
+  const dir = join(repo, '.agents', 'skills', 'verify-notes');
+  assert.deepEqual(featureFiles(dir), ['README.md', 'add.md', 'get-a-b-2.md', 'get-a-b.md', 'list.md'], 'node_modules is skipped and each distinct route keeps its own file');
+  assert.match(readFileSync(join(dir, 'features', 'get-a-b-2.md'), 'utf8'), /^# GET \/a-b$/m);
+});
+
+test('init keeps distinct routes whose slugs collide after truncation', () => {
+  const { repo, dd } = shapeRepo('cli', 'notes');
+  writeFileSync(join(repo, 'routes.js'), "app.get('/api/organizations/:id/members/invitations/pending');\napp.get('/api/organizations/:id/members/invitations/expired');\n");
+  const r = dd('init');
+  assert.equal(r.code, 0, r.out);
+  const dir = join(repo, '.agents', 'skills', 'verify-notes');
+  const feats = featureFiles(dir).filter((f) => f.startsWith('get-api-organizations'));
+  assert.equal(feats.length, 2, 'both routes get a feature file');
+  const titles = feats.map((f) => readFileSync(join(dir, 'features', f), 'utf8').split('\n')[0]).sort();
+  assert.deepEqual(titles, ['# GET /api/organizations/:id/members/invitations/expired', '# GET /api/organizations/:id/members/invitations/pending']);
 });
 
 test('init does not read a README that is a symlink out of the repo', () => {

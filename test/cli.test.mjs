@@ -2356,6 +2356,22 @@ test('gemini edit steps run with auto_edit, never yolo, and read steps stay in p
   assert.equal(read.argv[read.argv.indexOf('--approval-mode') + 1], 'plan');
 });
 
+test('braces in the prose before the JSON in the final answer do not break it', () => {
+  const { repo, env } = setup();
+  const s = stubPiGemini(env);
+  writeFileSync(join(s.env.PATH, 'pi'), `#!${process.execPath}
+const { appendFileSync } = require('node:fs');
+appendFileSync(${JSON.stringify(join(s.env.PATH, 'calls.jsonl'))}, JSON.stringify({ agent: 'pi', argv: process.argv.slice(2) }) + '\\n');
+console.log(JSON.stringify({ type: 'message_end', message: { role: 'assistant', content: [{ type: 'text', text: 'Added the helper f() { return 1 }. Answer: {"ok":true}' }] } }));
+`, { mode: 0o755 });
+  mkdirSync(env.DONE_DONE_HOME, { recursive: true });
+  writeFileSync(join(env.DONE_DONE_HOME, 'config.yaml'), 'agent: pi\n');
+  const r = doctorIn(repo, s.env, 'doctor', '--probe');
+  assert.equal(r.code, 0, r.out);
+  assert.equal(toon(r).checks.find((x) => x.check === 'probe').status, 'ok');
+  assert.equal(s.calls().length, 1, 'the final answer is read past the prose braces on the first try');
+});
+
 test('pi answers with its last message only, so braces in earlier narration do not break the answer', () => {
   const { repo, env } = setup();
   const s = stubPiGemini(env);

@@ -30,7 +30,17 @@ type Adapter = { argv: (c: AgentCall, dir: string) => string[]; answer: (stdout:
 
 // The one JSON object inside free model text (often fenced): shared by the adapters that answer in text.
 export function extractJsonObject(text: string): unknown {
-  return JSON.parse(text.slice(text.indexOf('{'), text.lastIndexOf('}') + 1));
+  const end = text.lastIndexOf('}') + 1;
+  let start = text.indexOf('{');
+  for (;;) {
+    try {
+      return JSON.parse(text.slice(start, end));
+    } catch (e) {
+      const next = text.indexOf('{', start + 1);
+      if (next === -1 || next >= end) throw e;
+      start = next;
+    }
+  }
 }
 
 const ADAPTERS: Record<string, Adapter> = {

@@ -51,7 +51,7 @@ const FLAGS: Record<string, string> = {
   '--from <file | - | PR URL>': 'read the claim from the newest "## Checks" block of a file, stdin or a PR body',
   '--trusted-ref <ref>': 'read .done-done.yaml from this git ref instead of the working tree (use in CI)',
   '--claim-id <id>': 'the claim the evidence proves; evidence already used for another claim id is reuse (default: the current branch, or the PR branch with --from <PR URL>; required on a detached HEAD)',
-  '--judge': 'a judge that is not the author agent says whether each PNG/JPEG capture shows the outcome (off by default; or judge.enabled: true)',
+  '--judge': 'a judge that is a different agent from the author (with only the author agent installed, a different cheap model) says whether each PNG/JPEG capture shows the outcome (off by default; or judge.enabled: true)',
   '--verify <head>': 'read-only: verify the receipt recorded for <head>',
   '--outcome "<what a user can now do>"': 'the outcome the run must prove',
   '--wait': 'wait until the run ends (the default)',
@@ -161,7 +161,7 @@ ${rows([['done-done', "show this repo's config state and the next step"], ...Obj
 ${GLOBAL_TEXT}
 --judge (or judge.enabled: true): a model on your own plan, through BYOKit, says whether each PNG/JPEG capture
   shows the outcome; a wrong screen fails, an unsure answer is inconclusive. Off by default. The judge is judge.route
-  (claude-code, or answerer:<agent> through that agent's CLI), or with auto the first installed agent that is not the author.
+  (claude-code, or answerer:<agent> through that agent's CLI), or with auto the first installed agent that is not the author; with only the author's agent, its cheap model (a fresh session of the author's own model only when that cheap model is the same).
 
 ${JOURNEYS_TEXT}
 ${CHECKS_TEXT}

@@ -59,7 +59,7 @@ npx skills add umeranjum17/done-done --skill done-done -a claude-code -y
 
 Use `-a codex` or `-a opencode` for those agents. `-a` and `-y` skip the installer's four prompts and keep it from writing skill folders for agents you do not use.
 
-The skill lands in this project (`.claude/skills/done-done/` for Claude Code) next to a `skills-lock.json`: commit both so teammates and CI get it too. Add `-g` instead to install it once for all your projects (`~/.claude/skills/`).
+The skill lands in this project (`.claude/skills/done-done/` for Claude Code, `.agents/skills/done-done/` for Codex and opencode) next to a `skills-lock.json`: commit both so teammates and CI get it too. Or add `-g` to install it once for all your projects (`~/.claude/skills/` for Claude Code) and leave the project untouched.
 
 That is the entire setup - no npm install needed.
 The skill tells your agent to use `done-done` if it is on PATH and otherwise run it through `npx`, so the CLI comes along on demand.
@@ -71,7 +71,7 @@ done-done is not on npm yet, so today the skill runs it straight from GitHub. Th
 npx -y --allow-git=all github:umeranjum17/done-done --help
 ```
 
-The first run builds it: 15 to 18 seconds cold (measured with npm 10, 11 and 12); later runs take about 2 seconds. npm 12 refuses GitHub packages without `--allow-git=all`. Once done-done is on npm, the switch is one line in `src/skill.ts`: `const NPX = 'npx -y done-done';`.
+The first run builds it: 10 to 20 seconds cold (measured with npm 10, 11 and 12, and in a clean `node:22` container); later runs take about 2 seconds. npm 12 refuses GitHub packages without `--allow-git=all`. Once done-done is on npm, the switch is one line in `src/skill.ts`: `const NPX = 'npx -y done-done';`.
 
 Then, in agents that expose skills as slash commands (Claude Code, for example), invoke it directly:
 

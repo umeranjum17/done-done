@@ -1699,7 +1699,7 @@ async function cmdDoctor(argv: string[]): Promise<number> {
     checks.push({ check: 'agent', status: 'missing', detail: agentError, fix: 'Fix the config file named above, then re-run: done-done doctor' });
   } else {
     const skipping = agent.skipped.map((a) => `; skipped ${a}: done-done cannot start it yet`).join('');
-    const what = `${agent.agent} (${modelName(agent.model)}; ${agent.from === 'auto' ? 'agent: auto' : 'from config'}${skipping})`;
+    const what = `${agent.agent} (${agent.model ? `model ${agent.model}` : `its own default model; set agent_config.${agent.agent}.model to choose one`}; ${agent.from === 'auto' ? 'agent: auto' : 'from config'}${skipping})`;
     checks.push(
       !agent.path
         ? { check: 'agent', status: 'missing', detail: `${what} is not on PATH`, fix: installFix }

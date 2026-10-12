@@ -1863,7 +1863,7 @@ test('doctor finds agent, judge and ffprobe binaries from PATH; missing optional
   assert.match(f.checks[6].detail, /found at .*ffprobe/);
   const codexOnly = toon(doctorIn(repo, pathEnv(env, ['codex']), 'doctor'));
   assert.equal(codexOnly.checks[4].status, 'missing');
-  assert.match(codexOnly.checks[4].detail, /^codex \(its own default model; agent: auto\) at .*, but done-done cannot start codex yet \(claude, opencode, pi and gemini for now\)/);
+  assert.match(codexOnly.checks[4].detail, /^codex \(its own default model; set agent_config\.codex\.model to choose one; agent: auto\) at .*, but done-done cannot start codex yet \(claude, opencode, pi and gemini for now\)/);
   assert.equal(codexOnly.checks[7].status, 'missing', 'an author done-done cannot start is no author');
   assert.match(codexOnly.checks[7].detail, /^claude judge \(model claude-haiku-5-5\), and no startable author agent is installed/);
   const two = toon(doctorIn(repo, pathEnv(env, ['codex', 'opencode']), 'doctor'));
@@ -2258,7 +2258,7 @@ test('doctor --probe asks pi on stdin (never in argv) with tools off and a scrat
   const r = doctorIn(repo, s.env, 'doctor', '--probe');
   assert.equal(r.code, 0, r.out);
   const d = toon(r);
-  assert.match(d.checks.find((x) => x.check === 'agent').detail, /^pi \(its own default model; from config\)/);
+  assert.match(d.checks.find((x) => x.check === 'agent').detail, /^pi \(its own default model; set agent_config\.pi\.model to choose one; from config\)/);
   assert.equal(d.checks.find((x) => x.check === 'probe').status, 'ok');
   const [call] = s.calls();
   assert.equal(call.agent, 'pi');
@@ -2322,7 +2322,7 @@ test('agent auto picks pi over gemini, and doctor warns that pi has no permissio
   const { repo, env } = setup();
   const s = stubPiGemini(env);
   const d = toon(doctorIn(repo, s.env, 'doctor'));
-  assert.match(d.checks.find((x) => x.check === 'agent').detail, /^pi \(its own default model; agent: auto\) at /);
+  assert.match(d.checks.find((x) => x.check === 'agent').detail, /^pi \(its own default model; set agent_config\.pi\.model to choose one; agent: auto\) at /);
   const gate = d.checks.find((x) => x.check === 'tool_gate');
   assert.equal(gate.status, 'warning');
   assert.equal(gate.detail, 'pi has no permission gate: every pi tool runs without approval');

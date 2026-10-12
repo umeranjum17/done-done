@@ -1,27 +1,31 @@
 #!/usr/bin/env node
-import { execFileSync, spawnSync } from 'node:child_process';
+import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import { createHash, randomBytes } from 'node:crypto';
-import { appendFileSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
+import { appendFileSync, closeSync, existsSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, isAbsolute, join, matchesGlob, relative, resolve, sep } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import { encode } from '@toon-format/toon';
 import { Document, parseDocument } from 'yaml';
-import { loadConfig, UsageError } from './config.js';
+import { home, loadConfig, parseDuration, UsageError } from './config.js';
 import { judge } from './judge.js';
 import { checkMedia } from './media.js';
-const PASS = 0, FAIL = 1, USAGE = 2, INCONCLUSIVE = 3;
+const PASS = 0, FAIL = 1, USAGE = 2, INCONCLUSIVE = 3, WAITING = 4;
 // The shape of a journey, so a new user or agent can write one without opening the reference.
 // done-done sets DONE_DONE_EVIDENCE_ROOT (the run's own folder) and replaces ${RUN_ID}, so the example works for any evidence root.
 const journeyExample = 'journeys: { smoke: { command: "<drive the real app> > $DONE_DONE_EVIDENCE_ROOT/${RUN_ID}.log" } }';
 const JOURNEYS_TEXT = `journeys (.done-done.yaml): the command runs with DONE_DONE_EVIDENCE_ROOT (this run's own new folder in the evidence
   root) and DONE_DONE_RUN_ID set, and \${RUN_ID} in it is replaced; it must write its files into that folder, e.g.
-  ${journeyExample}`;
+  ${journeyExample}
+  timeout (journeys.<name>.timeout): how long a verify run may drive the journey, e.g. 90s or 30m (default 30m); past it the journey is killed and the run is inconclusive`;
 const CHECKS_TEXT = `Checks block (--from): the newest "## Checks" heading, then these four keys, each at the start of a line:
   outcome: <what a user can now do>
   repro: <command that failed before and passes now, or n/a; a fix PR needs one>
   proof: <the command or path that drove the real product; name the repo's verify-<app> skill, or say "no verify skill">
   evidence: <the evidence file paths, or "not proven: <cause>">`;
+const RUNS_TEXT = `runs: each verify run lives in $DONE_DONE_HOME/runs/<app>/<run-id> (run.json, events.jsonl, logs/<step>.log)
+  and goes on when the command that started it ends; its steps are resolve, drive (the journey), check, receipt, report`;
 // One table drives `--help` and every `<command> --help`: each command's usage lines and the flags it takes.
 const FLAGS = {
     '-- <command...>': 'run this command instead of a journey; ${RUN_ID} in it becomes the run id',
@@ -34,6 +38,11 @@ const FLAGS = {
     '--claim-id <id>': 'the claim the evidence proves; evidence already used for another claim id is reuse (default: the current branch, or the PR branch with --from <PR URL>; required on a detached HEAD)',
     '--judge': 'a model says whether each PNG/JPEG capture shows the outcome (off by default; or judge.enabled: true)',
     '--verify <head>': 'read-only: verify the receipt recorded for <head>',
+    '--outcome "<what a user can now do>"': 'the outcome the run must prove',
+    '--wait': 'wait until the run ends (the default)',
+    '--no-wait': 'start the run and return at once (exit 4); read it later with done-done status',
+    '--foreground': 'run every step in this process instead of a detached runner (use in CI)',
+    '--run <run-id>': 'the run to show (default: the newest run of this checkout)',
     '--agent <agent>': 'also add a SessionStart hook to .claude/settings.json (claude) or .codex/hooks.json (codex) that shows `done-done` to each session, or a plugin to .opencode/plugins that adds it to the first message of each opencode session (opt-in)',
 };
 // `more` is the reference text a command needs beyond its flags, shared with the top-level help.
@@ -76,10 +85,23 @@ const COMMANDS = {
         flags: ['--outcome "<claim>"', '--from <file | - | PR URL>', '--claim-id <id>', '--trusted-ref <ref>', '--judge', '--verify <head>'],
         more: [CHECKS_TEXT],
     },
+    verify: {
+        usage: [
+            ['done-done verify [<journey>] --outcome "<what a user can now do>" [--claim-id <id>]', 'drive the journey in a run that outlives this command, check its evidence and record a receipt'],
+            ['done-done verify [<journey>] --outcome "<claim>" --no-wait | --wait | --foreground', 'return at once, wait until the run ends (default), or run in this process (CI)'],
+        ],
+        flags: ['--outcome "<what a user can now do>"', '--claim-id <id>', '--wait', '--no-wait', '--foreground'],
+        more: [RUNS_TEXT],
+    },
+    status: {
+        usage: [['done-done status [--run <run-id>]', "show a verify run's steps, result and next step"]],
+        flags: ['--run <run-id>'],
+        more: [RUNS_TEXT],
+    },
 };
 const rows = (pairs, width = Math.max(...pairs.map(([a]) => a.length)) + 3) => pairs.map(([a, b]) => `  ${a}${' '.repeat(Math.max(3, width - a.length))}${b}`).join('\n');
 const GLOBAL_TEXT = `global flags: --json (JSON instead of TOON), --full (do not truncate lists), --help (this command's usage)
-exit codes: 0 pass, 1 fail, 2 usage or config error, 3 inconclusive`;
+exit codes: 0 pass, 1 fail, 2 usage or config error, 3 inconclusive, 4 the run is still running (verify, status)`;
 const USAGE_TEXT = `install: npm install -g --prefix ~/.local --allow-git=all github:umeranjum17/done-done-axi (installs done-done-axi and done-done), or run npx -y --allow-git=all github:umeranjum17/done-done-axi <command>
 usage:
 ${rows([['done-done', "show this repo's config state and the next step"], ...Object.values(COMMANDS).flatMap((c) => c.usage)], 46)}
@@ -105,6 +127,7 @@ let FULL = false;
 function emit(value) {
     process.stdout.write(`${OUT === 'json' ? JSON.stringify(value, null, 2) : encode(value)}\n`);
 }
+const emitted = (r) => (emit(r.result), r.code);
 // Compact results cap long lists; --full returns every row.
 function cap(items) {
     return FULL || items.length <= COMPACT_LIST ? { items, omitted: 0 } : { items: items.slice(0, COMPACT_LIST), omitted: items.length - COMPACT_LIST };
@@ -174,11 +197,11 @@ function writeRecord(cfg, rec) {
     renameSync(`${path}.tmp`, path);
     return path;
 }
-function openRun(repo, cfg, journey, command) {
+// The random suffix keeps two runs in the same second at one commit apart; mkdir without recursive refuses a reused id.
+const newRunId = (commit) => `${new Date().toISOString().replace(/[-:]/g, '').replace(/\.\d+Z$/, 'Z')}-${commit.slice(0, 8)}-${randomBytes(3).toString('hex')}`;
+function openRun(repo, cfg, journey, command, id) {
     const h = head(repo);
-    const stamp = new Date().toISOString().replace(/[-:]/g, '').replace(/\.\d+Z$/, 'Z');
-    // The random suffix keeps two runs in the same second at one commit apart; mkdir without recursive refuses a reused id.
-    const runId = `${stamp}-${h.commit.slice(0, 8)}-${randomBytes(3).toString('hex')}`;
+    const runId = id ?? newRunId(h.commit);
     mkdirSync(cfg.evidence.root, { recursive: true });
     mkdirSync(runDir(cfg, runId));
     return { schema: 1, run_id: runId, journey, command, ...h, started_at: new Date().toISOString(), ended_at: null, exit: null, files: [] };
@@ -228,8 +251,7 @@ function closeRun(repo, cfg, rec) {
         if (!recorded)
             result.help.push(`this command's recipe is not in the repo (.done-done.yaml journeys); record it with: done-done init --journey <name> -- <command>`);
     }
-    emit(result);
-    return reason ? FAIL : PASS;
+    return { code: reason ? FAIL : PASS, result, reason };
 }
 function cmdRun(argv) {
     const dash = argv.indexOf('--');
@@ -247,7 +269,7 @@ function cmdRun(argv) {
         const rec = JSON.parse(readFileSync(path, 'utf8'));
         if (rec.ended_at)
             throw new UsageError(`run ${values.close} is already closed`);
-        return closeRun(repo, cfg, rec);
+        return emitted(closeRun(repo, cfg, rec));
     }
     const journey = positionals[0] ?? null;
     if (positionals.length > 1)
@@ -285,7 +307,7 @@ function cmdRun(argv) {
         env: { ...process.env, DONE_DONE_RUN_ID: rec.run_id, DONE_DONE_EVIDENCE_ROOT: runDir(cfg, rec.run_id) },
     });
     rec.exit = r.status ?? 1;
-    return closeRun(repo, cfg, rec);
+    return emitted(closeRun(repo, cfg, rec));
 }
 // The newest "## Checks" block: outcome, repro, proof and evidence lines.
 function claimFromChecks(body, title, repo, cfg, out) {
@@ -385,8 +407,9 @@ async function runCheck(argv) {
     }
     if (claim?.notProven) {
         const allowed = cfg.checks.not_proven === 'allow' && cfg.trusted;
-        const rep = report(findings.concat(allowed ? [] : [{ level: 'inconclusive', why: `not proven: ${claim.notProven}` }]), [], { cfg, repo, claim: claim.outcome, source: values.from, notProven: true }, allowed ? 'not proven (allowed by trusted config)' : '');
-        return { code: rep.code, result: rep.result, claim: claim?.outcome, files: [], cited: [], head: now };
+        const all = findings.concat(allowed ? [] : [{ level: 'inconclusive', why: `not proven: ${claim.notProven}` }]);
+        const rep = report(all, [], { cfg, repo, claim: claim.outcome, source: values.from, notProven: true }, allowed ? 'not proven (allowed by trusted config)' : '');
+        return { code: rep.code, result: rep.result, claim: claim?.outcome, files: [], cited: [], head: now, findings: all };
     }
     const files = claim?.files ?? [];
     const records = loadRecords(cfg);
@@ -494,7 +517,7 @@ async function runCheck(argv) {
         mkdirSync(dirname(ledger), { recursive: true });
         appendFileSync(ledger, hashes.filter((h) => !used.get(h)?.has(claimId)).map((h) => `${h} ${claimId}\n`).join(''));
     }
-    return { code: rep.code, result: rep.result, judge: judged, claim: claim?.outcome, files, cited, head: now };
+    return { code: rep.code, result: rep.result, judge: judged, claim: claim?.outcome, files, cited, head: now, findings };
 }
 async function cmdCheck(argv) {
     const r = await runCheck(argv);
@@ -595,33 +618,20 @@ async function cmdReceipt(argv) {
     }
     if (!rest.length)
         throw new UsageError('receipt needs a claim (--outcome "<claim>" <files...> or --from <file|->) or --verify <head>');
-    const r = await runCheck(rest);
-    if (r.code !== PASS) {
-        emit({ ...r.result, command: 'receipt', reason: 'the check did not pass, so no receipt was written' });
-        return r.code;
-    }
-    if (r.head.dirty) {
-        emit({ command: 'receipt', result: 'fail', head: r.head.commit, claim: r.claim, reason: 'tracked files have uncommitted changes; commit or revert them, then re-run receipt', help: ['Commit the tracked changes, then: done-done receipt --from <file|->'] });
-        return FAIL;
-    }
-    if (!r.cited.length) {
-        emit({ command: 'receipt', result: 'fail', head: r.head.commit, claim: r.claim, reason: 'the check cited no evidence files, so no receipt was written; a receipt must bind at least one cited evidence file', help: ['Cite real proof: done-done receipt --outcome "<claim>" <files...>'] });
-        return FAIL;
-    }
+    return emitted(recordReceipt(repo, cfg, await runCheck(rest)));
+}
+// Write the receipt for a check that passed on a clean tree and cited evidence, or say why none was written.
+function recordReceipt(repo, cfg, r) {
+    if (r.code !== PASS)
+        return { code: r.code, result: { ...r.result, command: 'receipt', reason: 'the check did not pass, so no receipt was written' } };
+    if (r.head.dirty)
+        return { code: FAIL, result: { command: 'receipt', result: 'fail', head: r.head.commit, claim: r.claim, reason: 'tracked files have uncommitted changes; commit or revert them, then re-run receipt', help: ['Commit the tracked changes, then: done-done receipt --from <file|->'] } };
+    if (!r.cited.length)
+        return { code: FAIL, result: { command: 'receipt', result: 'fail', head: r.head.commit, claim: r.claim, reason: 'the check cited no evidence files, so no receipt was written; a receipt must bind at least one cited evidence file', help: ['Cite real proof: done-done receipt --outcome "<claim>" <files...>'] } };
     const rec = { schema: 1, repo: cfg.app, head: r.head.commit, tree: r.head.tree, claim: r.claim ?? '', result: 'pass', at: new Date().toISOString(), files: r.cited };
     const path = writeReceipt(cfg, rec);
-    emit({
-        command: 'receipt',
-        result: 'pass',
-        head: r.head.commit,
-        tree: r.head.tree,
-        claim: rec.claim,
-        files: rec.files.length,
-        receipt: shown(repo, path),
-        ...(r.judge && { judge: r.judge }),
-        help: [`Verify this receipt (CI or merge): done-done receipt --verify ${r.head.commit}`],
-    });
-    return PASS;
+    const result = { command: 'receipt', result: 'pass', head: r.head.commit, tree: r.head.tree, claim: rec.claim, files: rec.files.length, receipt: shown(repo, path) };
+    return { code: PASS, result: { ...result, ...(r.judge && { judge: r.judge }), help: [`Verify this receipt (CI or merge): done-done receipt --verify ${r.head.commit}`] } };
 }
 // Why evidence from `from` no longer proves `to`, or '' if it still does.
 function staleness(repo, cfg, from, to) {
@@ -688,6 +698,249 @@ function report(findings, files, ctx, note = '') {
         result.findings_omitted = rows.omitted;
     result.help = checkHelp(code, files, ctx);
     return { code, result };
+}
+const CLI_PATH = fileURLToPath(import.meta.url);
+const HEARTBEAT_MS = 5_000;
+// A run that never recorded its runner's pid this long after it was created has no runner.
+const STALE_MS = 60_000;
+const runsRoot = (app) => join(home(), 'runs', app);
+const now = () => new Date().toISOString();
+const errorText = (e) => (e.stderr || e.message || String(e)).trim();
+const killGroup = (pgid) => {
+    try {
+        process.kill(-pgid, 'SIGKILL');
+    }
+    catch {
+        // The group already exited.
+    }
+};
+const createOnce = (path) => {
+    try {
+        writeFileSync(path, '', { flag: 'wx' });
+        return true;
+    }
+    catch {
+        return false;
+    }
+};
+const evidenceOf = (repo, cfg, rec) => rec.files.map((f) => citable(repo, join(cfg.evidence.root, f.path)));
+function saveRun(dir, run) {
+    run.updated = now();
+    writeFileSync(join(dir, 'run.json.tmp'), `${JSON.stringify(run, null, 2)}\n`);
+    renameSync(join(dir, 'run.json.tmp'), join(dir, 'run.json'));
+}
+const loadRun = (dir) => JSON.parse(readFileSync(join(dir, 'run.json'), 'utf8'));
+const logEvent = (dir, e) => appendFileSync(join(dir, 'events.jsonl'), `${JSON.stringify({ at: now(), ...e })}\n`);
+// The verify steps, all plain code: resolve the head, drive the journey, check its evidence, record a receipt, report.
+async function runVerify(dir) {
+    const run = loadRun(dir);
+    const started = now();
+    // The lock refuses a second runner on this run; it stays, so a finished run is never run again.
+    writeFileSync(join(dir, 'runner.lock'), `${process.pid} ${started}\n`, { flag: 'wx' });
+    run.status = 'running';
+    run.runner = { pid: process.pid, started, heartbeat: started };
+    saveRun(dir, run);
+    logEvent(dir, { status: 'running', pid: process.pid });
+    const beat = setInterval(() => {
+        run.runner.heartbeat = now();
+        saveRun(dir, run);
+    }, HEARTBEAT_MS);
+    let step;
+    const set = (s, status, extra = {}) => {
+        Object.assign(s, { status, [status === 'running' ? 'started' : 'ended']: now() }, extra);
+        saveRun(dir, run);
+        logEvent(dir, { step: s.name, status });
+    };
+    const begin = (name) => set((step = run.steps.find((s) => s.name === name)), 'running');
+    const log = (name, result) => writeFileSync(join(dir, 'logs', `${name}.log`), `${encode(result)}\n`);
+    const finish = (result, reason) => {
+        for (const s of run.steps)
+            if (s.status === 'pending' && s.name !== 'report')
+                s.status = 'skipped';
+        begin('report');
+        Object.assign(run, { result, reason, status: 'completed' });
+        set(step, 'completed');
+    };
+    try {
+        begin('resolve');
+        const cfg = loadConfig(run.repo);
+        const journey = cfg.journeys[run.journey];
+        const command = journey?.command;
+        const timeout = journey?.timeout ?? '30m';
+        if (!command)
+            throw new Error(`journey ${run.journey} is not in .done-done.yaml`);
+        const limit = parseDuration(timeout);
+        if (limit === null)
+            throw new Error(`journeys.${run.journey}.timeout must be a duration such as 30m or 90s, not ${timeout}`);
+        set(step, 'completed');
+        begin('drive');
+        const rec = openRun(run.repo, cfg, run.journey, command.replaceAll('${RUN_ID}', run.run_id), run.run_id);
+        const fd = openSync(join(dir, 'logs', 'drive.log'), 'a');
+        // An async child keeps the heartbeat going while the journey runs. The journey gets its own process group, so a
+        // timeout or a dead runner can kill it and everything it started.
+        const child = spawn(rec.command, { cwd: run.repo, shell: true, detached: true, stdio: ['ignore', fd, fd], env: { ...process.env, DONE_DONE_RUN_ID: rec.run_id, DONE_DONE_EVIDENCE_ROOT: runDir(cfg, rec.run_id) } });
+        run.runner.journey_pgid = child.pid;
+        saveRun(dir, run);
+        let timedOut = false;
+        const timer = setTimeout(() => {
+            timedOut = true;
+            killGroup(child.pid);
+        }, limit);
+        rec.exit = await new Promise((done) => child.on('close', (code) => done(code ?? 1)));
+        clearTimeout(timer);
+        closeSync(fd);
+        const sealed = closeRun(run.repo, cfg, rec);
+        run.record = join(recordsDir(cfg), `${rec.run_id}.json`);
+        set(step, sealed.code === PASS ? 'completed' : 'failed', { exit: rec.exit, outputs: evidenceOf(run.repo, cfg, rec) });
+        if (timedOut)
+            return finish('inconclusive', `drive: journey timed out after ${timeout}`);
+        if (sealed.code !== PASS)
+            return finish('fail', `drive: ${sealed.reason}`);
+        begin('check');
+        const files = rec.files.map((f) => join(cfg.evidence.root, f.path));
+        const checked = await runCheck(['--outcome', run.claim, ...files, ...(run.claim_id ? ['--claim-id', run.claim_id] : [])]);
+        const logged = { ...checked.result, findings: checked.findings };
+        delete logged.findings_omitted;
+        log('check', logged);
+        set(step, checked.code === PASS ? 'completed' : 'failed', { exit: checked.code, findings: checked.findings });
+        if (checked.code !== PASS)
+            return finish(checked.code === FAIL ? 'fail' : 'inconclusive', `check: ${checked.findings[0]?.why ?? 'did not pass'}`);
+        begin('receipt');
+        const receipt = recordReceipt(run.repo, cfg, checked);
+        log('receipt', receipt.result);
+        run.receipt = receipt.result.receipt;
+        set(step, receipt.code === PASS ? 'completed' : 'failed', { exit: receipt.code });
+        if (receipt.code !== PASS)
+            return finish('fail', `receipt: ${receipt.result.reason}`);
+        finish('pass');
+    }
+    catch (e) {
+        for (const s of run.steps)
+            if (s.status === 'pending')
+                s.status = 'skipped';
+        Object.assign(run, { status: 'failed', reason: `${step?.name}: ${errorText(e)}` });
+        if (step)
+            set(step, 'failed');
+        else
+            saveRun(dir, run);
+    }
+    finally {
+        clearInterval(beat);
+    }
+}
+// EPERM: the pid is alive but not ours to signal. A pid reused by another process still reads as alive: the known limit of a pid check.
+const alive = (pid) => {
+    try {
+        return process.kill(pid, 0);
+    }
+    catch (e) {
+        return e.code === 'EPERM';
+    }
+};
+// One run as status shows it. A run still marked running whose runner is gone is shown as failed at its step.
+// `gone`: the caller saw its runner child exit, which also covers a runner that died before it wrote its pid.
+function showRun(dir, cfg, command, gone = false) {
+    const run = loadRun(dir);
+    const rec = run.record ? JSON.parse(readFileSync(run.record, 'utf8')) : undefined;
+    const at = run.steps.find((s) => s.status === 'running') ?? run.steps.find((s) => s.status === 'pending');
+    let { status, reason } = run;
+    const open = status === 'pending' || status === 'running';
+    if (open && (gone || (run.runner ? !alive(run.runner.pid) : Date.now() - Date.parse(run.created) > STALE_MS))) {
+        status = 'failed';
+        const beat = run.runner && Math.round((Date.now() - Date.parse(run.runner.heartbeat)) / 1000);
+        reason = `the runner died at step ${at?.name}${run.runner ? ` (pid ${run.runner.pid}, last heartbeat ${beat}s ago)` : ' before it started'}`;
+        if (run.runner?.journey_pgid && createOnce(join(dir, 'journey.killed')))
+            killGroup(run.runner.journey_pgid);
+    }
+    const code = status === 'pending' || status === 'running' ? WAITING : status === 'failed' || run.result === 'fail' ? FAIL : run.result === 'inconclusive' ? INCONCLUSIVE : PASS;
+    const again = `done-done verify ${run.journey} --outcome ${arg(run.claim)}${run.claim_id ? ` --claim-id ${arg(run.claim_id)}` : ''}`;
+    const ev = cap(rec ? evidenceOf(run.repo, cfg, rec) : []);
+    const result = { command, run_id: run.run_id, kind: run.kind, status };
+    if (code === WAITING)
+        result.step = at?.name;
+    if (run.result && status === 'completed')
+        result.result = run.result;
+    if (reason)
+        result.reason = reason;
+    Object.assign(result, { claim: run.claim, journey: run.journey, repo: run.repo, ...(rec && { head: rec.commit }), steps: run.steps.map((s) => ({ name: s.name, status: status === 'failed' && s === at ? 'failed' : s.status })) });
+    if (ev.items.length)
+        result.evidence = ev.items;
+    if (ev.omitted)
+        result.evidence_omitted = ev.omitted;
+    if (run.receipt)
+        result.receipt = run.receipt;
+    result.run = shown(run.repo, dir);
+    result.help =
+        code === WAITING ? [`The run goes on without this command; read it later: done-done status --run ${run.run_id}`]
+            : code === PASS ? [`Verify this receipt (CI or merge): done-done receipt --verify ${rec.commit}`]
+                : [`Read the step logs in ${shown(run.repo, join(dir, 'logs'))}`, `Fix the cause, commit, then start a new run: ${again}`];
+    emit(result);
+    return code;
+}
+async function cmdVerify(argv) {
+    const { values, positionals } = parseArgs({
+        args: argv,
+        options: { outcome: { type: 'string' }, 'claim-id': { type: 'string' }, wait: { type: 'boolean' }, 'no-wait': { type: 'boolean' }, foreground: { type: 'boolean' } },
+        allowPositionals: true,
+    });
+    if (!values.outcome?.trim())
+        throw new UsageError('verify needs --outcome "<what a user can now do>"');
+    if (positionals.length > 1)
+        throw new UsageError('verify takes at most one journey name');
+    if ([values.wait, values['no-wait'], values.foreground].filter(Boolean).length > 1)
+        throw new UsageError('pass only one of --wait, --no-wait and --foreground');
+    const repo = repoRoot();
+    const cfg = loadConfig(repo);
+    const names = Object.keys(cfg.journeys);
+    const journey = positionals[0] ?? (names.length === 1 ? names[0] : undefined);
+    if (!journey && names.length)
+        throw new UsageError(`verify needs a journey name; .done-done.yaml defines: ${names.join(', ')}`, `Run: done-done verify <${names.join('|')}> --outcome "<what a user can now do>"`);
+    if (!journey)
+        throw new UsageError('verify needs a journey, and .done-done.yaml defines none', 'Record one: done-done init --journey <name> -- <command that drives the real app>');
+    if (!cfg.journeys[journey])
+        throw new UsageError(`unknown journey ${journey}; .done-done.yaml defines: ${names.join(', ')}`);
+    if (values['claim-id']?.trim() === '')
+        throw new UsageError('--claim-id needs a non-empty id');
+    if (!values['claim-id'] && !git(repo, 'branch', '--show-current'))
+        throw new UsageError('HEAD is detached, so no branch names this claim; pass --claim-id <id>');
+    const id = newRunId(git(repo, 'rev-parse', 'HEAD'));
+    const dir = join(runsRoot(cfg.app), id);
+    mkdirSync(join(dir, 'logs'), { recursive: true });
+    const created = now();
+    const run = {
+        schema: 2, run_id: id, kind: 'verify', app: cfg.app, repo, journey, claim: values.outcome, claim_id: values['claim-id'] ?? null, status: 'pending',
+        steps: ['resolve', 'drive', 'check', 'receipt', 'report'].map((name) => ({ name, status: 'pending' })), created, updated: created,
+    };
+    saveRun(dir, run);
+    logEvent(dir, { status: 'pending' });
+    if (values.foreground)
+        await runVerify(dir);
+    else {
+        // Detached, with no pipe back to this process, so the runner goes on when this command or its shell ends.
+        const fd = openSync(join(dir, 'logs', 'runner.log'), 'a');
+        const child = spawn(process.execPath, [CLI_PATH, '__runner', dir], { cwd: repo, detached: true, stdio: ['ignore', fd, fd] });
+        child.unref();
+        closeSync(fd);
+        // --wait (the default) holds this command until the run ends; --no-wait returns at once.
+        if (!values['no-wait'])
+            while (['pending', 'running'].includes(loadRun(dir).status) && alive(child.pid))
+                await new Promise((r) => setTimeout(r, 200));
+        return showRun(dir, cfg, 'verify', !alive(child.pid));
+    }
+    return showRun(dir, cfg, 'verify');
+}
+function cmdStatus(argv) {
+    const { values } = parseArgs({ args: argv, options: { run: { type: 'string' } } });
+    const repo = repoRoot();
+    const cfg = loadConfig(repo);
+    const root = runsRoot(cfg.app);
+    const mine = existsSync(root) ? readdirSync(root).filter((n) => existsSync(join(root, n, 'run.json'))).map((n) => loadRun(join(root, n))).filter((r) => r.repo === repo) : [];
+    const id = values.run ?? mine.sort((a, b) => a.created.localeCompare(b.created)).pop()?.run_id;
+    if (!id)
+        throw new UsageError(`no runs for ${cfg.app} in this checkout yet`, `Start one: done-done verify ${Object.keys(cfg.journeys).length > 1 ? '<journey> ' : ''}--outcome "<what a user can now do>"`);
+    if (!/^[\w-]+$/.test(id) || !existsSync(join(root, id, 'run.json')))
+        throw new UsageError(`no run ${id} in ${root}`, 'Show the newest run: done-done status');
+    return showRun(join(root, id), cfg, 'status');
 }
 // Append `<rel>/` to .gitignore unless git already ignores it. Never rewrites existing bytes.
 function ensureIgnored(repo, rel) {
@@ -1191,6 +1444,14 @@ async function main(argv) {
             return await cmdCheck(rest);
         if (cmd === 'receipt')
             return await cmdReceipt(rest);
+        if (cmd === 'verify')
+            return await cmdVerify(rest);
+        if (cmd === 'status')
+            return cmdStatus(rest);
+        if (cmd === '__runner') {
+            await runVerify(rest[0]);
+            return PASS;
+        }
         if (cmd === '--help' || cmd === '-h' || cmd === 'help') {
             console.log(USAGE_TEXT);
             return PASS;

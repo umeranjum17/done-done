@@ -1111,10 +1111,10 @@ function cmdAbort(argv: string[]): number {
   const ours = !!run.runner && isOurRunner(run.runner.pid, dir);
   if (ours) {
     try { process.kill(run.runner!.pid, 'SIGKILL'); } catch { /* exited since the check */ }
-    if (run.runner!.journey_pgid) killGroup(run.runner!.journey_pgid);
   }
   const latest = loadRun(dir);
   if (closed(latest)) return FAIL;
+  if (ours && latest.runner?.journey_pgid) killGroup(latest.runner.journey_pgid);
   latest.status = 'cancelled';
   latest.reason = latest.runner && !ours ? `aborted; pid ${latest.runner.pid} is not this run's runner, so nothing was killed` : 'aborted';
   logEvent(dir, { status: 'cancelled' });

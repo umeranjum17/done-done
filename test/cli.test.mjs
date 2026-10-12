@@ -2052,6 +2052,15 @@ test('a rerun whose check fails does not carry the earlier receipt', () => {
   assert.notEqual(s.steps.find((x) => x.name === 'receipt').status, 'completed');
 });
 
+test('a rerun does not reuse a drive recorded from a dirty tree', () => {
+  const t = setup('app: notes\nevidence:\n  root: .proof\n  ignore_paths: ["docs/**"]\n  allow_dirty: true\njourneys:\n  shots:\n    command: node make-shots.mjs ${RUN_ID}\n');
+  writeFileSync(join(t.repo, 'src', 'app.js'), 'export const app = 2;\n');
+  const a = toon(t.dd('verify', 'shots', '--outcome', 'home renders', '--foreground'));
+  execFileSync('git', ['checkout', '--', 'src/app.js'], { cwd: t.repo, env: t.env, stdio: 'pipe' });
+  const r = toon(t.dd('rerun', '--run', a.run_id));
+  assert.doesNotMatch(readFileSync(join(t.env.DONE_DONE_HOME, 'runs', 'notes', r.run_id, 'events.jsonl'), 'utf8'), /"reused":true/);
+});
+
 // A run as `verify` left it, rewritten to pending with no runner: the state a run is in before its runner boots.
 function pendingRun(t, edit = () => {}) {
   const src = toon(t.dd('verify', 'shots', '--outcome', 'home renders', '--foreground'));

@@ -1,0 +1,18 @@
+#!/bin/sh
+# merge-gate <task-id> <worktree> <head> <pr-url|->
+# Run before a merge: it passes only when done-done passes the task's Checks block and the receipt for <head>.
+# A PR is checked against the rules on the default branch; a local-only task (-) against
+# $FM_HOME/data/<task-id>/checks.md. A nonzero exit refuses the merge; done-done's output says why.
+set -eu
+[ $# -eq 4 ] || { echo "usage: merge-gate <task-id> <worktree> <head> <pr-url|->" >&2; exit 2; }
+id=$1 head=$3 pr=$4
+cd "$2" || exit 2
+if [ "$pr" = - ]; then
+  done-done check --from "${FM_HOME:?merge-gate: FM_HOME is not set}/data/$id/checks.md"
+else
+  ref=$(git symbolic-ref -q --short refs/remotes/origin/HEAD) || ref=origin/main
+  git cat-file -e "$ref:.done-done.yaml" 2>/dev/null ||
+    echo "merge-gate: no .done-done.yaml at $ref, so done-done uses its default rules; merge the config to $ref first" >&2
+  done-done check --from "$pr" --trusted-ref "$ref"
+fi
+done-done receipt --verify "$head"

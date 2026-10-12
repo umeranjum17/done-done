@@ -147,6 +147,23 @@ Run `done-done` with no arguments to see the current config and the next step.
 
 Every answer is an exit code: **0** pass, **1** fail, **2** usage or config error, **3** can't tell either way.
 
+## Use with Firstmate or another agent fleet
+
+[Firstmate](https://github.com/kunchenguid/firstmate) hands tasks to agent workers and merges their work. done-done ships what those workers need to prove each task, and what the merge needs to check that proof, in [`integrations/firstmate/`](integrations/firstmate/).
+
+With the CLI installed (Quick start step 1), install the skill once per machine, then, from your done-done clone, copy two files into your Firstmate home:
+
+```sh
+npx skills add umeranjum17/done-done --skill done-done -g -y
+cat integrations/firstmate/brief-include.md >> "$FM_HOME/config/brief-include.md"
+cp integrations/firstmate/merge-gate "$FM_HOME/config/merge-gate"
+```
+
+- **`brief-include.md`**: Firstmate adds `config/brief-include.md` to every worker brief. It tells the worker to set up done-done, run a journey on its committed change, write a `## Checks` block, pass `check`, record a `receipt`, and copy the proof out of the worktree before teardown deletes it.
+- **`merge-gate`** (optional): `merge-gate <task-id> <worktree> <head> <pr-url|->`. In the worktree, it runs `done-done check --from <PR URL> --trusted-ref origin/<default branch>`, or for a local-only task (`-`) `done-done check --from $FM_HOME/data/<task-id>/checks.md`, then `done-done receipt --verify <head>`. A nonzero exit refuses the merge, and done-done's output says why. Upstream Firstmate does not call a merge gate yet, so this file has no effect until it does; you can run it by hand before a merge. With a PR URL it reads done-done's rules from your default branch, so merge `.done-done.yaml` there before you rely on it.
+
+Another fleet works the same way: add the include text to whatever your workers read first, and run `merge-gate` before each merge, with `FM_HOME` set to the folder that holds `data/<task-id>/checks.md` for local-only tasks.
+
 ## Learn more
 
 - [Full reference](docs/reference.md): every `init`, `run`, `check` and `receipt` option, the Checks block rules, each file check, and both config files.

@@ -463,6 +463,44 @@ function bareRepo(dirName = 'repo') {
   return { dir, repo, env, sh, dd };
 }
 
+test('the Firstmate merge gate passes fresh proof with a receipt, and refuses a missing receipt or stale proof', () => {
+  const { dir, repo, env, sh, dd, head, shots } = setup();
+  const bin = join(dir, 'bin');
+  mkdirSync(bin);
+  writeFileSync(join(bin, 'done-done'), `#!/bin/sh\nexec ${JSON.stringify(process.execPath)} ${JSON.stringify(CLI)} "$@"\n`, { mode: 0o755 });
+  // A stand-in `gh` that answers `gh pr view <url> --json body,title` with the PR body.
+  writeFileSync(join(bin, 'gh'), `#!/bin/sh\ncat ${JSON.stringify(join(dir, 'pr.json'))}\n`, { mode: 0o755 });
+  const fm = join(dir, 'fm');
+  const gate = (pr) => {
+    const r = spawnSync(join(dirname(CLI), '..', 'integrations', 'firstmate', 'merge-gate'), ['t1', repo, head(), pr], {
+      encoding: 'utf8', env: { ...env, FM_HOME: fm, PATH: `${bin}:${env.PATH}` },
+    });
+    return { code: r.status, out: r.stdout + r.stderr };
+  };
+  const { files } = shots();
+  const checks = `## Checks\noutcome: home and settings render\nrepro: n/a: no bug\nproof: no verify skill - \`done-done run shots\`\nevidence: ${files.join(', ')}\n`;
+  mkdirSync(join(fm, 'data', 't1'), { recursive: true });
+  writeFileSync(join(fm, 'data', 't1', 'checks.md'), checks);
+  const missing = gate('-');
+  assert.equal(missing.code, 1, missing.out);
+  assert.match(missing.out, /result: pass[\s\S]*no receipt for/, 'the check passes, then the missing receipt refuses');
+  assert.equal(dd('receipt', '--from', join(fm, 'data', 't1', 'checks.md')).code, 0);
+  const pass = gate('-');
+  assert.equal(pass.code, 0, pass.out);
+  assert.match(pass.out, /This receipt is valid for this head/);
+  sh('update-ref', 'refs/remotes/origin/main', 'HEAD');
+  sh('symbolic-ref', 'refs/remotes/origin/HEAD', 'refs/remotes/origin/main');
+  writeFileSync(join(dir, 'pr.json'), JSON.stringify({ title: 'feat: settings', body: checks }));
+  const pr = gate('https://github.com/example/notes/pull/1');
+  assert.equal(pr.code, 0, pr.out);
+  writeFileSync(join(repo, 'src', 'app.js'), 'export const app = 2;\n');
+  sh('commit', '-qam', 'change the app');
+  const stale = gate('-');
+  assert.equal(stale.code, 1, stale.out);
+  assert.match(stale.out, /evidence is for commit/);
+  assert.doesNotMatch(stale.out, /command: receipt/, 'a failed check refuses before the receipt is read');
+});
+
 test('init writes a minimal config that keeps evidence outside the repo, and is idempotent', () => {
   const { dir, repo, dd } = bareRepo();
   const r = dd('init');

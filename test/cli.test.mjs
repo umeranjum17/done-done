@@ -2447,6 +2447,24 @@ test('maintain counts a truncated feature file as a notice, not drift', () => {
   assert.deepEqual(m.findings.map((f) => f.kind), ['truncated']);
 });
 
+test('maintain does not read host:port text as a file citation', () => {
+  const { repo, env, sh } = setup();
+  const s = stubAgents(env, JSON.stringify({ drift: [], recipe: 'open it', recipes: [], missing: [] }));
+  const skill = join(repo, '.agents', 'skills', 'verify-notes');
+  mkdirSync(join(skill, 'features'), { recursive: true });
+  mkdirSync(join(repo, 'src'), { recursive: true });
+  writeFileSync(join(repo, 'src', 'app.js'), 'export const app = 1;\n');
+  writeFileSync(join(skill, 'SKILL.md'), '# verify-notes\n\nOpen api.example.com:8443 and app.js:1.\n');
+  writeFileSync(join(skill, 'features', 'README.md'), '# features\n\n- [Home](home.md)\n');
+  writeFileSync(join(skill, 'features', 'home.md'), '# Home\n\nThe API is at api.example.com:8443.\n');
+  sh('add', '-A');
+  sh('commit', '-qm', 'skill');
+  const r = doctorIn(repo, s.env, 'maintain', '--foreground');
+  const m = toon(r);
+  assert.deepEqual([r.code, m.result, m.git_status], [0, 'clean', 'same'], r.out);
+  assert.equal(m.findings?.length ?? 0, 0);
+});
+
 test('maintain reports a dead link, a wrong file:line and drift from read-only readers, and changes nothing', () => {
   const { repo, env, sh } = setup();
   const answer = JSON.stringify({

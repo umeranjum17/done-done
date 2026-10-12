@@ -1,6 +1,7 @@
 import { execFileSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
-import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
+import { dirname, extname, isAbsolute, join, relative, resolve } from 'node:path';
 import { askAgent, selectAgent, supported } from './agents.js';
 // Plan 1.5 shared rules: a per-run call cap and a per-call timeout stop runaway cost.
 const MAX_CALLS = 30;
@@ -13,14 +14,18 @@ const BLOCKING = new Set(['coverage', 'repo-changed']);
 // Notices are listed in the run but do not make the result drift.
 const NOTICE = new Set(['truncated']);
 const git = (cwd, ...args) => execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: 64 << 20 });
-const repoState = (repo) => `${git(repo, 'rev-parse', 'HEAD')}\n${git(repo, 'status', '--porcelain', '--untracked-files=all')}`;
+const sha = (data) => createHash('sha256').update(data).digest('hex');
+const repoState = (repo) => {
+    const untracked = git(repo, 'ls-files', '-z', '--others', '--exclude-standard').split('\0').filter(Boolean);
+    return [git(repo, 'rev-parse', 'HEAD'), git(repo, 'status', '--porcelain', '--untracked-files=all'), git(repo, 'diff', '--binary', 'HEAD'), ...untracked.map((f) => `${f} ${sha(readFileSync(join(repo, f)))}`)].join('\n');
+};
 const lines = (p) => readFileSync(p, 'utf8').split('\n');
 const mdFiles = (dir) => readdirSync(dir, { recursive: true, withFileTypes: true }).filter((e) => e.isFile() && e.name.endsWith('.md')).map((e) => join(e.parentPath, e.name)).sort();
 // A markdown link's local target without its #anchor, or '' for a URL, mail link or bare anchor.
 const LINK = /\[[^\]]*\]\(([^)\s]+)[^)]*\)/g;
 const localTarget = (t) => (/^[a-z][\w+.-]*:/i.test(t) ? '' : t.split('#')[0]);
-// A repo-relative path:line or path:line-line. It is checked only when the path has a / or names a repo file,
-// so host:port text is never read as a citation.
+// A path:line or path:line-line. A path with a / is checked; a bare name is checked only when its extension is one
+// of the tracked files', so host:port text is never read as a citation.
 const CITE = /(?<![\w/.-])((?:[\w.-]+\/)*[\w-][\w.-]*\.[A-Za-z]\w*):(\d+)(?:-(\d+))?\b/g;
 // Why repo-relative `file` has no line `line` (through `end`), or '' when it has.
 function citeProblem(repo, file, line, end = line) {
@@ -37,6 +42,15 @@ function citeProblem(repo, file, line, end = line) {
         return `${file} is not a file in the repository`;
     }
     return line < 1 || end < line || end > n ? `${file} has ${n} lines` : '';
+}
+// Why the cited `name` (a repo-relative path or a bare file name) has no line `line` through `end`, or '' when a tracked
+// match has them. A bare name matches the tracked files whose path ends with it.
+function citeWhy(repo, tracked, name, line, end = line) {
+    const cited = name.includes('/') ? [name] : tracked.filter((p) => p === name || p.endsWith(`/${name}`));
+    if (!cited.length)
+        return `no tracked file is named ${name}`;
+    const whys = cited.map((p) => citeProblem(repo, p, line, end));
+    return whys.includes('') ? '' : whys[0];
 }
 const READER_SCHEMA = {
     type: 'object',
@@ -143,14 +157,13 @@ ${text.slice(0, FEATURE_CHARS)}`;
     // 4 reconcile: plain code checks each file:line the skill and the readers cite; churn comes from git log.
     step = h.begin('reconcile');
     const tracked = git(repo, 'ls-files', '-z').split('\0').filter(Boolean);
+    const exts = new Set(tracked.map((p) => extname(p)));
     for (const f of mdFiles(skill))
         lines(f).forEach((text, i) => {
             for (const m of text.matchAll(CITE)) {
-                const path = m[1];
-                // A bare file name is checked against the tracked files it ends; the line must exist in one of them.
-                const cited = path.includes('/') ? [path] : tracked.filter((p) => p === path || p.endsWith(`/${path}`));
-                const whys = cited.map((p) => citeProblem(repo, p, Number(m[2]), Number(m[3] ?? m[2])));
-                const why = !cited.length ? `no tracked file is named ${path}` : whys.includes('') ? '' : whys[0];
+                if (!m[1].includes('/') && !exts.has(extname(m[1])))
+                    continue;
+                const why = citeWhy(repo, tracked, m[1], Number(m[2]), Number(m[3] ?? m[2]));
                 if (why)
                     add({ kind: 'citation', file: rel(f), line: i + 1, what: `cites ${m[0]}, but ${why}` });
             }
@@ -158,7 +171,7 @@ ${text.slice(0, FEATURE_CHARS)}`;
     const unverified = [];
     for (const r of readers.filter((r) => r.ok)) {
         for (const d of items(r.drift, (x) => isCite(x) && typeof x.claim === 'string' && typeof x.why === 'string')) {
-            const why = citeProblem(repo, d.file, d.line);
+            const why = citeWhy(repo, tracked, d.file, d.line);
             if (why)
                 unverified.push(`${r.feature}: drift "${d.claim}" cites ${d.file}:${d.line}: ${why}`);
             else

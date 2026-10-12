@@ -1,12 +1,16 @@
 #!/bin/sh
-# merge-gate <task-id> <worktree> <head> <pr-url|->
+# merge-gate <task-id> <worktree|-> <head> <pr-url|->
 # Run before a merge: it passes only when done-done passes the task's Checks block and the receipt for <head>.
 # Both a PR and a local-only task (-, read from $FM_HOME/data/<task-id>/checks.md) are checked against the rules
 # on the default branch, never the task's own branch. A nonzero exit refuses the merge; done-done's output says why.
+# A worktree of - means the task recorded no worktree: do not cd, run git and done-done in the current directory
+# (the caller's project clone).
 set -eu
-[ $# -eq 4 ] || { echo "usage: merge-gate <task-id> <worktree> <head> <pr-url|->" >&2; exit 2; }
+[ $# -eq 4 ] || { echo "usage: merge-gate <task-id> <worktree|-> <head> <pr-url|->" >&2; exit 2; }
 id=$1 head=$3 pr=$4
-cd "$2" || exit 2
+if [ "$2" != - ]; then
+  cd "$2" 2>/dev/null || { echo "merge-gate: cannot enter worktree $2" >&2; exit 2; }
+fi
 ref=$(git symbolic-ref -q --short refs/remotes/origin/HEAD) ||
   for ref in origin/main origin/master main master; do
     git rev-parse -q --verify "$ref^{commit}" >/dev/null && break

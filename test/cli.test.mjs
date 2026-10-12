@@ -575,6 +575,33 @@ for (const remote of [true, false]) test(`the Firstmate merge gate reads a local
   assert.match(stale.out, /evidence is for commit/, 'the default branch\'s ignore_paths do not cover src/, so the change makes the proof stale');
 });
 
+test('the Firstmate merge gate treats - as no worktree and refuses a missing worktree', () => {
+  const { dir, repo, env, sh, dd, head, shots } = setup();
+  sh('update-ref', 'refs/remotes/origin/main', 'HEAD');
+  sh('symbolic-ref', 'refs/remotes/origin/HEAD', 'refs/remotes/origin/main');
+  const bin = join(dir, 'bin');
+  mkdirSync(bin);
+  writeFileSync(join(bin, 'done-done'), `#!/bin/sh\nexec ${JSON.stringify(process.execPath)} ${JSON.stringify(CLI)} "$@"\n`, { mode: 0o755 });
+  const fm = join(dir, 'fm');
+  const gate = (worktree, cwd) => {
+    const r = spawnSync(join(dirname(CLI), '..', 'integrations', 'firstmate', 'merge-gate'), ['t3', worktree, head(), '-'], {
+      encoding: 'utf8', env: { ...env, FM_HOME: fm, PATH: `${bin}:${env.PATH}` }, cwd,
+    });
+    return { code: r.status, out: r.stdout + r.stderr };
+  };
+  const { files } = shots();
+  const checks = `## Checks\noutcome: home and settings render\nrepro: n/a: no bug\nproof: no verify skill - \`done-done run shots\`\nevidence: ${files.join(', ')}\n`;
+  mkdirSync(join(fm, 'data', 't3'), { recursive: true });
+  writeFileSync(join(fm, 'data', 't3', 'checks.md'), checks);
+  assert.equal(dd('receipt', '--from', join(fm, 'data', 't3', 'checks.md')).code, 0);
+  const pass = gate('-', repo);
+  assert.equal(pass.code, 0, pass.out);
+  assert.match(pass.out, /This receipt is valid for this head/);
+  const missing = gate(join(dir, 'no-such-worktree'), repo);
+  assert.equal(missing.code, 2, missing.out);
+  assert.match(missing.out, /cannot enter worktree/);
+});
+
 test('init writes a minimal config that keeps evidence outside the repo, and is idempotent', () => {
   const { dir, repo, dd } = bareRepo();
   const r = dd('init');

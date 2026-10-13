@@ -241,6 +241,8 @@ export function knownAgentOf(agent) {
     return AGENTS.find((a) => target === a || (target.startsWith(a) && !/[A-Za-z0-9]/.test(target[a.length]))) ?? agent;
 }
 const adapterFor = (agent) => (agent.startsWith('acp:') ? ACP : Object.hasOwn(ADAPTERS, agent) ? ADAPTERS[agent] : undefined);
+// Why an agent cannot run a tool-less call, '' when it can.
+export const editOnlyReason = (agent) => adapterFor(agent)?.editOnly ?? '';
 // A binary from config: a bare name is looked up on PATH, an absolute path is used when it is an executable file.
 export const findBin = (bin) => (isAbsolute(bin) ? (isExecutable(bin) ? bin : '') : onPath(bin));
 // The binary that starts an agent: agent_path_override.<agent>, else its name on PATH. An acp:<target> agent starts

@@ -250,6 +250,8 @@ export function knownAgentOf(agent: string): string {
 }
 
 const adapterFor = (agent: string): Adapter | undefined => (agent.startsWith('acp:') ? ACP : Object.hasOwn(ADAPTERS, agent) ? ADAPTERS[agent] : undefined);
+// Why an agent cannot run a tool-less call, '' when it can.
+export const editOnlyReason = (agent: string): string => adapterFor(agent)?.editOnly ?? '';
 
 // A binary from config: a bare name is looked up on PATH, an absolute path is used when it is an executable file.
 export const findBin = (bin: string) => (isAbsolute(bin) ? (isExecutable(bin) ? bin : '') : onPath(bin));

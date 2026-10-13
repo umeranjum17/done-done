@@ -4804,6 +4804,17 @@ test('a verify journey waits on a readiness command and logs the app in its run 
   assert.ok(!readdirSync(join(t.repo, '.proof', toon(r).run_id)).some((n) => n.includes('instance')), 'never with the evidence');
 });
 
+test('a verify whose instance never becomes ready marks its drive step failed', () => {
+  const t = setup('app: notes\njudge:\n  enabled: false\nevidence:\n  root: .proof\ninstance:\n  command: node hang.mjs\n  ready:\n    command: exit 1\n  ready_timeout: 2s\njourneys:\n  probe:\n    command: echo hi > $DONE_DONE_EVIDENCE_ROOT/out.txt\n');
+  writeFileSync(join(t.repo, 'hang.mjs'), 'setInterval(()=>{}, 1000);\n');
+  t.sh('add', '-A');
+  t.sh('commit', '-qm', 'hang fixture');
+  const r = t.dd('verify', 'probe', '--outcome', 'home renders', '--foreground');
+  assert.equal(r.code, 1, r.out);
+  const run = JSON.parse(readFileSync(join(t.env.DONE_DONE_HOME, 'runs', 'notes', toon(r).run_id, 'run.json'), 'utf8'));
+  assert.equal(run.steps.find((s) => s.name === 'drive').status, 'failed');
+});
+
 test('an instance ready block with a null url uses its command and the run passes', () => {
   const t = setup('app: notes\njudge:\n  enabled: false\nevidence:\n  root: .proof\ninstance:\n  command: node server.mjs\n  ready:\n    url: null\n    command: curl -sf $DONE_DONE_BASE_URL/\n  ready_timeout: 15s\njourneys:\n  probe:\n    command: curl -sf $DONE_DONE_BASE_URL/ > $DONE_DONE_EVIDENCE_ROOT/reply.txt\n');
   writeFileSync(join(t.repo, 'server.mjs'), `import {createServer} from 'node:http';\ncreateServer((q,s)=>s.writeHead(200).end('ok')).listen(Number(process.env.DONE_DONE_PORT),'127.0.0.1');\n`);

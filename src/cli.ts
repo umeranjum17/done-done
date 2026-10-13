@@ -1112,6 +1112,7 @@ async function runSteps(dir: string): Promise<void> {
           saveRun(dir, run);
           instPort = inst.env;
         } catch (e) {
+          set(step!, 'failed');
           return fail(`instance: ${(e as Error).message}`);
         }
       }
@@ -1151,6 +1152,7 @@ async function runSteps(dir: string): Promise<void> {
           instEnv = inst.env;
         } catch (e) {
           closeSync(fd);
+          set(step!, 'failed');
           return fail(`instance: ${(e as Error).message}`);
         }
       }

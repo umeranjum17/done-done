@@ -1097,6 +1097,7 @@ async function runSteps(dir) {
                         instPort = inst.env;
                     }
                     catch (e) {
+                        set(step, 'failed');
                         return fail(`instance: ${e.message}`);
                     }
                 }
@@ -1142,6 +1143,7 @@ async function runSteps(dir) {
                     }
                     catch (e) {
                         closeSync(fd);
+                        set(step, 'failed');
                         return fail(`instance: ${e.message}`);
                     }
                 }

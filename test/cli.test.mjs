@@ -1597,6 +1597,8 @@ test('bare done-done in a repo with no config points at init', () => {
 // the stub answers `auth status` and the one headless request the kit sends, and logs what it was sent.
 function judgeSetup(answer, { loggedIn = true, projectYaml } = {}) {
   const t = setup(projectYaml);
+  // The config's author agent (opencode) must be installed on any host, so the receipt names it.
+  t.env.PATH = `${pathEnv(t.env, ['opencode']).PATH}:${t.env.PATH}`;
   const cfgDir = join(t.dir, 'judge-signin');
   const bin = join(t.dir, 'claude');
   mkdirSync(cfgDir);

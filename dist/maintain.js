@@ -2,7 +2,7 @@ import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { accessSync, closeSync, constants, existsSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, readlinkSync, readSync, realpathSync, statSync } from 'node:fs';
 import { dirname, extname, isAbsolute, join, relative, resolve, sep } from 'node:path';
-import { askAgent, notStartable, selectAgent, selectJudge, supported } from './agents.js';
+import { askAgent, editOnlyReason, notStartable, selectAgent, selectJudge } from './agents.js';
 import { UsageError } from './config.js';
 import { askJudge, backend } from './judge.js';
 // Plan 1.5 shared rules: a per-run call cap and a per-call timeout (agent_timeout) stop runaway cost.
@@ -303,10 +303,11 @@ async function pass(run, dir, cfg, h, prefix = '') {
     // Only claude reads the repo with its own tools: its read tools refuse paths outside it, while the other agents'
     // tools cannot be trusted that way, so they get the cited source from plain code.
     const toolless = agent.agent !== 'claude';
-    const geminiBlock = agent.path && agent.agent === 'gemini' ? 'source-wave: gemini cannot read tool-less yet, since its none mode is read-only plan mode, not tool-free; use claude, opencode, pi or acp' : '';
-    if (geminiBlock)
-        add({ kind: 'coverage', file: rel(featDir), what: geminiBlock });
-    const agentBlock = !agent.path || !supported(agent.agent) ? `source-wave: no agent done-done can start (${agent.path ? `${agent.agent} is not supported yet` : notStartable(agent.agent, agent.override)}); run done-done doctor` : geminiBlock;
+    const toollessReason = agent.agent === 'gemini' ? 'gemini cannot read tool-less yet, since its none mode is read-only plan mode, not tool-free' : editOnlyReason(agent.agent);
+    const toollessBlock = agent.path && toollessReason ? `source-wave: ${toollessReason}; use claude, opencode, pi or acp` : '';
+    if (toollessBlock)
+        add({ kind: 'coverage', file: rel(featDir), what: toollessBlock });
+    const agentBlock = !agent.path ? `source-wave: no agent done-done can start (${notStartable(agent.agent, agent.override)}); run done-done doctor` : toollessBlock;
     let calls = 0;
     const record = (name) => join(dir, 'agents', `${prefix}${++calls}-${name}.json`);
     const read = agentBlock ? [] : features.slice(0, MAX_CALLS - 1);

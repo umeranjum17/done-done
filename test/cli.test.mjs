@@ -4823,16 +4823,18 @@ test('a matrix skip drops the partial cell and records its reason', () => {
   assert.deepEqual(d.matrix.skipped, [{ cell: 'theme=dark', reason: 'dark ships later' }]);
 });
 
-test('a matrix that skips every cell is refused when the config is read', () => {
-  const yaml = MATRIXED.replace('  width: [390, 1280]\n', '').replace('  theme: [light, dark]', '  theme: [dark]').replace('journeys:', '  skip:\n    - theme: dark\n      reason: ships later\njourneys:');
-  const t = setup(yaml);
-  const r = t.dd('run', 'cells');
-  assert.equal(r.code, 2, r.out);
-  assert.match(r.out, /every cell is skipped, so there is nothing to capture/);
+test('a matrix skip that drops every cell or matches no cell is refused when the config is read', () => {
+  const all = MATRIXED.replace('  width: [390, 1280]\n', '').replace('  theme: [light, dark]', '  theme: [dark]').replace('journeys:', '  skip:\n    - theme: dark\n      reason: ships later\njourneys:');
+  const unmatched = MATRIXED.replace('journeys:', '  skip:\n    - form: phone\n      reason: no form axis\njourneys:');
+  for (const [yaml, why] of [[all, 'every cell is skipped, so there is nothing to capture'], [unmatched, 'skip form=phone matches no cell']]) {
+    const r = setup(yaml).dd('run', 'cells');
+    assert.equal(r.code, 2, r.out);
+    assert.ok(r.out.includes(why), r.out);
+  }
 });
 
 test('the check fails naming a matrix cell with no capture', () => {
-  const t = matrixed(MATRIXED.replace('  width: [390, 1280]\n', ''), "!theme || width !== '' || !cell", (t) => `if (theme === 'light') copyFileSync(${JSON.stringify(join(t.dir, 'screen.png'))}, root + '/home.light.png');`);
+  const t = matrixed(MATRIXED.replace('  width: [390, 1280]\n', '').replace('[light, dark]', '[light, dark, dark-hc]'), "!theme || width !== '' || !cell", (t) => `if (theme !== 'dark') copyFileSync(${JSON.stringify(join(t.dir, 'screen.png'))}, root + '/home.' + theme + '.png');`);
   const run = toon(t.dd('run', 'cells'));
   const r = t.dd('check', '--outcome', 'home renders light', `.proof/${run.run_id}/home.light.png`);
   assert.equal(r.code, 1, r.out);

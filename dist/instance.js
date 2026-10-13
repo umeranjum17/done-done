@@ -1,7 +1,7 @@
 import { spawn } from 'node:child_process';
-import { mkdirSync, openSync, closeSync } from 'node:fs';
+import { mkdirSync } from 'node:fs';
 import { createServer } from 'node:net';
-import { dirname, join } from 'node:path';
+import { join } from 'node:path';
 import { parseDuration } from './config.js';
 // A free local port done-done owns: bind 127.0.0.1:0, read it back, release.
 // A fixed port that is already taken can never be used.
@@ -41,20 +41,13 @@ async function waitUrl(url, timeoutMs) {
     }
 }
 // Start the instance, wait for readiness, or kill it and throw a clear reason.
-export async function startInstance(repo, inst, runId, scratch, baseEnv, logFile) {
+export async function startInstance(repo, inst, runId, scratch, baseEnv) {
     const port = await pickPort();
     const baseUrl = `http://127.0.0.1:${port}`;
     const extra = { DONE_DONE_PORT: String(port), DONE_DONE_BASE_URL: baseUrl, DONE_DONE_RUN_ID: runId, ...instanceHome(scratch), TMPDIR: scratch };
     const env = { ...baseEnv, ...extra };
     const command = inst.command.replaceAll('${RUN_ID}', runId);
-    let fd;
-    if (logFile) {
-        mkdirSync(dirname(logFile), { recursive: true });
-        fd = openSync(logFile, 'a');
-    }
-    const child = spawn(command, { cwd: repo, shell: true, detached: true, stdio: fd === undefined ? 'ignore' : ['ignore', fd, fd], env });
-    if (fd !== undefined)
-        closeSync(fd);
+    const child = spawn(command, { cwd: repo, shell: true, detached: true, stdio: 'ignore', env });
     const pgid = child.pid;
     const kill = () => {
         try {

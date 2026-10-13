@@ -1087,7 +1087,7 @@ async function runSteps(dir) {
             let instPort = {};
             if (cfg.instance) {
                 try {
-                    const inst = await startInstance(run.repo, cfg.instance, rec.run_id, scratch, process.env, join(dir, 'logs', 'instance.log'));
+                    const inst = await startInstance(run.repo, cfg.instance, rec.run_id, scratch, process.env);
                     run.runner.instance_pgid = inst.pgid;
                     saveRun(dir, run);
                     instPort = { DONE_DONE_PORT: inst.env.DONE_DONE_PORT, DONE_DONE_BASE_URL: inst.env.DONE_DONE_BASE_URL };
@@ -1131,7 +1131,7 @@ async function runSteps(dir) {
                 try {
                     const scratch = join(dir, 'tmp');
                     mkdirSync(scratch, { recursive: true });
-                    const inst = await startInstance(run.repo, cfg.instance, rec.run_id, scratch, process.env, join(dir, 'logs', 'instance.log'));
+                    const inst = await startInstance(run.repo, cfg.instance, rec.run_id, scratch, process.env);
                     run.runner.instance_pgid = inst.pgid;
                     instEnv = inst.env;
                 }

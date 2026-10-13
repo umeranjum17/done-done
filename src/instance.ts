@@ -1,7 +1,7 @@
 import { spawn } from 'node:child_process';
-import { mkdirSync, openSync, closeSync } from 'node:fs';
+import { mkdirSync } from 'node:fs';
 import { createServer } from 'node:net';
-import { dirname, join } from 'node:path';
+import { join } from 'node:path';
 import { parseDuration } from './config.js';
 
 // A run-instance harness: each run starts the app under test on its own port,
@@ -50,19 +50,13 @@ async function waitUrl(url: string, timeoutMs: number): Promise<boolean> {
 export type Started = { pgid: number; env: Record<string, string> };
 
 // Start the instance, wait for readiness, or kill it and throw a clear reason.
-export async function startInstance(repo: string, inst: Instance, runId: string, scratch: string, baseEnv: NodeJS.ProcessEnv, logFile?: string): Promise<Started> {
+export async function startInstance(repo: string, inst: Instance, runId: string, scratch: string, baseEnv: NodeJS.ProcessEnv): Promise<Started> {
   const port = await pickPort();
   const baseUrl = `http://127.0.0.1:${port}`;
   const extra = { DONE_DONE_PORT: String(port), DONE_DONE_BASE_URL: baseUrl, DONE_DONE_RUN_ID: runId, ...instanceHome(scratch), TMPDIR: scratch };
   const env = { ...baseEnv, ...extra };
   const command = inst.command.replaceAll('${RUN_ID}', runId);
-  let fd: number | undefined;
-  if (logFile) {
-    mkdirSync(dirname(logFile), { recursive: true });
-    fd = openSync(logFile, 'a');
-  }
-  const child = spawn(command, { cwd: repo, shell: true, detached: true, stdio: fd === undefined ? 'ignore' : ['ignore', fd, fd], env });
-  if (fd !== undefined) closeSync(fd);
+  const child = spawn(command, { cwd: repo, shell: true, detached: true, stdio: 'ignore', env });
   const pgid = child.pid!;
   const kill = () => {
     try { process.kill(-pgid, 'SIGKILL'); } catch { /* already exited */ }

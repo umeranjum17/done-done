@@ -4772,8 +4772,9 @@ test('maintain with auto_fix leaves out a cited file the numbered source would p
   assert.match(left?.what ?? '', /1 cited files were left out \(three\.txt\)/);
 });
 
-test('an instance serves the journey on its own port; the journey keeps the caller HOME, only the app runs isolated', () => {
-  const t = setup('app: notes\njudge:\n  enabled: false\nevidence:\n  root: .proof\ninstance:\n  command: node server.mjs\n  ready:\n    url: http://127.0.0.1:$DONE_DONE_PORT/health\n  ready_timeout: 15s\njourneys:\n  probe:\n    command: curl -sf $DONE_DONE_BASE_URL/ > $DONE_DONE_EVIDENCE_ROOT/reply.txt && echo "port=$DONE_DONE_PORT home=$HOME base=$DONE_DONE_BASE_URL" >> $DONE_DONE_EVIDENCE_ROOT/reply.txt\n');
+for (const ready of ['url: http://127.0.0.1:$DONE_DONE_PORT/health', 'command: curl -sf $DONE_DONE_BASE_URL/'])
+test(`an instance (ready ${ready.split(':')[0]}) serves the journey on its own port; the journey keeps the caller HOME, only the app runs isolated`, () => {
+  const t = setup(`app: notes\njudge:\n  enabled: false\nevidence:\n  root: .proof\ninstance:\n  command: node server.mjs\n  ready:\n    ${ready}\n  ready_timeout: 15s\njourneys:\n  probe:\n    command: curl -sf $DONE_DONE_BASE_URL/ > $DONE_DONE_EVIDENCE_ROOT/reply.txt && echo "port=$DONE_DONE_PORT home=$HOME base=$DONE_DONE_BASE_URL" >> $DONE_DONE_EVIDENCE_ROOT/reply.txt\n`);
   writeFileSync(join(t.repo, 'server.mjs'), `import {createServer} from 'node:http';\nimport {writeSync} from 'node:fs';\nwriteSync(1, 'instance-marker\\ninstance-home=' + process.env.HOME + '\\n');\ncreateServer((q,s)=>s.writeHead(200).end('ok')).listen(Number(process.env.DONE_DONE_PORT),'127.0.0.1');\n`);
   t.sh('add', '-A');
   t.sh('commit', '-qm', 'instance fixture');
@@ -4794,13 +4795,14 @@ test('an instance serves the journey on its own port; the journey keeps the call
 
 test('a verify whose instance never becomes ready marks its drive step failed', () => {
   const t = setup('app: notes\njudge:\n  enabled: false\nevidence:\n  root: .proof\ninstance:\n  command: node hang.mjs\n  ready:\n    command: exit 1\n  ready_timeout: 2s\njourneys:\n  probe:\n    command: echo hi > $DONE_DONE_EVIDENCE_ROOT/out.txt\n');
-  writeFileSync(join(t.repo, 'hang.mjs'), 'setInterval(()=>{}, 1000);\n');
+  writeFileSync(join(t.repo, 'hang.mjs'), 'console.log("hang-marker");\nsetInterval(()=>{}, 1000);\n');
   t.sh('add', '-A');
   t.sh('commit', '-qm', 'hang fixture');
   const r = t.dd('verify', 'probe', '--outcome', 'home renders', '--foreground');
   assert.equal(r.code, 1, r.out);
   const run = JSON.parse(readFileSync(join(t.env.DONE_DONE_HOME, 'runs', 'notes', toon(r).run_id, 'run.json'), 'utf8'));
   assert.equal(run.steps.find((s) => s.name === 'drive').status, 'failed');
+  assert.match(readFileSync(join(t.env.DONE_DONE_HOME, 'runs', 'notes', toon(r).run_id, 'logs', 'instance.log'), 'utf8'), /hang-marker/, 'a failed readiness wait shows the app output in the run folder');
 });
 
 test('an instance ready url that is an empty string is refused', () => {

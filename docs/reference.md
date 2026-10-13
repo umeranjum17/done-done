@@ -124,6 +124,23 @@ You can also run a one-off command without a journey: `done-done run -- <command
 A run whose command matches no repo-recorded journey says so in its `help`: the recipe is not in the repo, so nobody can re-run the proof from the config. Record it with `done-done init --journey <name> -- <command>` and commit.
 Run `done-done` outside wrappers that expand `${...}` themselves (`systemd-run` does): put such a wrapper inside the command, or it eats `${RUN_ID}`.
 
+### Capture matrix
+
+One verify run captures every theme x width x form-factor cell the repo asks for:
+
+```yaml
+matrix:
+  theme: [light, dark]
+  width: [390, 1280]
+  form: [phone, desktop]
+  skip:
+    - { theme: dark, form: phone, reason: "dark phone ships next quarter" }
+```
+
+Each axis is optional; done-done expands the set axes into cells and drops skipped ones. A skip entry is a partial cell (any of `theme`, `width`, `form`) plus a `reason`: it drops every cell agreeing on each axis it names. With no `matrix` block, journeys run once, as before.
+
+Each journey runs once per required cell, with `DONE_DONE_THEME`, `DONE_DONE_WIDTH`, `DONE_DONE_FORM` and `DONE_DONE_CELL` (the capture name suffix: `dark.390w.phone` for that cell) set. The recipe sets the app's theme and width from those values - done-done never knows how - and names each capture with its suffix. An agent drive instead names every cell and suffix in its prompt. The run record and `status` carry the manifest: every required cell with its captures, every skipped cell with its reason. The check fails naming the missing cell when a non-skipped cell has no capture, so a cell is either captured or skipped with a reason, never silently missing.
+
 ### Check a claim
 
 ```sh

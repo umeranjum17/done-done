@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, isAbsolute, join, resolve } from 'node:path';
 import { parse } from 'yaml';
+import { checkMatrix, type Matrix } from './matrix.js';
 
 export class UsageError extends Error {
   // The exact next command, when the error has one.
@@ -21,6 +22,8 @@ export type Config = {
   app: string;
   skill: string;
   journeys: Record<string, { command: string; timeout?: string }>;
+  // Primitive 2 (capture matrix): optional theme x width x form axes with skip entries; null: today's behaviour.
+  matrix: Matrix | null;
   evidence: { local_root: string; root: string; allow_dirty: boolean; ignore_paths: string[] };
   checks: { not_proven: 'inconclusive' | 'allow'; fix_title: string };
   // enabled: verify judges unless false (--judge turns it on for a run); check and receipt judge with --judge or true; rerun repeats its source run.
@@ -62,7 +65,7 @@ export const EFFORT_FLAGS: Record<string, (level: string) => string[]> = {
 const AGENT_TIMEOUT = '30m';
 
 // Where each key may be set. Global-only keys describe the machine; repo-only keys describe the project; `any` may be in either.
-const KEYS: Record<string, { scope: 'global' | 'repo' | 'any'; type: 'string' | 'boolean' | 'string[]' | 'journeys' | 'agent' | 'agent_config' | 'route' | 'claude_code' | 'args' | 'paths' | 'bin' | 'duration' | 'auto_fix' }> = {
+const KEYS: Record<string, { scope: 'global' | 'repo' | 'any'; type: 'string' | 'boolean' | 'string[]' | 'journeys' | 'matrix' | 'agent' | 'agent_config' | 'route' | 'claude_code' | 'args' | 'paths' | 'bin' | 'duration' | 'auto_fix' }> = {
   agent: { scope: 'any', type: 'agent' },
   auto_fix: { scope: 'any', type: 'auto_fix' },
   agent_config: { scope: 'global', type: 'agent_config' },
@@ -74,6 +77,7 @@ const KEYS: Record<string, { scope: 'global' | 'repo' | 'any'; type: 'string' | 
   app: { scope: 'repo', type: 'string' },
   skill: { scope: 'repo', type: 'string' },
   journeys: { scope: 'repo', type: 'journeys' },
+  matrix: { scope: 'repo', type: 'matrix' },
   'evidence.root': { scope: 'repo', type: 'string' },
   'evidence.allow_dirty': { scope: 'repo', type: 'boolean' },
   'evidence.ignore_paths': { scope: 'repo', type: 'string[]' },
@@ -141,9 +145,11 @@ function apply(target: Config, text: string | undefined, file: string, scope: 'g
       : spec.type === 'bin' ? isBin(value)
       : spec.type === 'duration' ? typeof value === 'string' && parseDuration(value) !== null
       : spec.type === 'auto_fix' ? isMap(value) && Object.entries(value).every(([k, n]) => AUTO_FIX_STEPS.includes(k) && Number.isInteger(n) && (n as number) >= 0)
+      : spec.type === 'matrix' ? !checkMatrix(value)
       : isMap(value) && Object.values(value).every((j: any) => j && typeof j.command === 'string');
     const want = {
       journeys: 'a map of name: {command: <string>}',
+      matrix: 'a mapping with optional theme (a list of names), width (a list of CSS pixel widths) and form (a list of names), plus skip (a list of partial cells, each with a reason)',
       agent: `one of ${AGENTS.join(', ')}, or acp:<target>`,
       agent_config: `a map of <agent>: {model: <string>, effort: <string>} for ${AGENTS.join(', ')}, acp:<target>`,
       args: `a map of <agent>: [<flag>, ...] for ${AGENTS.join(', ')}`,
@@ -156,7 +162,7 @@ function apply(target: Config, text: string | undefined, file: string, scope: 'g
     } as Record<string, string>;
     if (key === 'judge.route' && (value === 'auto' || value === '')) throw new UsageError(`${file}: judge.route ${value === '' ? 'must not be empty; to leave it unset, remove the key' : 'auto is gone: done-done never picks the judge, the user sets it'}`, `Delete the judge.route line in ${file}, then run: done-done init --judge <agent> --judge-model <model>`);
     if (key === 'agent' && value === '') throw new UsageError(`${file}: agent must not be empty; to leave it unset, remove the key`);
-    if (!ok) throw new UsageError(`${file}: ${key} must be ${want[spec.type] ?? `a ${spec.type}`}`);
+    if (!ok) throw new UsageError(`${file}: ${key} must be ${want[spec.type] ?? `a ${spec.type}`}${key === 'matrix' ? `: ${checkMatrix(value)}` : ''}`);
     if (key === 'checks.not_proven' && value !== 'inconclusive' && value !== 'allow') throw new UsageError(`${file}: checks.not_proven must be inconclusive or allow`);
     if (key === 'agent_config')
       for (const [a, c] of Object.entries(value as Record<string, { model?: string; effort?: string }>)) {
@@ -204,6 +210,7 @@ function defaultConfig(repo: string): Config {
     app: basename(repo),
     skill: '',
     journeys: {},
+    matrix: null,
     evidence: { local_root: join(home(), 'evidence'), root: '', allow_dirty: false, ignore_paths: [] },
     checks: { not_proven: 'inconclusive', fix_title: '^(fix|bugfix|hotfix)\\b' },
     judge: { route: '', model: '', allow_same: false, claude_code: { config_dir: join(home(), 'claude') } },

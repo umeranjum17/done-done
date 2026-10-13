@@ -5,8 +5,8 @@
 //   npm run build:skill -- --check   # exit 1 if the committed file differs from the generated one
 import { readFileSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-// The command an agent runs when done-done is not on PATH: the GitHub package, until done-done-axi is published.
-const NPX = 'npx -y --allow-git=all github:umeranjum17/done-done-axi';
+// The command an agent runs when done-done is not on PATH: the npm package.
+const NPX = 'npx -y done-done-axi';
 const DESCRIPTION = 'Prove the real app works before work is called done: done-done runs a capture of the real product, ties every screenshot, ' +
     'recording and log it writes to the exact commit, then checks that cited evidence is real, fresh and not reused. ' +
     'Use when the user asks to prove a change or app works, asks whether a task is really done, wants screenshots, ' +

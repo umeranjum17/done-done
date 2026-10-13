@@ -2073,6 +2073,12 @@ process.stdout.write(JSON.stringify({ type: 'result', is_error: false, structure
     assert.match(out, new RegExp(`run ${logged.o.run_id} waiting at its gate`));
     assert.match(out, new RegExp(`done-done respond --run ${logged.o.run_id} --action approve\\|skip\\|fix .*done-done abort --run ${logged.o.run_id}`));
   }
+  // A rerun keeps the claim of its source run, so switching branches does not get around the gate.
+  t.sh('checkout', '-qb', 'other');
+  const switchedRerun = spawnSync(process.execPath, [CLI, 'rerun', '--run', logged.o.run_id], { cwd: t.repo, env: right.env, encoding: 'utf8' });
+  assert.equal(switchedRerun.status, 2, switchedRerun.stdout);
+  assert.match(switchedRerun.stdout, new RegExp(`run ${logged.o.run_id} waiting at its gate`));
+  t.sh('checkout', '-q', 'main');
   assert.equal(right.calls().length, calls, 'no agent was started');
   // A run recorded before branches were stored (no branch, no claim id) still blocks a new run in its repo.
   const parkedFile = join(t.env.DONE_DONE_HOME, 'runs', 'notes', logged.o.run_id, 'run.json');
@@ -2088,6 +2094,15 @@ process.stdout.write(JSON.stringify({ type: 'result', is_error: false, structure
   assert.equal(off.o.findings[0].what, 'the judge is off (--no-judge), and an agent drive passes only with a judge pass');
   assert.equal(off.o.steps.find((x) => x.name === 'judge').status, 'skipped');
   assert.equal(t.dd('respond', '--run', off.o.run_id, '--action', 'fix').code, 1);
+  // A run record that cannot be parsed stops the command with the file to fix, never a stack trace.
+  const brokenRun = join(t.env.DONE_DONE_HOME, 'runs', 'notes', 'broken-run');
+  mkdirSync(brokenRun);
+  writeFileSync(join(brokenRun, 'run.json'), '{');
+  const unreadable = t.dd('history');
+  assert.equal(unreadable.code, 2, unreadable.out);
+  assert.match(toon(unreadable).error, /cannot read the run record .*broken-run\/run\.json/);
+  assert.match(toon(unreadable).help[0], /Fix or remove .*broken-run/);
+  rmSync(brokenRun, { recursive: true });
   // A drive that changes a tracked file fails: its captures would not be of the committed code.
   const edit = verify({ ...right.env, DRIVE: 'edit' }, 'the note Umer added shows in the list');
   assert.equal(edit.code, 1, edit.out);

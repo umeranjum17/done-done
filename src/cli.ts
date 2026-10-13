@@ -912,8 +912,14 @@ const createOnce = (path: string) => {
 };
 const evidenceOf = (repo: string, cfg: Config, rec: RunRecord) => rec.files.map((f) => citable(repo, join(cfg.evidence.root, f.path)));
 
-// Every run of an app, from any checkout of it.
-const runsIn = (root: string): Run[] => (existsSync(root) ? readdirSync(root).filter((n) => existsSync(join(root, n, 'run.json'))).map((n) => loadRun(join(root, n))) : []);
+// Every run of an app, from any checkout of it. A run.json that cannot be read stops the command, never skipped silently.
+const runsIn = (root: string): Run[] => (existsSync(root) ? readdirSync(root).filter((n) => existsSync(join(root, n, 'run.json'))).map((n) => {
+  try {
+    return loadRun(join(root, n));
+  } catch (e) {
+    throw new UsageError(`cannot read the run record ${join(root, n, 'run.json')}: ${(e as Error).message}`, `Fix or remove ${join(root, n)}, then run this again`);
+  }
+}) : []);
 
 // Default run: the newest run of this checkout, as status does.
 function pickId(root: string, repo: string, cmd: string, cfg: Config, id?: string): string {
@@ -1287,12 +1293,12 @@ async function preflightJudge(cfg: Config, needsAgent = true): Promise<JudgeChoi
 const NO_AUTHOR = { agent: '', model: '' };
 
 // A run waiting at its gate is the user's call, so a new verify or rerun is refused until the user answers that run or it is
-// aborted: starting another would go around its gate. A run is keyed by its claim id, else the branch it started on; a run with
-// neither (recorded by an older build) blocks every new run in its repo.
+// aborted: starting another would go around its gate. Only a run of this checkout counts, keyed by its claim id, else the branch it
+// started on; a run with neither (recorded by an older build) blocks every new run in this checkout.
 function refuseParked(cfg: Config, repo: string, claim: string) {
   const parked = runsIn(runsRoot(cfg.app)).filter((r) => {
     const key = r.claim_id ?? r.branch;
-    return r.kind === 'verify' && r.status === 'awaiting_approval' && (key === claim || (key === undefined && r.repo === repo));
+    return r.kind === 'verify' && r.status === 'awaiting_approval' && r.repo === repo && (key === claim || key === undefined);
   }).map((r) => r.run_id);
   if (!parked.length) return;
   const id = parked[0];
@@ -1576,8 +1582,7 @@ function cmdRespond(argv: string[]): number {
 }
 
 function runsOf(repo: string, cfg: Config): Run[] {
-  const root = runsRoot(cfg.app);
-  return existsSync(root) ? readdirSync(root).filter((x) => existsSync(join(root, x, 'run.json'))).map((x) => loadRun(join(root, x))).filter((r) => r.repo === repo).sort((a, b) => b.created.localeCompare(a.created)) : [];
+  return runsIn(runsRoot(cfg.app)).filter((r) => r.repo === repo).sort((a, b) => b.created.localeCompare(a.created));
 }
 
 function cmdHistory(argv: string[]): number {

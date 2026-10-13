@@ -1994,9 +1994,13 @@ function modelList(agent) {
 }
 function unknownModel(agent, model, cfg) {
     const list = modelList(agent);
-    const bin = list && agentPath(agent, cfg);
-    if (!list || !bin)
+    if (!list)
         return '';
+    const bin = agentPath(agent, cfg);
+    if (!bin) {
+        process.stderr.write(`${model} is saved unchecked because ${agent} is not on PATH; run 'done-done doctor --probe' to check it\n`);
+        return '';
+    }
     const r = spawnSync(bin, list, { encoding: 'utf8', timeout: 30_000 });
     if (r.status !== 0) {
         process.stderr.write(`${agent} ${list[0]} failed (${(r.error?.message || r.stderr || `exit ${r.status}`).trim().split('\n').at(-1)}), so ${model} is saved unchecked\n`);

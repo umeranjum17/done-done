@@ -2369,6 +2369,18 @@ test('init in a terminal says why it asks again and refuses a model the agent do
   assert.deepEqual([g.agent, g.agent_config.pi.model, g.judge.route], ['pi', 'opencode-go/muse-spark-1.3-contributor', 'claude-code']);
 });
 
+test('init in a terminal says a typed model is saved unchecked when its agent is not on PATH', { skip: !existsSync('/usr/bin/script') && 'no script(1)' }, () => {
+  const t = setup();
+  const bin = join(t.dir, 'bin');
+  mkdirSync(bin);
+  const cmd = [process.execPath, CLI, 'init'].join(' ');
+  const agentAnswers = ['3', '2', 'muse'].join('\\n');
+  const r = spawnSync('/bin/sh', ['-c', `(sleep 2; printf '${agentAnswers}\\n'; sleep 3; printf 'x\\n1\\n1\\n'; sleep 3) | /usr/bin/script -qec "${cmd}" /dev/null`], { cwd: t.repo, env: { ...t.env, PATH: `${bin}:/usr/bin:/bin` }, encoding: 'utf8', timeout: 60_000 });
+  assert.match(r.stdout, /muse is saved unchecked because pi is not on PATH; run 'done-done doctor --probe' to check it/);
+  const g = parse(readFileSync(join(t.env.DONE_DONE_HOME, 'config.yaml'), 'utf8'));
+  assert.equal(g.agent_config.pi.model, 'muse');
+});
+
 test('agent_path_override takes a name on PATH or an absolute path, and refuses a relative path', () => {
   const t = setup();
   mkdirSync(t.env.DONE_DONE_HOME, { recursive: true });

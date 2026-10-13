@@ -1937,8 +1937,9 @@ test('verify judges by default with the judge the user set: opencode judges a cl
   assert.equal(re.status, 4, re.stdout + re.stderr);
   assert.deepEqual(toon({ out: re.stdout }).steps.map((x) => [x.name, x.status]).slice(3, 6), [['judge', 'failed'], ['gate', 'awaiting_approval'], ['receipt', 'pending']]);
   // The author's own agent and model as the judge is a usage error before any run starts, unless allow_same accepts it.
+  // Another claim, since run b still waits at its gate on this one.
   writeFileSync(join(t.env.DONE_DONE_HOME, 'config.yaml'), 'agent: opencode\njudge:\n  route: answerer:opencode\n');
-  const same = verify(right.env, 'home and settings render');
+  const same = verify(right.env, 'home and settings render', '--claim-id', 'settings');
   assert.equal(same.code, 2, same.out);
   assert.match(toon(same).error, /is the author's own agent and model/);
   assert.match(toon(same).help[0], /done-done init --judge <agent> --judge-model <model>/);
@@ -2068,9 +2069,16 @@ process.stdout.write(JSON.stringify({ type: 'result', is_error: false, structure
   for (const again of [verify(right.env, 'the note Umer added shows in the list'), spawnSync(process.execPath, [CLI, 'rerun', '--run', logged.o.run_id], { cwd: t.repo, env: right.env, encoding: 'utf8' })]) {
     const out = again.out ?? again.stdout;
     assert.equal(again.code ?? again.status, 2, out);
-    assert.match(out, new RegExp(`already has run ${logged.o.run_id} waiting at its gate`));
+    assert.match(out, new RegExp(`run ${logged.o.run_id} waiting at its gate`));
     assert.match(out, new RegExp(`done-done respond --run ${logged.o.run_id} --action approve\\|skip\\|fix .*done-done abort --run ${logged.o.run_id}`));
   }
+  assert.equal(right.calls().length, calls, 'no agent was started');
+  // A run recorded before branches were stored (no branch, no claim id) still blocks a new run in its repo.
+  const parkedFile = join(t.env.DONE_DONE_HOME, 'runs', 'notes', logged.o.run_id, 'run.json');
+  writeFileSync(parkedFile, JSON.stringify({ ...JSON.parse(readFileSync(parkedFile, 'utf8')), branch: undefined }));
+  const legacy = verify(right.env, 'the note Umer added shows in the list');
+  assert.equal(legacy.code, 2, legacy.out);
+  assert.match(legacy.out, new RegExp(`run ${logged.o.run_id} waiting at its gate`));
   assert.equal(right.calls().length, calls, 'no agent was started');
   assert.equal(t.dd('respond', '--run', logged.o.run_id, '--action', 'fix').code, 1);
   // With the judge off, an agent drive parks at the gate saying so, and its judge step shows skipped, not pending.
@@ -2162,7 +2170,7 @@ test('verify --judge through pi and gemini: each judges tools-off with the captu
     assert.equal(bad.code, 4, bad.out);
     assert.equal(toon(bad).status, 'awaiting_approval');
     assert.match(toon(bad).findings[0].what, /judge says wrong screen/);
-    assert.equal(t.dd('respond', '--run', toon(bad).run_id, '--action', 'fix').code, 1, 'one run per claim waits at its gate');
+    assert.equal(t.dd('respond', '--run', toon(bad).run_id, '--action', 'fix').code, 1);
   }
 });
 
@@ -2208,7 +2216,7 @@ globalThis.fetch = async (url, init) => {
   assert.equal(bad.code, 4, bad.out);
   assert.equal(toon(bad).status, 'awaiting_approval');
   assert.match(toon(bad).findings[0].what, /judge says wrong screen/);
-  assert.equal(t.dd('respond', '--run', toon(bad).run_id, '--action', 'fix').code, 1, 'one run per claim waits at its gate');
+  assert.equal(t.dd('respond', '--run', toon(bad).run_id, '--action', 'fix').code, 1);
   // A refused key is unsure, and the reason names the real cause and where the key comes from.
   const refused = verify(withKey('401'), 'the home screen shows the sync banner');
   assert.equal(refused.code, 4, refused.out);

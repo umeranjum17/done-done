@@ -1294,7 +1294,7 @@ function refuseParked(cfg, repo, claim) {
     if (!parked.length)
         return;
     const id = parked[0];
-    throw new UsageError(`run ${parked.join(', ')} waiting at its gate for the user's answer; a new run would go around the gate`, `Show the user its findings and captures (done-done status --run ${id}), then answer with their choice: done-done respond --run ${id} --action approve|skip|fix [--reason "<why>"], or stop it: done-done abort --run ${id}`);
+    throw new UsageError(`run ${parked.join(', ')} waiting at its gate for the user's answer blocks this run, which would go around that gate`, `Show the user its findings and captures (done-done status --run ${id}), then answer with their choice: done-done respond --run ${id} --action approve|skip|fix [--reason "<why>"], or stop it: done-done abort --run ${id}`);
 }
 async function cmdVerify(argv) {
     const { values, positionals } = parseArgs({

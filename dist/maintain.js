@@ -2,7 +2,7 @@ import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { accessSync, closeSync, constants, existsSync, lstatSync, openSync, readdirSync, readFileSync, readlinkSync, readSync, realpathSync, statSync } from 'node:fs';
 import { dirname, extname, isAbsolute, join, relative, resolve, sep } from 'node:path';
-import { askAgent, selectAgent, supported } from './agents.js';
+import { askAgent, notStartable, selectAgent, supported } from './agents.js';
 // Plan 1.5 shared rules: a per-run call cap and a per-call timeout (agent_timeout) stop runaway cost.
 const MAX_CALLS = 30;
 const CHURN_SINCE = '30.days.ago';
@@ -292,7 +292,7 @@ export async function maintainSteps(run, dir, cfg, h) {
     const geminiBlock = agent.path && agent.agent === 'gemini' ? 'source-wave: gemini cannot read tool-less yet, since its none mode is read-only plan mode, not tool-free; use claude, opencode, pi or acp' : '';
     if (geminiBlock)
         add({ kind: 'coverage', file: rel(featDir), what: geminiBlock });
-    const agentBlock = !agent.path || !supported(agent.agent) ? `source-wave: no agent done-done can start (${agent.agent}${agent.path ? ' is not supported yet' : ' is not on PATH'}); run done-done doctor` : geminiBlock;
+    const agentBlock = !agent.path || !supported(agent.agent) ? `source-wave: no agent done-done can start (${agent.path ? `${agent.agent} is not supported yet` : notStartable(agent.agent, agent.override)}); run done-done doctor` : geminiBlock;
     let calls = 0;
     const record = (name) => join(dir, 'agents', `${++calls}-${name}.json`);
     const read = agentBlock ? [] : features.slice(0, MAX_CALLS - 1);

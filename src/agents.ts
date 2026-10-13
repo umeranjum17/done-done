@@ -17,6 +17,7 @@ export type AgentCall = {
   effort?: string; // agent_config.<agent>.effort, passed as the CLI's own flag
   args?: string[]; // agent_args_override.<agent>, after done-done's own flags
   path: string; // the binary from agentRun: agent_path_override.<agent>, else its name on PATH; '' when neither starts
+  override?: string; // agent_path_override.<agent> when set, named in the error when that binary does not start
   prompt: string;
   schema: { required?: string[] } & Record<string, unknown>;
   cwd: string;
@@ -186,10 +187,11 @@ export const noAgent = () =>
 export const modelFor = (cfg: Config, agent: string) => cfg.agent_config[agent]?.model || CHEAP[agent]?.model || '';
 
 // Everything askAgent needs from config to start one agent: its model, effort, extra flags, binary and timeout.
-export type AgentRun = { agent: string; model: string; effort: string; args: string[]; path: string; timeoutMs: number };
+export type AgentRun = { agent: string; model: string; effort: string; args: string[]; path: string; override: string; timeoutMs: number };
 export const agentRun = (cfg: Config, agent: string, model = modelFor(cfg, agent)): AgentRun => ({
-  agent, model, effort: cfg.agent_config[agent]?.effort ?? '', args: cfg.agent_args_override[agent] ?? [], path: agentPath(agent, cfg), timeoutMs: parseDuration(cfg.agent_timeout)!,
+  agent, model, effort: cfg.agent_config[agent]?.effort ?? '', args: cfg.agent_args_override[agent] ?? [], path: agentPath(agent, cfg), override: cfg.agent_path_override[agent] ?? '', timeoutMs: parseDuration(cfg.agent_timeout)!,
 });
+export const notStartable = (agent: string, override = '') => (override ? `agent_path_override.${agent} ${override} is not an executable file` : `${agent} is not on PATH`);
 
 // The known agent an agent names, for the judge-independence check: acp:claude-code is claude; a target that
 // names no known agent (acp:claudex, acp:foo) stays as named.
@@ -280,7 +282,7 @@ export function askAgent(c: AgentCall): AgentAnswer {
     cwd = c.tools === 'none' ? dir : c.cwd;
     if (!adapter) throw new Error(`no adapter for ${c.agent} yet`);
     const bin = c.path;
-    if (!bin) throw new Error(c.agent.startsWith('acp:') ? `${c.agent} needs acpx, and acpx is not startable; ${ACPX_INSTALL}` : `${c.agent} is not on PATH, or agent_path_override.${c.agent} is not an executable file`);
+    if (!bin) throw new Error(c.agent.startsWith('acp:') ? `${c.agent} needs acpx, and acpx is not startable; ${ACPX_INSTALL}` : notStartable(c.agent, c.override));
     let lastError = '';
     for (;;) {
       attempts++;

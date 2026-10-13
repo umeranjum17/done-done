@@ -623,8 +623,8 @@ test('init writes a minimal config that keeps evidence outside the repo, and is 
   assert.equal(d.global_config, `written ${globalYml}`);
   const globalText = readFileSync(globalYml, 'utf8');
   const g = parse(globalText);
-  assert.deepEqual(Object.keys(g), ['agent', 'agent_config', 'agent_args_override', 'agent_path_override', 'acpx_path', 'agent_timeout', 'evidence', 'judge'], 'every global key, named as in no-mistakes where the meaning is the same');
-  assert.deepEqual([g.agent, g.agent_config.claude, g.agent_config.opencode, g.agent_timeout], ['', { model: 'claude-haiku-5-5', effort: 'low' }, { model: 'opencode-go/muse-spark-1.3-contributor', effort: 'low' }, '30m'], 'no agent until the user picks one, and the cheap defaults');
+  assert.deepEqual(Object.keys(g), ['agent_config', 'agent_args_override', 'agent_path_override', 'acpx_path', 'agent_timeout', 'evidence', 'judge'], 'every global key, named as in no-mistakes where the meaning is the same');
+  assert.deepEqual([g.agent, g.agent_config.claude, g.agent_config.opencode, g.agent_timeout], [undefined, { model: 'claude-haiku-5-5', effort: 'low' }, { model: 'opencode-go/muse-spark-1.3-contributor', effort: 'low' }, '30m'], 'no agent key until the user picks one, and the cheap defaults');
   for (const key of Object.keys(g)) assert.match(globalText, new RegExp(`# .*\\n${key}:`), `${key} has a comment`);
   const before = readFileSync(yml);
   const again = dd('init');
@@ -2242,6 +2242,7 @@ test('with no agent set, done-done never picks one: doctor, maintain and verify 
   assert.match(yml, /^# The coding agent done-done starts/m, 'the comments stay');
   assert.match(init.global_config, /^written /, 'init writes the commented global first, then sets agent in it');
   assert.match(yml, /^agent: opencode$/m);
+  assert.equal(Object.keys(parse(yml))[0], 'agent', 'the saved agent takes the template\'s place, at the top');
   assert.match(toon(doctorIn(repo, path, 'doctor')).checks[4].detail, /^opencode \(model opencode-go\/test-model; from config\) at /);
   assert.equal(toon(doctorIn(repo, path, 'init')).agent, 'unchanged (opencode)');
   for (const [args, error] of [[['--model', 'x'], /--model needs --agent/], [['--agent', 'codex'], /done-done cannot start codex/], [['--agent', 'opencode', '--model', 'muse'], /provider\/model/]]) {
@@ -2258,6 +2259,40 @@ test('init --agent names the repo config agent that overrides the one it saves',
   assert.match(toon(r).agent, /^opencode \(model opencode-go\/test-model\) saved to .*config\.yaml; \.done-done\.yaml overrides it with claude$/);
   assert.equal(parse(readFileSync(join(env.DONE_DONE_HOME, 'config.yaml'), 'utf8')).agent, 'opencode');
   assert.equal(readFileSync(join(repo, '.done-done.yaml'), 'utf8'), 'app: notes\nagent: claude\n', 'the repo file is not written');
+});
+
+test('agent "" is refused in the repo and the global config; removing the key leaves it unset', () => {
+  const { repo, env, dd } = setup('app: notes\nagent: ""\n');
+  const inRepo = dd('init');
+  assert.equal(inRepo.code, 2, inRepo.out);
+  assert.match(toon(inRepo).error, /\.done-done\.yaml: agent must not be empty; to leave it unset, remove the key$/);
+  writeFileSync(join(repo, '.done-done.yaml'), 'app: notes\n');
+  mkdirSync(env.DONE_DONE_HOME, { recursive: true });
+  writeFileSync(join(env.DONE_DONE_HOME, 'config.yaml'), 'agent: ""\n');
+  const inGlobal = dd('init');
+  assert.equal(inGlobal.code, 2, inGlobal.out);
+  assert.match(toon(inGlobal).error, /config\.yaml: agent must not be empty/);
+  writeFileSync(join(env.DONE_DONE_HOME, 'config.yaml'), 'agent_timeout: 30m\n');
+  assert.equal(toon(dd('init')).agent, 'not set', 'with the key removed, the agent is unset and init asks for it');
+});
+
+test('the run error names agent_path_override only when the override is set and does not start', () => {
+  const { repo, env, sh } = setup();
+  mkdirSync(env.DONE_DONE_HOME, { recursive: true });
+  const skill = join(repo, '.agents', 'skills', 'verify-notes');
+  mkdirSync(join(skill, 'features'), { recursive: true });
+  writeFileSync(join(skill, 'SKILL.md'), '# verify-notes\n');
+  writeFileSync(join(skill, 'features', 'README.md'), '# features\n\n- [Home](home.md)\n');
+  writeFileSync(join(skill, 'features', 'home.md'), '# Home\n\nThe app starts at src/app.js:1.\n');
+  sh('add', '-A');
+  sh('commit', '-qm', 'skill');
+  const path = pathEnv(env, ['ffprobe']);
+  const config = join(env.DONE_DONE_HOME, 'config.yaml');
+  writeFileSync(config, 'agent: pi\n');
+  assert.match(toon(doctorIn(repo, path, 'maintain', '--foreground')).reason, /\(pi is not on PATH\)/);
+  const gone = join(env.DONE_DONE_HOME, 'gone', 'pi');
+  writeFileSync(config, `agent: pi\nagent_path_override: { pi: ${JSON.stringify(gone)} }\n`);
+  assert.match(toon(doctorIn(repo, path, 'maintain', '--foreground')).reason, /\(agent_path_override\.pi .*gone\/pi is not an executable file\)/);
 });
 
 test('doctor reports the judge missing when claude has no sign-in, whichever binary agent_path_override names', () => {
@@ -2511,7 +2546,7 @@ test('the agent comes from config, and doctor --probe asks it one schema questio
   assert.match(cx.by('probe').detail, /cannot start codex yet/);
   assert.equal(cx.by('probe').fix, 'done-done starts claude, opencode, pi and gemini: ask the user which agent to use and save it: done-done init --agent <agent> --model <model>', 'a probe that never ran points at the agent fix, not a sign-in');
   // The user sets one agent: no auto, no fallback list.
-  for (const agent of ['auto', '[codex, gemini]']) assert.match(doctor(`agent: ${agent}\n`).by('config').detail, /agent must be one of claude, codex, opencode, pi, gemini, acp:<target>, or '' for unset/);
+  for (const agent of ['auto', '[codex, gemini]']) assert.match(doctor(`agent: ${agent}\n`).by('config').detail, /agent must be one of claude, codex, opencode, pi, gemini, or acp:<target>/);
   // An explicit judge: another model of the author's agent is apart; its own model is a config error unless allow_same.
   const routeCfg = (extra) => writeFileSync(join(env.DONE_DONE_HOME, 'config.yaml'), `agent_config:\n  opencode: { model: opencode-go/test-model }\njudge:\n  route: answerer:opencode\n${extra}`);
   routeCfg('');
@@ -2625,7 +2660,7 @@ process.exitCode = ${exit};
   assert.match(doctor('agent: acp:gemini\n').by('agent').detail, /which is not startable \(not on PATH\)$/);
   assert.equal(calls().length, 3, 'acpx is started only by --probe, beyond --version');
   // A target is one plain word, never a flag.
-  assert.match(doctor('agent: acp:--help\n').out, /agent must be one of claude, codex, opencode, pi, gemini, acp:<target>/);
+  assert.match(doctor('agent: acp:--help\n').out, /agent must be one of claude, codex, opencode, pi, gemini, or acp:<target>/);
 });
 
 test('history lists newest first and logs tails the step log', () => {

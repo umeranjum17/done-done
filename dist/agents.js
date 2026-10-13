@@ -183,8 +183,9 @@ export const agentChoices = () => [...AGENTS.filter(supported), 'acp:<target>'];
 export const noAgent = () => new UsageError(`no agent is set: ask the user which agent to use (${agentChoices().join(', ')}); never pick one for them`, `Save the user's answer: done-done init --agent <agent> --model <model>, e.g. done-done init --agent opencode --model ${CHEAP.opencode.model}`);
 export const modelFor = (cfg, agent) => cfg.agent_config[agent]?.model || CHEAP[agent]?.model || '';
 export const agentRun = (cfg, agent, model = modelFor(cfg, agent)) => ({
-    agent, model, effort: cfg.agent_config[agent]?.effort ?? '', args: cfg.agent_args_override[agent] ?? [], path: agentPath(agent, cfg), timeoutMs: parseDuration(cfg.agent_timeout),
+    agent, model, effort: cfg.agent_config[agent]?.effort ?? '', args: cfg.agent_args_override[agent] ?? [], path: agentPath(agent, cfg), override: cfg.agent_path_override[agent] ?? '', timeoutMs: parseDuration(cfg.agent_timeout),
 });
+export const notStartable = (agent, override = '') => (override ? `agent_path_override.${agent} ${override} is not an executable file` : `${agent} is not on PATH`);
 // The known agent an agent names, for the judge-independence check: acp:claude-code is claude; a target that
 // names no known agent (acp:claudex, acp:foo) stays as named.
 export function knownAgentOf(agent) {
@@ -270,7 +271,7 @@ export function askAgent(c) {
             throw new Error(`no adapter for ${c.agent} yet`);
         const bin = c.path;
         if (!bin)
-            throw new Error(c.agent.startsWith('acp:') ? `${c.agent} needs acpx, and acpx is not startable; ${ACPX_INSTALL}` : `${c.agent} is not on PATH, or agent_path_override.${c.agent} is not an executable file`);
+            throw new Error(c.agent.startsWith('acp:') ? `${c.agent} needs acpx, and acpx is not startable; ${ACPX_INSTALL}` : notStartable(c.agent, c.override));
         let lastError = '';
         for (;;) {
             attempts++;

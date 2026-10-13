@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { createInterface } from 'node:readline/promises';
 import { parseArgs } from 'node:util';
 import { encode } from '@toon-format/toon';
-import { Document, parseDocument } from 'yaml';
+import { Document, parseDocument, type YAMLMap } from 'yaml';
 import { ACPX_INSTALL, agentChoices, askAgent, findBin, JUDGES, knownAgentOf, noAgent, selectAgent, selectJudge, supported, type AgentAnswer, type JudgeChoice } from './agents.js';
 import { AGENTS, CHEAP, type Config, globalConfigText, home, isAgent, loadConfig, parseDuration, UsageError } from './config.js';
 import { backend, type Capture, judge, judgeable, type Judged, onPath, quote } from './judge.js';
@@ -1651,7 +1651,12 @@ function checkChoice(agent: string, model: string) {
 function saveAgent(agent: string, model: string): string {
   const file = join(home(), 'config.yaml');
   const doc = parseDocument(readFileSync(file, 'utf8'));
-  doc.set('agent', doc.createNode(agent)); // a new node, so it drops the template's "" quotes
+  const fresh = !doc.has('agent');
+  doc.set('agent', doc.createNode(agent));
+  if (fresh) {
+    const items = (doc.contents as YAMLMap).items;
+    items.unshift(items.pop()!);
+  }
   if (model) doc.setIn(['agent_config', agent, 'model'], model);
   writeFileSync(`${file}.tmp`, doc.toString({ lineWidth: 0 }));
   renameSync(`${file}.tmp`, file);
@@ -1733,7 +1738,7 @@ async function cmdInit(argv: string[]): Promise<number> {
   const writeAgent = (): { out: Record<string, string>; help: string[]; code: number } => {
     if (choice) {
       const saved = saveAgent(choice.agent, choice.model);
-      const overridden = cfg.from.agent === 'repo' && !!cfg.agent && cfg.agent !== choice.agent;
+      const overridden = cfg.from.agent === 'repo' && cfg.agent !== choice.agent;
       return { out: { agent: overridden ? `${saved}; .done-done.yaml overrides it with ${cfg.agent}` : saved }, help: [], code: PASS };
     }
     if (cfg.agent) return { out: { agent: `unchanged (${cfg.agent})` }, help: [], code: PASS };

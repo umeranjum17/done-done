@@ -109,7 +109,7 @@ function apply(target, text, file, scope) {
         const ok = spec.type === 'string' ? typeof value === 'string'
             : spec.type === 'boolean' ? typeof value === 'boolean'
                 : spec.type === 'string[]' ? Array.isArray(value) && value.every((v) => typeof v === 'string')
-                    : spec.type === 'agent' ? value === '' || isAgent(value)
+                    : spec.type === 'agent' ? isAgent(value)
                         : spec.type === 'route' ? typeof value === 'string' && (['', 'auto', 'claude-code'].includes(value) || ANSWERER_JUDGES.some((a) => value === `answerer:${a}`))
                             : spec.type === 'claude_code' ? isMap(value) && Object.entries(value).every(([k, v]) => k === 'config_dir' && typeof v === 'string')
                                 : spec.type === 'agent_config' ? isMap(value) && Object.entries(value).every(([a, c]) => isAgent(a) && isMap(c) && Object.entries(c).every(([k, m]) => ['model', 'effort'].includes(k) && typeof m === 'string'))
@@ -120,7 +120,7 @@ function apply(target, text, file, scope) {
                                                     : isMap(value) && Object.values(value).every((j) => j && typeof j.command === 'string');
         const want = {
             journeys: 'a map of name: {command: <string>}',
-            agent: `one of ${AGENTS.join(', ')}, acp:<target>, or '' for unset`,
+            agent: `one of ${AGENTS.join(', ')}, or acp:<target>`,
             agent_config: `a map of <agent>: {model: <string>, effort: <string>} for ${AGENTS.join(', ')}, acp:<target>`,
             args: `a map of <agent>: [<flag>, ...] for ${AGENTS.join(', ')}`,
             paths: `a map of <agent>: <binary name or absolute path> for ${AGENTS.join(', ')}`,
@@ -129,6 +129,8 @@ function apply(target, text, file, scope) {
             route: `auto, claude-code (for claude), or answerer:<agent> for one of ${ANSWERER_JUDGES.join(', ')}`,
             claude_code: 'a map with config_dir, a string (the claude binary is agent_path_override.claude)',
         };
+        if (key === 'agent' && value === '')
+            throw new UsageError(`${file}: agent must not be empty; to leave it unset, remove the key`);
         if (!ok)
             throw new UsageError(`${file}: ${key} must be ${want[spec.type] ?? `a ${spec.type}`}`);
         if (key === 'checks.not_proven' && value !== 'inconclusive' && value !== 'allow')
@@ -219,9 +221,9 @@ export function globalConfigText() {
     return `# done-done global config. \`done-done init\` writes it once; \`init --agent\` then sets agent and its model in place.
 # A repo's .done-done.yaml may set agent (and the repo keys); every key here except agent is global-only.
 
-# The coding agent done-done starts: one of ${AGENTS.join(', ')}, or acp:<target>. done-done never picks one: while this
-# is empty it asks you in a terminal, or stops with the command that sets it: done-done init --agent <agent> --model <model>.
-agent: ""
+# The coding agent done-done starts: one of ${AGENTS.join(', ')}, or acp:<target>. done-done never picks one: while none is set
+# it asks you in a terminal, or stops with the command that sets it: done-done init --agent <agent> --model <model>.
+# agent: opencode
 
 # Model and reasoning effort per agent (effort: ${EFFORTS.join(', ')}; gemini and acp:<target> have no effort flag). These are the cheap defaults.
 agent_config:

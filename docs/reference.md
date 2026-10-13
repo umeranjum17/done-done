@@ -333,7 +333,7 @@ There are two files. Unknown keys are an error in both.
 **Global:** `~/.done-done/config.yaml`. Override the location with `DONE_DONE_HOME`. `done-done init` writes it, commented and at these defaults, when there is none, and never overwrites it. The agent keys have the same names, meanings and scopes as no-mistakes' global config.
 
 ```yaml
-agent: ""                             # claude, codex, opencode, pi, gemini or acp:<target>, set by you (init --agent); "" asks; .done-done.yaml may override it
+# agent: opencode                     # claude, codex, opencode, pi, gemini or acp:<target>, set by you (init --agent) and unset until then; .done-done.yaml may override it
 agent_config:                         # model and effort per agent; global only
   claude: { model: claude-haiku-5-5, effort: low }
   opencode: { model: opencode-go/muse-spark-1.3-contributor, effort: low }

@@ -1683,7 +1683,12 @@ function checkChoice(agent, model) {
 function saveAgent(agent, model) {
     const file = join(home(), 'config.yaml');
     const doc = parseDocument(readFileSync(file, 'utf8'));
-    doc.set('agent', doc.createNode(agent)); // a new node, so it drops the template's "" quotes
+    const fresh = !doc.has('agent');
+    doc.set('agent', doc.createNode(agent));
+    if (fresh) {
+        const items = doc.contents.items;
+        items.unshift(items.pop());
+    }
     if (model)
         doc.setIn(['agent_config', agent, 'model'], model);
     writeFileSync(`${file}.tmp`, doc.toString({ lineWidth: 0 }));
@@ -1779,7 +1784,7 @@ async function cmdInit(argv) {
     const writeAgent = () => {
         if (choice) {
             const saved = saveAgent(choice.agent, choice.model);
-            const overridden = cfg.from.agent === 'repo' && !!cfg.agent && cfg.agent !== choice.agent;
+            const overridden = cfg.from.agent === 'repo' && cfg.agent !== choice.agent;
             return { out: { agent: overridden ? `${saved}; .done-done.yaml overrides it with ${cfg.agent}` : saved }, help: [], code: PASS };
         }
         if (cfg.agent)

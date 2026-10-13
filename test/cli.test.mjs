@@ -3552,7 +3552,7 @@ test('gemini edit steps run with auto_edit, never yolo, and read steps stay in p
   assert.deepEqual(codexEdit.argv, ['exec', '--json', '--ephemeral', '-m', 'gpt-test', '--sandbox', 'workspace-write', '-c', 'sandbox_workspace_write.network_access=true', '--add-dir', '/evidence/run-1', '--add-dir', '/scratch']);
   assert.equal(codexEdit.cwd, repo);
   // codex's sandbox ends a command's background processes with it, so its edit prompt says to drive within one command.
-  assert.match(codexEdit.stdin, /^p\n\nYour shell sandbox ends every process a command started, background ones too, when that command ends\. So launch the app, drive it, save the captures and stop everything within one shell command/);
+  assert.match(codexEdit.stdin, /^p\n\nYour shell sandbox ends every process a command started, background ones too, when that command ends\. So start what a task needs \(an app, a server, a browser bridge\), use it, save what it produces and stop it within one shell command/);
   assert.match(edit.stdin, /^p\n\nAnswer with only one JSON object/, 'other agents get no such note');
   assert.equal(refused.ok, false);
   assert.match(refused.error, /^codex cannot run tool-less/);

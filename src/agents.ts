@@ -179,7 +179,7 @@ const ADAPTERS: Record<string, Adapter> = {
     editOnly: 'codex cannot run tool-less: with your config.toml it keeps its MCP tools, which read files outside the folder',
     // Seen live 13 Oct: each sandboxed command runs in its own process namespace, so a server or browser bridge started in the
     // background by one command was gone by the next one, and a drive that launched the app and then browsed it captured nothing.
-    editNote: 'Your shell sandbox ends every process a command started, background ones too, when that command ends. So launch the app, drive it, save the captures and stop everything within one shell command (a script in $TMPDIR is fine).',
+    editNote: 'Your shell sandbox ends every process a command started, background ones too, when that command ends. So start what a task needs (an app, a server, a browser bridge), use it, save what it produces and stop it within one shell command (a script in $TMPDIR is fine).',
     argv: (c) => ['exec', '--json', '--ephemeral', ...(c.model ? ['-m', c.model] : []),
       '--sandbox', 'workspace-write', '-c', 'sandbox_workspace_write.network_access=true', ...(c.dirs ?? []).flatMap((d) => ['--add-dir', d])],
     answer: (out, c) => {

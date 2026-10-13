@@ -3018,7 +3018,7 @@ test('gemini edit steps run with auto_edit, never yolo, and read steps stay in p
   const { repo, env } = setup();
   const s = stubPiGemini(env);
   const { askAgent } = await import(pathToFileURL(join(dirname(fileURLToPath(import.meta.url)), '..', 'dist', 'agents.js')).href);
-  const call = { agent: 'gemini', model: 'flash-lite', prompt: 'p', schema: { type: 'object', properties: { ok: { type: 'boolean' } }, required: ['ok'] }, cwd: repo, timeoutMs: 60_000, record: join(s.env.PATH, 'rec.json') };
+  const call = { agent: 'gemini', model: 'flash-lite', path: join(s.env.PATH, 'gemini'), prompt: 'p', schema: { type: 'object', properties: { ok: { type: 'boolean' } }, required: ['ok'] }, cwd: repo, timeoutMs: 60_000, record: join(s.env.PATH, 'rec.json') };
   const old = process.env.PATH;
   process.env.PATH = s.env.PATH;
   try {
@@ -3040,7 +3040,7 @@ test('opencode read calls get a deny-all permission and no read allowance', asyn
   const old = process.env.PATH;
   process.env.PATH = s.env.PATH;
   try {
-    askAgent({ agent: 'opencode', model: 'm', prompt: 'p', schema: { type: 'object', properties: { ok: { type: 'boolean' } }, required: ['ok'] }, cwd: repo, timeoutMs: 60_000, tools: 'read', record: join(s.env.PATH, 'rec.json') });
+    askAgent({ agent: 'opencode', model: 'm', path: join(s.env.PATH, 'opencode'), prompt: 'p', schema: { type: 'object', properties: { ok: { type: 'boolean' } }, required: ['ok'] }, cwd: repo, timeoutMs: 60_000, tools: 'read', record: join(s.env.PATH, 'rec.json') });
   } finally {
     process.env.PATH = old;
   }
@@ -3086,7 +3086,7 @@ test('a repo step that gemini refuses as untrusted fails with the trust fix line
   const old = process.env.PATH;
   process.env.PATH = s.env.PATH;
   try {
-    const out = askAgent({ agent: 'gemini', model: 'flash-lite', prompt: 'p', schema: { type: 'object', properties: { ok: { type: 'boolean' } }, required: ['ok'] }, cwd: repo, timeoutMs: 60_000, record: join(s.env.PATH, 'rec.json'), tools: 'edit' });
+    const out = askAgent({ agent: 'gemini', model: 'flash-lite', path: join(s.env.PATH, 'gemini'), prompt: 'p', schema: { type: 'object', properties: { ok: { type: 'boolean' } }, required: ['ok'] }, cwd: repo, timeoutMs: 60_000, record: join(s.env.PATH, 'rec.json'), tools: 'edit' });
     assert.equal(out.ok, false);
     assert.match(out.error, /trust it in Gemini CLI first, then retry/);
   } finally {
@@ -3098,7 +3098,7 @@ test('an edit step whose answer is not JSON is never asked again, while a tool-l
   const { repo, env } = setup();
   const s = stubPiGemini(env, '{"ok":true}', 'bad');
   const { askAgent } = await import(pathToFileURL(join(dirname(fileURLToPath(import.meta.url)), '..', 'dist', 'agents.js')).href);
-  const call = { agent: 'pi', model: '', prompt: 'p', schema: { type: 'object', properties: { ok: { type: 'boolean' } }, required: ['ok'] }, cwd: repo, timeoutMs: 60_000, record: join(s.env.PATH, 'rec.json') };
+  const call = { agent: 'pi', model: '', path: join(s.env.PATH, 'pi'), prompt: 'p', schema: { type: 'object', properties: { ok: { type: 'boolean' } }, required: ['ok'] }, cwd: repo, timeoutMs: 60_000, record: join(s.env.PATH, 'rec.json') };
   const old = process.env.PATH;
   process.env.PATH = s.env.PATH;
   try {

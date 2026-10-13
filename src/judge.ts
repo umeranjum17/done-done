@@ -55,6 +55,20 @@ export function onPath(name: string): string {
   return '';
 }
 
+// Is claude signed in to this sign-in folder? Reads only the binary's non-secret auth status, as the kit does.
+// It runs in a scratch folder with a scratch HOME, so nothing else of the user's is read.
+export function claudeLoggedIn(bin: string, configDir: string): boolean {
+  const scratch = mkdtempSync(join(tmpdir(), 'done-done-judge-'));
+  try {
+    const r = spawnSync(bin, ['--safe-mode', '--setting-sources', '', 'auth', 'status'], { cwd: scratch, encoding: 'utf8', timeout: 30_000, env: { HOME: scratch, PATH: process.env.PATH, CLAUDE_CONFIG_DIR: configDir } });
+    return r.status === 0 && JSON.parse(r.stdout).loggedIn === true;
+  } catch {
+    return false;
+  } finally {
+    rmSync(scratch, { recursive: true, force: true });
+  }
+}
+
 const KIT = '@byokit/decide@0.8.0';
 const quote = (a: string) => (/^[\w@%+=:,./-]+$/.test(a) ? a : `'${a.replaceAll("'", `'\\''`)}'`);
 
@@ -117,21 +131,9 @@ export async function backend(cfg: Config, choice: JudgeChoice, record = () => '
   const { claudeCode, resolve } = await kit();
   // The real folder, so a link to ~/.claude is refused here as a config error, not later per capture.
   const real = realpathSync(dir);
-  // After a failed request: is the binary still signed in? Reads only the binary's non-secret auth status, as the kit does.
-  const signedIn = () => {
-    const scratch = mkdtempSync(join(tmpdir(), 'done-done-judge-'));
-    try {
-      const r = spawnSync(bin, ['--safe-mode', '--setting-sources', '', 'auth', 'status'], { cwd: scratch, encoding: 'utf8', timeout: 30_000, env: { HOME: scratch, PATH: process.env.PATH, CLAUDE_CONFIG_DIR: real } });
-      return r.status === 0 && JSON.parse(r.stdout).loggedIn === true;
-    } catch {
-      return false;
-    } finally {
-      rmSync(scratch, { recursive: true, force: true });
-    }
-  };
   try {
     const ask = claudeCode({ bin, configDir: real, model: choice.model, timeoutMs: TIMEOUT_MS }).ask;
-    return { ask, resolve, lastError: () => '', signIn, signedIn, detail: `claude binary at ${bin}, a sign-in folder and the judge kit are present (login is checked only when a capture is judged)` };
+    return { ask, resolve, lastError: () => '', signIn, signedIn: () => claudeLoggedIn(bin, real), detail: `claude binary at ${bin}, a sign-in folder and the judge kit are present (login is checked only when a capture is judged)` };
   } catch (e) {
     throw new UsageError(`judge: ${(e as Error).message} (judge.claude_code.bin ${bin}, judge.claude_code.config_dir ${dir})`, 'Set judge.claude_code.config_dir to a folder of its own, not your ~/.claude');
   }

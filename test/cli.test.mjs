@@ -1895,6 +1895,25 @@ test('auto judge skips a claude judge with no sign-in folder, so doctor and veri
   assert.ok(calls.every((c) => c.agent === 'opencode'), 'no request goes to claude');
 });
 
+test('auto judge skips an installed claude that is not signed in, even with its sign-in folder present', () => {
+  const t = setup();
+  mkdirSync(t.env.DONE_DONE_HOME, { recursive: true });
+  const cfgDir = join(t.dir, 'unsigned-signin');
+  mkdirSync(cfgDir);
+  const verdict = JSON.stringify({ relevance: { probabilities: CORRECT, rationale: 'The list shows the notes.', personReason: 'The list shows the notes.' } });
+  const s = stubAgents(t.env, verdict);
+  symlinkSync(process.execPath, join(s.bin, 'node'));
+  writeFileSync(join(t.env.DONE_DONE_HOME, 'config.yaml'), `agent: [opencode, claude]\njudge:\n  claude_code: { bin: ${JSON.stringify(join(s.bin, 'claude'))}, config_dir: ${JSON.stringify(cfgDir)} }\n`);
+  const d = toon(doctorIn(t.repo, s.env, 'doctor'));
+  const choice = d.checks.find((c) => c.check === 'judge_choice');
+  assert.match(choice.detail, /^answerer:opencode /, choice.detail);
+  const v = spawnSync(process.execPath, [CLI, 'verify', 'shots', '--outcome', 'home and settings render', '--judge', '--foreground'], { cwd: t.repo, env: s.env, encoding: 'utf8' });
+  assert.equal(v.status, 0, v.stdout + v.stderr);
+  assert.equal(toon({ out: v.stdout }).result, 'pass');
+  assert.ok(s.calls().filter((c) => c.agent === 'claude').every((c) => c.argv.includes('auth')), 'claude is only asked its sign-in status, never a judge request');
+  assert.ok(s.calls().some((c) => c.agent === 'opencode'), 'the judge request goes to opencode');
+});
+
 test('auto judge with claude as the only agent and no sign-in folder has no judge: doctor is missing and verify --judge exits 2', () => {
   const t = setup();
   mkdirSync(t.env.DONE_DONE_HOME, { recursive: true });
@@ -1932,7 +1951,8 @@ function pathEnv(env, bins) {
   const dir = mkdtempSync(join(tmpdir(), 'done-done-doctor-path-'));
   after(() => rmSync(dir, { recursive: true, force: true }));
   symlinkSync(gitPath, join(dir, 'git'));
-  for (const b of bins) writeFileSync(join(dir, b), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+  // A claude stub is signed in: auto judges only a claude whose `auth status` says it is logged in.
+  for (const b of bins) writeFileSync(join(dir, b), `#!/bin/sh\ncase "$*" in *auth*) echo '{"loggedIn":true}' ;; esac\nexit 0\n`, { mode: 0o755 });
   return { ...env, PATH: dir };
 }
 
@@ -2065,7 +2085,7 @@ test('doctor reports the judge missing when its sign-in folder is a ~/.claude', 
   const userHome = join(env.DONE_DONE_HOME, 'userhome');
   const claudeDir = join(userHome, '.claude');
   mkdirSync(claudeDir, { recursive: true });
-  writeFileSync(join(env.DONE_DONE_HOME, 'config.yaml'), `judge:\n  claude_code: { config_dir: ${JSON.stringify(claudeDir)} }\n`);
+  writeFileSync(join(env.DONE_DONE_HOME, 'config.yaml'), `judge:\n  route: claude-code\n  allow_same: true\n  claude_code: { config_dir: ${JSON.stringify(claudeDir)} }\n`);
   const j = toon(doctorIn(repo, { ...pathEnv(env, ['claude']), HOME: userHome }, 'doctor'));
   assert.equal(j.checks[5].status, 'missing');
   assert.match(j.checks[5].fix, /not your ~\/\.claude/);
@@ -2117,7 +2137,7 @@ test('with no agent installed, the judge has no author to keep apart: doctor rec
   const claudeHome = join(env.DONE_DONE_HOME, 'claude');
   mkdirSync(claudeHome, { recursive: true });
   const bin = join(env.DONE_DONE_HOME, 'claude-bin');
-  writeFileSync(bin, '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+  writeFileSync(bin, '#!/bin/sh\necho \'{"loggedIn":true}\'\n', { mode: 0o755 });
   writeFileSync(join(env.DONE_DONE_HOME, 'config.yaml'), `judge:\n  claude_code: { bin: ${JSON.stringify(bin)}, config_dir: ${JSON.stringify(claudeHome)} }\n`);
   const d = toon(doctorIn(repo, pathEnv(env, []), 'doctor'));
   assert.match(d.checks[4].detail, /^claude \(model claude-haiku-5-5; agent: auto\) is not on PATH/);

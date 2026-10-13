@@ -1,10 +1,10 @@
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, isAbsolute, join } from 'node:path';
 import { stripVTControlCharacters } from 'node:util';
 import { AGENTS, ANSWERER_JUDGES, CHEAP_MODELS, UsageError } from './config.js';
-import { isExecutable, onPath } from './judge.js';
+import { claudeLoggedIn, isExecutable, onPath } from './judge.js';
 // argv never carries the prompt: it goes on stdin, or (file: true) into a 0600 prompt file the argv points at.
 // done-done parses the answer, validates it against the schema, and asks a tool-less call again, at most ASK_ATTEMPTS calls.
 const ASK_ATTEMPTS = 3;
@@ -207,10 +207,11 @@ export function agentPath(agent) {
     return acpxRuns.get(acpx) ? acpx : '';
 }
 export const claudeBin = (cfg) => cfg.judge.claude_code.bin || onPath('claude');
+// claude can judge only when the backend would accept its bin and sign-in folder and it is signed in to that folder.
 const claudeReady = (cfg) => {
     const bin = claudeBin(cfg);
     const dir = cfg.judge.claude_code.config_dir;
-    return !!bin && isAbsolute(bin) && isExecutable(bin) && isAbsolute(dir) && existsSync(dir);
+    return !!bin && isAbsolute(bin) && isExecutable(bin) && isAbsolute(dir) && existsSync(dir) && claudeLoggedIn(bin, realpathSync(dir));
 };
 const routeOf = (agent) => (agent === 'claude' ? 'claude-code' : `answerer:${agent}`);
 const canJudge = (agent) => agent === 'claude' || ANSWERER_JUDGES.includes(agent);

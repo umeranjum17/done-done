@@ -1,10 +1,10 @@
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, isAbsolute, join } from 'node:path';
 import { stripVTControlCharacters } from 'node:util';
 import { AGENTS, ANSWERER_JUDGES, CHEAP_MODELS, type Config, UsageError } from './config.js';
-import { isExecutable, onPath } from './judge.js';
+import { claudeLoggedIn, isExecutable, onPath } from './judge.js';
 
 // How done-done starts a coding agent for one step: a fresh, single-shot session that
 // answers one JSON-schema question. The prompt goes on stdin or in a 0600 prompt file, never in
@@ -213,10 +213,11 @@ export function agentPath(agent: string): string {
 export type JudgeChoice = { route: string; agent: string; model: string; independence: 'agent' | 'model' | 'session-only'; from: 'config' | 'auto'; author: { agent: string; model: string } };
 
 export const claudeBin = (cfg: Config) => cfg.judge.claude_code.bin || onPath('claude');
+// claude can judge only when the backend would accept its bin and sign-in folder and it is signed in to that folder.
 const claudeReady = (cfg: Config) => {
   const bin = claudeBin(cfg);
   const dir = cfg.judge.claude_code.config_dir;
-  return !!bin && isAbsolute(bin) && isExecutable(bin) && isAbsolute(dir) && existsSync(dir);
+  return !!bin && isAbsolute(bin) && isExecutable(bin) && isAbsolute(dir) && existsSync(dir) && claudeLoggedIn(bin, realpathSync(dir));
 };
 const routeOf = (agent: string) => (agent === 'claude' ? 'claude-code' : `answerer:${agent}`);
 const canJudge = (agent: string) => agent === 'claude' || ANSWERER_JUDGES.includes(agent);

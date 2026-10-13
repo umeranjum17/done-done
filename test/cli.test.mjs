@@ -3552,6 +3552,24 @@ test('maintain checks a bracketed or parenthesized file:line citation and sends 
   assert.ok(reader.stdin.includes('Cited source app/(auth)/login.tsx:\nexport const Login = 1; // BRACKET-CITED-LINE'), reader.stdin);
 });
 
+test('maintain checks a citation of a bracketed file name like pages/[id].tsx and reports a wrong line', () => {
+  const { repo, env, sh } = setup();
+  const s = stubAgents(env, JSON.stringify({ drift: [], recipe: 'open it', recipes: [], missing: [] }));
+  mkdirSync(join(repo, 'pages'), { recursive: true });
+  writeFileSync(join(repo, 'pages', '[id].tsx'), 'export default 1;\n');
+  const skill = join(repo, '.agents', 'skills', 'verify-notes');
+  mkdirSync(join(skill, 'features'), { recursive: true });
+  writeFileSync(join(skill, 'SKILL.md'), '# verify-notes\n');
+  writeFileSync(join(skill, 'features', 'README.md'), '# features\n\n- [Home](home.md)\n');
+  writeFileSync(join(skill, 'features', 'home.md'), '# Home\n\nThe detail page is pages/[id].tsx:10.\n');
+  sh('add', '-A');
+  sh('commit', '-qm', 'skill');
+  const r = doctorIn(repo, s.env, 'maintain', '--foreground');
+  const m = toon(r);
+  assert.deepEqual([r.code, m.result], [1, 'drift'], r.out);
+  assert.deepEqual(m.findings.map((f) => f.what), ['cites pages/[id].tsx:10, but pages/[id].tsx has 1 lines'], r.out);
+});
+
 test('maintain leaves an unreadable cited file out of the reader source and names it, without blocking', { skip: process.getuid?.() === 0 && 'root reads files whatever their mode' }, () => {
   const { repo, env, sh } = setup();
   const s = stubPiGemini(env, JSON.stringify({ drift: [], recipe: 'open it', recipes: [], missing: [] }));

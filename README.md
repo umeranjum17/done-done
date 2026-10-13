@@ -162,6 +162,7 @@ Run `done-done` with no arguments to see the current config and the next step.
 - 🧾 **Honest claims**: Reads a pull request's `## Checks` block — from a file, a URL, or stdin — and makes sure every line is filled in.
 - 📌 **Verifiable later**: `receipt` records a passing check against the exact commit and the sha256 of every file it cited; `receipt --verify` re-checks it from any checkout of that commit on the same machine (a merge gate or a fresh clone), or in CI once the evidence folder is copied there ([how](docs/reference.md#where-proof-lives)).
 - 👀 **Shows the outcome** (opt-in): `--judge` asks a fresh, tools-off model on your own plan (Claude Code, or an agent CLI such as opencode) whether each screenshot is the right screen for the claim; the judge is a different agent from the author when one is installed (with only the author's agent, a different cheap model, or a fresh session of the same model when that is the same), and a wrong screen fails.
+- 🎨 **Looks right**: `done-done design <screens...> [--mock <screen>=<mock>]` has the same judge look at each captured screen, alone or next to its approved mock, and fails it on stretched or squashed images, clipped text, overlap, elements off-screen, blank or black strips and broken layout, naming each defect and where it is ([how](docs/reference.md#design-check)).
 - 🔒 **Safe in CI**: `--trusted-ref origin/main` reads the rules from your main branch, so a pull request can't loosen them.
 
 Every answer is an exit code: **0** pass, **1** fail, **2** usage or config error, **3** can't tell either way, **4** a `verify`, `maintain` or `rerun` run is still running.
@@ -191,7 +192,7 @@ Another fleet works the same way: add the include text to whatever your workers 
 
 ## What's next
 
-So far: `init`, `doctor`, `run`, `check`, `receipt`, the opt-in screenshot judge and the opt-in session hooks for Claude Code, Codex, opencode, Gemini CLI and pi. Coming next: help writing the proof steps for your app.
+So far: `init`, `doctor`, `run`, `check`, `receipt`, the opt-in screenshot judge, the `design` visual check and the opt-in session hooks for Claude Code, Codex, opencode, Gemini CLI and pi. Coming next: help writing the proof steps for your app.
 
 ## Develop
 

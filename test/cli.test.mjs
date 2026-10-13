@@ -8,6 +8,7 @@ import { basename, dirname, join } from 'node:path';
 import { after, test } from 'node:test';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { crc32, deflateSync } from 'node:zlib';
+import jpeg from 'jpeg-js';
 import { parse } from 'yaml';
 import { decode } from '@toon-format/toon';
 
@@ -19,7 +20,7 @@ const json = (r) => JSON.parse(r.out);
 
 const isIgnored = (repo, path) => spawnSync('git', ['check-ignore', '--no-index', '-q', '--', path], { cwd: repo }).status === 0;
 
-function png(w, h, pixel) {
+function png(w, h, pixel, colour = 2) {
   const chunk = (type, data) => {
     const len = Buffer.alloc(4);
     len.writeUInt32BE(data.length);
@@ -27,14 +28,15 @@ function png(w, h, pixel) {
     crc.writeUInt32BE(crc32(Buffer.concat([Buffer.from(type), data])));
     return Buffer.concat([len, Buffer.from(type), data, crc]);
   };
+  const channels = colour === 6 ? 4 : 3;
   const ihdr = Buffer.alloc(13);
   ihdr.writeUInt32BE(w, 0);
   ihdr.writeUInt32BE(h, 4);
   ihdr[8] = 8;
-  ihdr[9] = 2;
-  const raw = Buffer.alloc(h * (w * 3 + 1));
+  ihdr[9] = colour;
+  const raw = Buffer.alloc(h * (w * channels + 1));
   for (let y = 0; y < h; y++)
-    for (let x = 0; x < w; x++) raw.set(pixel(x, y), y * (w * 3 + 1) + 1 + x * 3);
+    for (let x = 0; x < w; x++) raw.set(pixel(x, y), y * (w * channels + 1) + 1 + x * channels);
   return Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), chunk('IHDR', ihdr), chunk('IDAT', deflateSync(raw)), chunk('IEND', Buffer.alloc(0))]);
 }
 const screen = (seed = 0) => png(200, 120, (x, y) => [(x * 3 + seed) % 256, (y * 5) % 256, (x + y) % 256]);
@@ -1778,6 +1780,7 @@ test('without the optional kit, --judge is a config error naming the npx command
   cpSync(join(root, 'package.json'), join(pkg, 'package.json'));
   mkdirSync(join(pkg, 'node_modules', '@toon-format'), { recursive: true });
   symlinkSync(join(root, 'node_modules', 'yaml'), join(pkg, 'node_modules', 'yaml'));
+  symlinkSync(join(root, 'node_modules', 'jpeg-js'), join(pkg, 'node_modules', 'jpeg-js'));
   symlinkSync(join(root, 'node_modules', '@toon-format', 'toon'), join(pkg, 'node_modules', '@toon-format', 'toon'));
   const args = ['check', '--judge', '--outcome', "Umer's notes list shows three notes", files[0]];
   const plain = spawnSync(process.execPath, [join(pkg, 'dist', 'cli.js'), ...args], { cwd: j.repo, env: j.env, encoding: 'utf8' });
@@ -1942,6 +1945,162 @@ test('auto judge skips a claude route with a relative bin, since the claude-code
   const choice = toon(doctorIn(t.repo, env, 'doctor')).checks.find((c) => c.check === 'judge_choice');
   assert.match(choice.detail, /^answerer:opencode /, choice.detail);
   assert.doesNotMatch(choice.detail, /claude-code/);
+});
+
+// The design check: the same judge looks at each screen for visual defects, one tools-off request per screen.
+test('design fails a screen on each defect the judge names, alone or next to its mock, and passes a clean one', () => {
+  const t = setup();
+  mkdirSync(t.env.DONE_DONE_HOME, { recursive: true });
+  writeFileSync(join(t.env.DONE_DONE_HOME, 'config.yaml'), 'agent: claude\n');
+  writeFileSync(join(t.dir, 'mock.png'), screen(3));
+  writeFileSync(join(t.dir, 'blank.png'), blank());
+  const kinds = ['aspect', 'clipped-text', 'overlap', 'off-screen', 'blank-strip', 'layout'];
+  const answer = (flagged = {}) => JSON.stringify(Object.fromEntries(kinds.map((k) => [k, { probabilities: flagged[k] ?? { defect: 0.03, none: 0.97 }, rationale: 'Looked.', personReason: flagged[k] ? `${k} at the header, top left` : 'Nothing of this kind.' }])));
+  // Run from outside any repo, as a project's own capture step might.
+  const design = (reply, ...args) => {
+    const s = stubAgents(t.env, reply);
+    symlinkSync(process.execPath, join(s.bin, 'node'));
+    const r = spawnSync(process.execPath, [CLI, 'design', ...args], { cwd: t.dir, env: s.env, encoding: 'utf8' });
+    return { code: r.status, out: r.stdout + r.stderr, calls: s.calls() };
+  };
+  const bad = design(answer({ aspect: { defect: 0.9, none: 0.1 }, 'blank-strip': { defect: 0.85, none: 0.15 } }), 'screen.png', 'screen2.png', '--mock', 'screen.png=mock.png');
+  assert.equal(bad.code, 1, bad.out);
+  const b = toon(bad);
+  assert.equal(b.result, 'fail');
+  assert.deepEqual([b.judge.route, b.judge.model, b.judge.independence, b.judge.author], ['answerer:opencode', 'opencode-go/muse-spark-1.3-contributor', 'agent', 'claude (model claude-haiku-5-5)']);
+  assert.deepEqual(b.screens.map((s) => [s.path, s.verdict, s.mock ?? null]), [['screen.png', 'fail', 'mock.png'], ['screen2.png', 'fail', null]]);
+  assert.deepEqual(b.screens[0].defects, [{ kind: 'aspect', where: 'aspect at the header, top left' }, { kind: 'blank-strip', where: 'blank-strip at the header, top left' }]);
+  assert.match(b.help[0], /^Fix each defect named above, .*done-done design screen\.png screen2\.png --mock screen\.png=mock\.png$/);
+  assert.equal(bad.calls.length, 2, 'one tools-off request per screen');
+  assert.deepEqual(bad.calls.map((c) => c.attached), [['PNG', 'PNG'], ['PNG']], 'a screen with a mock sends both images; one without, the screen alone');
+  assert.ok(bad.calls.every((c) => JSON.parse(c.permission)['*'] === 'deny' && !/screen2?\.png|mock\.png/.test(c.file) && !c.file.includes(t.dir)), 'every tool is denied, and no path reaches the prompt');
+  assert.match(bad.calls[0].file, /"mock"/);
+  assert.doesNotMatch(bad.calls[1].file, /"mock"/);
+  const ok = design(answer(), 'screen.png');
+  assert.equal(ok.code, 0, ok.out);
+  assert.deepEqual([toon(ok).result, toon(ok).screens[0].verdict, toon(ok).screens[0].defects], ['pass', 'pass', []]);
+  const unsure = design(answer({ layout: { defect: 0.5, none: 0.5 } }), 'screen.png');
+  assert.equal(unsure.code, 3, unsure.out);
+  assert.match(toon(unsure).screens[0].reason, /^not confident enough about layout$/);
+  const empty = design(answer(), 'blank.png');
+  assert.equal(empty.code, 1, empty.out);
+  assert.match(toon(empty).screens[0].reason, /blank frame/);
+  assert.equal(empty.calls.length, 0, 'a blank frame fails without a request');
+  assert.equal(design(answer(), '--mock', 'screen.png').code, 2);
+  assert.match(toon(design(answer(), 'gone.png')).error, /gone\.png: cannot read \(ENOENT\)/);
+});
+
+test('design measures a blank strip along an edge, but not a nav rail with icons or a uniform frame', () => {
+  const t = setup();
+  mkdirSync(t.env.DONE_DONE_HOME, { recursive: true });
+  writeFileSync(join(t.env.DONE_DONE_HOME, 'config.yaml'), 'agent: claude\n');
+  // A light screen with a few dark text lines; the judge stub says every kind is clean, so only the pixels can fail it.
+  const light = [245, 240, 230];
+  const text = (x, y) => x >= 60 && x < 220 && y % 30 >= 10 && y % 30 < 16;
+  writeFileSync(join(t.dir, 'strip.png'), png(240, 160, (x, y) => (x < 24 ? [20, 22, 20] : text(x, y) ? [40, 40, 40] : light)));
+  writeFileSync(join(t.dir, 'rail.png'), png(240, 160, (x, y) => (x < 48 ? (x >= 14 && x < 34 && y % 40 >= 10 && y % 40 < 30 ? [220, 220, 220] : [30, 30, 36]) : text(x, y) ? [40, 40, 40] : light)));
+  writeFileSync(join(t.dir, 'uniform.png'), png(240, 160, () => [20, 22, 20]));
+  const clean = JSON.stringify(Object.fromEntries(['aspect', 'clipped-text', 'overlap', 'off-screen', 'blank-strip', 'layout'].map((k) => [k, { probabilities: { defect: 0.02, none: 0.98 }, rationale: 'Looked.', personReason: 'Nothing of this kind.' }])));
+  const s = stubAgents(t.env, clean);
+  symlinkSync(process.execPath, join(s.bin, 'node'));
+  const design = (...args) => {
+    const r = spawnSync(process.execPath, [CLI, 'design', '--full', ...args], { cwd: t.dir, env: s.env, encoding: 'utf8' });
+    return { code: r.status, out: r.stdout + r.stderr };
+  };
+  const strip = design('strip.png');
+  assert.equal(strip.code, 1, strip.out);
+  assert.deepEqual(toon(strip).screens[0].defects, [{ kind: 'blank-strip', where: 'left edge: a plain #141614 band 24 px deep (10% of the width), full height, with nothing in it' }]);
+  const rail = design('rail.png');
+  assert.equal(rail.code, 0, rail.out);
+  assert.deepEqual(toon(rail).screens[0].defects, [], 'a dark rail that holds icons is content, not a strip');
+  const uniform = design('uniform.png');
+  assert.equal(uniform.code, 1, uniform.out);
+  assert.match(toon(uniform).screens[0].reason, /blank frame/);
+  assert.deepEqual(toon(uniform).screens[0].defects, [], 'a whole uniform screen is the blank-frame check, not a strip');
+});
+
+test('design does not report a strip its approved mock has too, but reports one the mock lacks', () => {
+  const t = setup();
+  mkdirSync(t.env.DONE_DONE_HOME, { recursive: true });
+  writeFileSync(join(t.env.DONE_DONE_HOME, 'config.yaml'), 'agent: claude\n');
+  const light = [245, 240, 230];
+  writeFileSync(join(t.dir, 'strip.png'), png(240, 160, (x) => (x < 24 ? [20, 22, 20] : light)));
+  writeFileSync(join(t.dir, 'band-mock.png'), png(240, 160, (x) => (x < 24 ? [20, 22, 20] : light)));
+  writeFileSync(join(t.dir, 'plain-mock.png'), png(240, 160, (x, y) => (x >= 60 && x < 220 && y % 30 >= 10 && y % 30 < 16 ? [40, 40, 40] : light)));
+  const clean = JSON.stringify(Object.fromEntries(['aspect', 'clipped-text', 'overlap', 'off-screen', 'blank-strip', 'layout'].map((k) => [k, { probabilities: { defect: 0.02, none: 0.98 }, rationale: 'Looked.', personReason: 'Nothing of this kind.' }])));
+  const s = stubAgents(t.env, clean);
+  symlinkSync(process.execPath, join(s.bin, 'node'));
+  const design = (...args) => {
+    const r = spawnSync(process.execPath, [CLI, 'design', '--full', ...args], { cwd: t.dir, env: s.env, encoding: 'utf8' });
+    return { code: r.status, out: r.stdout + r.stderr };
+  };
+  const matched = design('strip.png', '--mock', 'strip.png=band-mock.png');
+  assert.equal(matched.code, 0, matched.out);
+  assert.deepEqual(toon(matched).screens[0].defects, [], 'a band the approved mock has too is approved design');
+  const unmatched = design('strip.png', '--mock', 'strip.png=plain-mock.png');
+  assert.equal(unmatched.code, 1, unmatched.out);
+  assert.deepEqual(toon(unmatched).screens[0].defects, [{ kind: 'blank-strip', where: 'left edge: a plain #141614 band 24 px deep (10% of the width), full height, with nothing in it' }]);
+  writeFileSync(join(t.dir, 'mock.webp'), Buffer.concat([Buffer.from('RIFF'), Buffer.from([4, 0, 0, 0]), Buffer.from('WEBP')]));
+  const unmeasurable = design('strip.png', '--mock', 'strip.png=mock.webp');
+  assert.equal(unmeasurable.code, 3, unmeasurable.out);
+  assert.deepEqual([toon(unmeasurable).screens[0].verdict, toon(unmeasurable).screens[0].reason], ['unsure', 'approved mock could not be measured; give a PNG or JPEG mock']);
+});
+
+test('design does not read a transparent margin as a strip, on a dark screen either', () => {
+  const t = setup();
+  mkdirSync(t.env.DONE_DONE_HOME, { recursive: true });
+  writeFileSync(join(t.env.DONE_DONE_HOME, 'config.yaml'), 'agent: claude\n');
+  // An RGBA capture on a near-black screen whose left tenth is fully transparent, as a window capture's shadow margin is.
+  writeFileSync(join(t.dir, 'margin.png'), png(240, 160, (x) => (x < 24 ? [0, 0, 0, 0] : [16, 18, 20, 255]), 6));
+  const clean = JSON.stringify(Object.fromEntries(['aspect', 'clipped-text', 'overlap', 'off-screen', 'blank-strip', 'layout'].map((k) => [k, { probabilities: { defect: 0.02, none: 0.98 }, rationale: 'Looked.', personReason: 'Nothing of this kind.' }])));
+  const s = stubAgents(t.env, clean);
+  symlinkSync(process.execPath, join(s.bin, 'node'));
+  const r = spawnSync(process.execPath, [CLI, 'design', '--full', 'margin.png'], { cwd: t.dir, env: s.env, encoding: 'utf8' });
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  assert.deepEqual(toon({ out: r.stdout + r.stderr }).screens[0].defects, [], 'the margin is transparent, not a band');
+});
+
+test('design reports an opaque black strip that has transparent pixels beside it on the same edge', () => {
+  const t = setup();
+  mkdirSync(t.env.DONE_DONE_HOME, { recursive: true });
+  writeFileSync(join(t.env.DONE_DONE_HOME, 'config.yaml'), 'agent: claude\n');
+  writeFileSync(join(t.dir, 'partial.png'), png(240, 160, (x, y) => (x < 24 ? (y < 30 ? [0, 0, 0, 0] : [0, 0, 0, 255]) : [245, 240, 230, 255]), 6));
+  writeFileSync(join(t.dir, 'clear-edge.png'), png(240, 160, (x) => (x === 0 ? [0, 0, 0, 0] : x < 24 ? [0, 0, 0, 255] : [245, 240, 230, 255]), 6));
+  writeFileSync(join(t.dir, 'clear-inside.png'), png(240, 160, (x) => (x === 3 ? [0, 0, 0, 0] : x < 8 ? [0, 0, 0, 255] : [245, 240, 230, 255]), 6));
+  const clean = JSON.stringify(Object.fromEntries(['aspect', 'clipped-text', 'overlap', 'off-screen', 'blank-strip', 'layout'].map((k) => [k, { probabilities: { defect: 0.02, none: 0.98 }, rationale: 'Looked.', personReason: 'Nothing of this kind.' }])));
+  const s = stubAgents(t.env, clean);
+  symlinkSync(process.execPath, join(s.bin, 'node'));
+  const design = (name) => spawnSync(process.execPath, [CLI, 'design', '--full', name], { cwd: t.dir, env: s.env, encoding: 'utf8' });
+  const partial = design('partial.png');
+  assert.equal(partial.status, 1, partial.stdout + partial.stderr);
+  assert.deepEqual(toon({ out: partial.stdout + partial.stderr }).screens[0].defects, [{ kind: 'blank-strip', where: 'left edge: a plain #000000 band 24 px deep (10% of the width), full height, with nothing in it' }]);
+  const edge = design('clear-edge.png');
+  assert.equal(edge.status, 1, edge.stdout + edge.stderr);
+  assert.deepEqual(toon({ out: edge.stdout + edge.stderr }).screens[0].defects, [{ kind: 'blank-strip', where: 'left edge: a plain #000000 band 24 px deep (10% of the width), full height, with nothing in it' }]);
+  const inside = design('clear-inside.png');
+  assert.equal(inside.status, 1, inside.stdout + inside.stderr);
+  assert.deepEqual(toon({ out: inside.stdout + inside.stderr }).screens[0].defects, [{ kind: 'blank-strip', where: 'left edge: a plain #000000 band 8 px deep (3% of the width), full height, with nothing in it' }]);
+});
+
+test('design judges a JPEG longer than the judge size, downscaled to a PNG', () => {
+  const t = setup();
+  mkdirSync(t.env.DONE_DONE_HOME, { recursive: true });
+  writeFileSync(join(t.env.DONE_DONE_HOME, 'config.yaml'), 'agent: claude\n');
+  const data = Buffer.alloc(1300 * 90 * 4);
+  for (let i = 0; i < data.length; i += 4) {
+    const p = i / 4, x = p % 1300, y = Math.floor(p / 1300);
+    data.set([(x * 7) % 256, (y * 11) % 256, (x + y) % 256, 255], i);
+  }
+  writeFileSync(join(t.dir, 'long.jpg'), jpeg.encode({ width: 1300, height: 90, data }, 90).data);
+  const clean = JSON.stringify(Object.fromEntries(['aspect', 'clipped-text', 'overlap', 'off-screen', 'blank-strip', 'layout'].map((k) => [k, { probabilities: { defect: 0.02, none: 0.98 }, rationale: 'Looked.', personReason: 'Nothing of this kind.' }])));
+  const s = stubAgents(t.env, clean);
+  symlinkSync(process.execPath, join(s.bin, 'node'));
+  const r = spawnSync(process.execPath, [CLI, 'design', '--full', 'long.jpg'], { cwd: t.dir, env: s.env, encoding: 'utf8' });
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  assert.equal(toon({ out: r.stdout + r.stderr }).screens[0].verdict, 'pass');
+  const calls = s.calls();
+  assert.equal(calls.length, 1, 'one request for the screen');
+  assert.deepEqual(calls[0].attached, ['PNG'], 'the judge is sent the downscaled screen');
 });
 
 // doctor: read-only health check. Required items (git, config, evidence root) gate

@@ -4889,7 +4889,9 @@ console.log(JSON.stringify({ type: 'text', part: { type: 'text', text: JSON.stri
   const off = /^fix: opencode changed the verify skill, \.done-done\.yaml, a test file or a test-runner config, which a fix never changes/;
   for (const [extra, dirty, code, reason] of [
     ['test/home.test.js', false, 1, off], ['src/app_test.go', false, 1, off], ['test_app.py', false, 1, off], ['spec/home_spec.rb', false, 1, off],
-    ['vitest.config.ts', false, 1, off], ['.done-done.yaml', false, 1, off], ['.agents/skills/verify-notes/SKILL.md', false, 1, off],
+    ['tests/home.js', false, 1, off], ['__tests__/home.js', false, 1, off], ['e2e/home.js', false, 1, off], ['src/app.test.js', false, 1, off],
+    ['app_test.py', false, 1, off], ['vitest.config.ts', false, 1, off], ['playwright.config.ts', false, 1, off], ['jest.config.js', false, 1, off],
+    ['cypress.config.ts', false, 1, off], ['cypress.json', false, 1, off], ['.done-done.yaml', false, 1, off], ['.agents/skills/verify-notes/SKILL.md', false, 1, off],
     ['', true, 1, /^dirty: uncommitted changes to tracked files \(docs\/guide\.md\)/],
     ['', false, 1, /^your HEAD failed; the fix passes, on done-done\/verify-/],
   ]) {
@@ -4901,7 +4903,7 @@ console.log(JSON.stringify({ type: 'text', part: { type: 'text', text: JSON.stri
     assert.equal(git('worktree', 'list').split('\n').length, 1, 'the done-done worktree is removed');
   }
   const calls = readFileSync(join(e.PATH, 'calls'), 'utf8').trim().split('\n');
-  assert.deepEqual([calls.length, calls.includes(t.repo)], [8, false], 'no fixer on the dirty checkout; the fixer edits a done-done worktree, never the checkout');
+  assert.deepEqual([calls.length, calls.includes(t.repo)], [17, false], 'no fixer on the dirty checkout; the fixer edits a done-done worktree, never the checkout');
   const branch = git('branch', '--list', 'done-done/*').trim();
   assert.deepEqual([git('rev-parse', 'HEAD'), git('status', '--porcelain'), git('diff', '--name-only', head, branch)], [head, '', 'src/app.js'], 'one fix on its own branch; the user branch and checkout are untouched');
 });

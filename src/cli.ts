@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import { createHash, randomBytes } from 'node:crypto';
-import { accessSync, appendFileSync, closeSync, constants, existsSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
-import { homedir, userInfo } from 'node:os';
+import { accessSync, appendFileSync, closeSync, constants, existsSync, lstatSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { homedir, tmpdir, userInfo } from 'node:os';
 import { delimiter, dirname, isAbsolute, join, matchesGlob, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createInterface } from 'node:readline/promises';
@@ -450,10 +450,13 @@ async function cmdRun(argv: string[]): Promise<number> {
   // With an instance block the app starts first on its own port, so the recipe uses
   // $DONE_DONE_BASE_URL instead of a hard-coded port; without one this is today's behaviour.
   let inst: { pgid: number; env: Record<string, string> } | undefined;
+  let scratch: string | undefined;
   if (cfg.instance) {
+    scratch = mkdtempSync(join(tmpdir(), 'done-done-instance-'));
     try {
-      inst = await startInstance(repo, cfg.instance, rec.run_id, join(cfg.evidence.root, '.done-done', 'tmp', rec.run_id), process.env);
+      inst = await startInstance(repo, cfg.instance, rec.run_id, scratch, process.env);
     } catch (e) {
+      rmSync(scratch, { recursive: true, force: true });
       rec.exit = 1;
       const closed = closeRun(repo, cfg, rec);
       return emitted({ code: closed.code, result: { ...closed.result, reason: `instance: ${(e as Error).message}` } });
@@ -466,6 +469,7 @@ async function cmdRun(argv: string[]): Promise<number> {
     env: { ...process.env, DONE_DONE_RUN_ID: rec.run_id, DONE_DONE_EVIDENCE_ROOT: runDir(cfg, rec.run_id), ...inst?.env },
   });
   if (inst) stopInstance(inst.pgid);
+  if (scratch) rmSync(scratch, { recursive: true, force: true });
   rec.exit = r.status ?? 1;
   return emitted(closeRun(repo, cfg, rec));
 }

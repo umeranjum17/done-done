@@ -4782,7 +4782,7 @@ test('an instance serves the journey on its own port with its own HOME, then sto
   const id = toon(r).run_id;
   const reply = readFileSync(join(t.repo, '.proof', id, 'reply.txt'), 'utf8');
   const port = reply.match(/port=(\d+)/)[1];
-  assert.match(reply, new RegExp(`home=.*\\.done-done/tmp/${id}/instance-home/home`));
+  assert.match(reply, /home=.*done-done-instance-[^/]*\/instance-home\/home/);
   assert.match(reply, new RegExp(`base=http://127.0.0.1:${port}`));
   assert.notEqual(spawnSync('curl', ['-sf', `http://127.0.0.1:${port}/`], { timeout: 8000 }).status, 0, 'the instance stops at run end');
 });

@@ -57,7 +57,7 @@ export async function startInstance(repo, inst, runId, scratch, baseEnv, logFile
     const baseUrl = `http://127.0.0.1:${port}`;
     const extra = { DONE_DONE_PORT: String(port), DONE_DONE_BASE_URL: baseUrl, DONE_DONE_RUN_ID: runId, ...instanceHome(scratch), TMPDIR: scratch };
     const env = { ...baseEnv, ...extra };
-    const command = expand(inst.command, extra).replaceAll('${RUN_ID}', runId);
+    const command = inst.command.replaceAll('${RUN_ID}', runId);
     let fd;
     if (logFile) {
         mkdirSync(dirname(logFile), { recursive: true });
@@ -77,7 +77,7 @@ export async function startInstance(repo, inst, runId, scratch, baseEnv, logFile
     const timeoutMs = parseDuration(inst.ready_timeout);
     const ready = inst.ready.url !== undefined
         ? await waitUrl(expand(inst.ready.url, extra), timeoutMs)
-        : waitCommand(expand(inst.ready.command, extra).replaceAll('${RUN_ID}', runId), env, repo, timeoutMs);
+        : waitCommand(inst.ready.command.replaceAll('${RUN_ID}', runId), env, repo, timeoutMs);
     if (!ready) {
         kill();
         const what = inst.ready.url !== undefined ? `GET ${inst.ready.url} never returned 2xx` : `readiness command never exited 0`;

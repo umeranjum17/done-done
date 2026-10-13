@@ -181,6 +181,24 @@ export async function askJudge(cfg: Config, be: Judge, choice: JudgeChoice, stat
 
 export const judgeable = (c: Capture) => c.media.type === 'png' || c.media.type === 'jpeg';
 
+// A judge's cached answer in the run store, one file per input key: an unreadable entry is a miss, and an unwritable
+// cache costs a repeat request, never a verdict.
+export function readCache(dir: string, key: string) {
+  try {
+    return JSON.parse(readFileSync(join(dir, `${key}.json`), 'utf8'));
+  } catch {
+    return undefined;
+  }
+}
+export function writeCache(dir: string, key: string, value: unknown) {
+  const file = join(dir, `${key}.json`);
+  try {
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(`${file}.tmp`, `${JSON.stringify(value)}\n`, { mode: 0o600 });
+    renameSync(`${file}.tmp`, file);
+  } catch {}
+}
+
 // Verdicts are cached in the run store, per app, so a re-run or a later run of the same capture and claim asks no model.
 // The answerer's agent call leaves a record in `records` (judge-<stamp>-<n>.agent.json), never the prompt.
 export async function judge(cfg: Config, choose: () => JudgeChoice, outcome: string, captures: Capture[], records: string): Promise<{ judged: Judged[]; notJudged: string[]; choice?: JudgeChoice }> {
@@ -200,14 +218,11 @@ export async function judge(cfg: Config, choose: () => JudgeChoice, outcome: str
     choice ??= choose();
     const { route, model } = choice;
     const key = createHash('sha256').update(JSON.stringify([VERSION, c.sha256, outcome, route, model])).digest('hex');
-    const file = join(dir, `${key}.json`);
-    try {
-      const hit = JSON.parse(readFileSync(file, 'utf8'));
-      if (['pass', 'fail', 'unsure'].includes(hit.verdict) && typeof hit.reason === 'string') {
-        judged.push({ path: c.name, sha256: c.sha256, verdict: hit.verdict, reason: hit.reason, cached: true });
-        continue;
-      }
-    } catch {}
+    const hit = readCache(dir, key);
+    if (['pass', 'fail', 'unsure'].includes(hit?.verdict) && typeof hit.reason === 'string') {
+      judged.push({ path: c.name, sha256: c.sha256, verdict: hit.verdict, reason: hit.reason, cached: true });
+      continue;
+    }
     const image = prepare(c);
     if (typeof image === 'string') {
       judged.push({ path: c.name, sha256: c.sha256, verdict: 'unsure', reason: image, cached: false });
@@ -228,11 +243,7 @@ export async function judge(cfg: Config, choose: () => JudgeChoice, outcome: str
     const reason = a.personReason || a.rationale || OPTIONS[String(a.answer)] || '';
     const row: Judged = a.abstained ? { path: c.name, sha256: c.sha256, verdict: 'unsure', reason: `not confident enough (${a.reason})`, cached: false }
       : { path: c.name, sha256: c.sha256, verdict: a.answer === 'correct' ? 'pass' : a.answer === 'wrong' ? 'fail' : 'unsure', reason, cached: false };
-    try {
-      mkdirSync(dir, { recursive: true });
-      writeFileSync(`${file}.tmp`, `${JSON.stringify({ verdict: row.verdict, reason: row.reason, route, model })}\n`, { mode: 0o600 });
-      renameSync(`${file}.tmp`, file);
-    } catch {} // an unwritable cache costs a repeat request, not this verdict
+    writeCache(dir, key, { verdict: row.verdict, reason: row.reason, route, model });
     judged.push(row);
   }
   return { judged, notJudged, choice };

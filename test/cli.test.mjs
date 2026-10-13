@@ -2358,7 +2358,19 @@ test('design fails a screen on each defect the judge names, alone or next to its
   const ok = design(answer(), 'screen.png');
   assert.equal(ok.code, 0, ok.out);
   assert.deepEqual([toon(ok).result, toon(ok).screens[0].verdict, toon(ok).screens[0].defects], ['pass', 'pass', []]);
-  const unsure = design(answer({ layout: { defect: 0.5, none: 0.5 } }), 'screen.png');
+  // The same input gets the same verdict: a re-run asks no model, whatever it would answer now; a new mock is a new input.
+  const again = design(answer({ layout: { defect: 0.9, none: 0.1 } }), 'screen.png', 'screen2.png', '--mock', 'screen.png=mock.png');
+  assert.deepEqual(toon(again).screens.map((s) => [s.path, s.verdict, s.cached ?? false]), [['screen.png', 'fail', true], ['screen2.png', 'fail', true]]);
+  assert.equal(again.calls.length, 0, 'both answers come from the cache');
+  assert.deepEqual(toon(again).screens[0].defects, b.screens[0].defects);
+  writeFileSync(join(t.dir, 'mock2.png'), screen(5));
+  assert.equal(design(answer(), 'screen.png', '--mock', 'screen.png=mock2.png').calls.length, 1);
+  // A screen that is its mock, pixel for pixel, is drawn as approved, so it passes without a request.
+  writeFileSync(join(t.dir, 'copy.png'), readFileSync(join(t.dir, 'screen.png')));
+  const same = design(answer({ overlap: { defect: 0.9, none: 0.1 } }), 'screen.png', '--mock', 'screen.png=copy.png');
+  assert.deepEqual([same.code, toon(same).screens[0].verdict, toon(same).screens[0].reason, same.calls.length], [0, 'pass', 'the screen is its approved mock, pixel for pixel, so nothing differs to judge', 0]);
+  writeFileSync(join(t.dir, 'screen3.png'), screen(11));
+  const unsure = design(answer({ layout: { defect: 0.5, none: 0.5 } }), 'screen3.png');
   assert.equal(unsure.code, 3, unsure.out);
   assert.match(toon(unsure).screens[0].reason, /^not confident enough about layout$/);
   const empty = design(answer(), 'blank.png');
@@ -2382,6 +2394,7 @@ test('design asks again when the judge answers with probabilities it cannot read
     const s = stubAgents(t.env);
     symlinkSync(process.execPath, join(s.bin, 'node'));
     writeFileSync(join(s.bin, 'replies.json'), JSON.stringify(replies));
+    rmSync(join(t.env.DONE_DONE_HOME, 'runs'), { recursive: true, force: true });
     const oc = join(s.bin, 'opencode');
     writeFileSync(oc, readFileSync(oc, 'utf8').replace(/^console\.log\('mise[\s\S]*$/m, `const replies = JSON.parse(readFileSync(${JSON.stringify(join(s.bin, 'replies.json'))}, 'utf8'));
 console.log(JSON.stringify({ type: 'text', part: { type: 'text', text: replies[Math.min(readFileSync(${JSON.stringify(join(s.bin, 'calls.jsonl'))}, 'utf8').trim().split('\\n').length, replies.length) - 1] } }));`));

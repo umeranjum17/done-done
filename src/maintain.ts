@@ -473,13 +473,20 @@ export function refuseSameSession(choice: JudgeChoice): JudgeChoice {
 }
 
 // Every path the fixer changed in the worktree since `base`: tracked edits (and commits), new files, ignored ones too.
-const changedSince = (wt: string, base: string) => [...new Set([...git(wt, 'diff', '--name-only', '-z', base).split('\0'), ...git(wt, 'ls-files', '--others', '-z').split('\0')])].filter(Boolean);
+const changedSince = (wt: string, base: string) => [...new Set([...git(wt, 'diff', '--name-only', '--no-renames', '-z', base).split('\0'), ...git(wt, 'ls-files', '--others', '-z').split('\0')])].filter(Boolean);
 
 async function fix<S>(run: MaintainRun, dir: string, cfg: Config, h: Harness<S>, tries: number, sources: Map<string, Source>): Promise<Pass> {
   const repo = run.repo;
   const skill = relative(repo, join(repo, cfg.skill));
   const inSkill = (p: string) => p.startsWith(`${skill}/`);
   if (git(repo, 'status', '--porcelain', '--untracked-files=all', '--', skill)) return { result: 'blocked', reason: `fix: ${skill} has uncommitted changes, and maintain fixes the committed skill; commit them, then run again` };
+  const dirty = git(repo, 'diff', '--name-only', '--no-renames', '-z', 'HEAD').split('\0').filter(Boolean);
+  if (dirty.length) {
+    const names = dirty.slice(0, LEFT_NAMED).join(', ');
+    const more = dirty.length > LEFT_NAMED ? `, +${dirty.length - LEFT_NAMED} more` : '';
+    run.findings = [...(run.findings ?? []), { id: `F${(run.findings?.length ?? 0) + 1}`, kind: 'dirty', file: '.', what: `uncommitted changes to tracked files (${names}${more}): the drift was found in them, and a fix at HEAD would not match them; commit them, or set auto_fix: { maintain: 0 }, then run again` }];
+    return { result: 'blocked', reason: `dirty: uncommitted changes to tracked files (${names}${more}); commit them, or set auto_fix: { maintain: 0 }, then run again` };
+  }
   const agent = selectAgent(cfg);
   const choice = refuseSameSession(selectJudge(cfg, agent));
   const checkout = repoState(repo);
@@ -544,12 +551,12 @@ Answer with summary (what you changed, in one line) and blocker ("" when you fix
         if (!changed.length) return blocked(`${agent.agent} changed nothing, yet the re-run is clean, so there is nothing to commit`);
         try {
           git(wt, 'add', '-A', '--', skill);
-          git(wt, 'commit', '-q', '-m', `fix(verify): done-done maintain fixes ${skill}`);
+          git(wt, 'commit', '-q', '-m', `fix(verify): done-done maintain fixes ${skill}`, '--', skill);
         } catch (e) {
           return blocked(`git commit failed: ${((e as { stderr?: string }).stderr || (e as Error).message).trim()}`);
         }
         const commit = git(wt, 'rev-parse', 'HEAD').trim();
-        const files = git(wt, 'diff', '--name-only', '-z', base, commit).split('\0').filter(Boolean);
+        const files = git(wt, 'diff', '--name-only', '--no-renames', '-z', base, commit).split('\0').filter(Boolean);
         if (files.some((p) => !inSkill(p))) return blocked(`the commit holds files outside ${skill}/ (a commit hook added them), so no branch is made`);
         const branch = `done-done/maintain-${run.run_id}`;
         git(repo, 'branch', branch, commit);

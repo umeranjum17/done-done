@@ -4418,6 +4418,7 @@ if (role === 'judge') {
   const f = '.agents/skills/verify-notes/features/home.md';
   writeFileSync(f, readFileSync(f, 'utf8').replace('OLD', 'NEW'));
   if (mode === 'outside') writeFileSync('src/app.js', 'export const app = 2;\\n');
+  if (mode === 'move') require('node:child_process').execFileSync('git', ['mv', 'src/app.js', '.agents/skills/verify-notes/app.js']);
   answer = { summary: 'renamed the title', blocker: '' };
 } else if (role === 'reader') {
   const [file, line] = readFileSync(${JSON.stringify(join(e.PATH, 'cite'))}, 'utf8').trim().split(':');
@@ -4483,6 +4484,29 @@ test('maintain with auto_fix drops a fix that edits outside the skill folder and
   assert.equal(t.branches(), '');
   assert.equal(readFileSync(join(t.repo, 'src', 'app.js'), 'utf8'), 'export const app = 1;\n');
   assert.equal(t.git('worktree', 'list').split('\n').length, 1);
+});
+
+test('maintain with auto_fix drops a fix that moves a product file into the skill folder, even staged', () => {
+  const t = fixSetup(2);
+  t.mode('move');
+  const head = t.git('rev-parse', 'HEAD');
+  const { r, m } = t.maintain();
+  assert.deepEqual([r.code, m.result], [3, 'blocked'], r.out);
+  assert.match(m.reason, /^fix: opencode changed files outside \.agents\/skills\/verify-notes\/ \(.*src\/app\.js/);
+  assert.equal(t.branches(), '');
+  assert.equal(t.git('rev-parse', 'HEAD'), head);
+  assert.equal(readFileSync(join(t.repo, 'src', 'app.js'), 'utf8'), 'export const app = 1;\n');
+});
+
+test('maintain with auto_fix does not fix a checkout with uncommitted changes to a tracked file', () => {
+  const t = fixSetup(2);
+  writeFileSync(join(t.repo, 'src', 'app.js'), 'export const app = 2;\n');
+  const { r, m } = t.maintain();
+  assert.deepEqual([r.code, m.result], [3, 'blocked'], r.out);
+  assert.match(m.reason, /^dirty: uncommitted changes to tracked files \(src\/app\.js\)/);
+  assert.deepEqual(m.findings.map((f) => f.kind), ['drift', 'dirty']);
+  assert.deepEqual(t.calls().map((c) => c.role), ['reader', 'reconcile'], 'no judge and no fixer run');
+  assert.equal(t.branches(), '');
 });
 
 test('maintain with auto_fix stops and asks when the judge says the product may be wrong', () => {

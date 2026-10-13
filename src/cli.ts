@@ -8,9 +8,10 @@ import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import { encode } from '@toon-format/toon';
 import { Document, parseDocument } from 'yaml';
-import { ACPX_INSTALL, askAgent, JUDGES, selectAgent, selectJudge, supported, type AgentAnswer, type JudgeChoice } from './agents.js';
+import { ACPX_INSTALL, askAgent, JUDGES, knownAgentOf, selectAgent, selectJudge, supported, type AgentAnswer, type JudgeChoice } from './agents.js';
 import { AGENTS, type Config, home, loadConfig, parseDuration, UsageError } from './config.js';
 import { backend, type Capture, judge, judgeable, type Judged, onPath } from './judge.js';
+import { type Finding as MaintainFinding, maintainSteps, type MaintainResult } from './maintain.js';
 import { checkMedia } from './media.js';
 
 const PASS = 0, FAIL = 1, USAGE = 2, INCONCLUSIVE = 3, WAITING = 4;
@@ -28,15 +29,24 @@ const CHECKS_TEXT = `Checks block (--from): the newest "## Checks" heading, then
   repro: <command that failed before and passes now, or n/a; a fix PR needs one>
   proof: <the command or path that drove the real product; name the repo's verify-<app> skill, or say "no verify skill">
   evidence: <the evidence file paths, or "not proven: <cause>">`;
-const RUNS_TEXT = `runs: each verify run lives in $DONE_DONE_HOME/runs/<app>/<run-id> (run.json, events.jsonl, logs/<step>.log, agents/)
-  and goes on when the command that started it ends; its steps are resolve, drive, check, judge (with --judge, and always after an agent drive),
-  gate, receipt, report
+const RUNS_TEXT = `runs: each verify or maintain run lives in $DONE_DONE_HOME/runs/<app>/<run-id> (run.json, events.jsonl, logs/<step>.log,
+  agents/<n>-<name>.json for each agent call) and goes on when the command that started it ends;
+  verify steps: resolve, drive, check, judge (with --judge, and always after an agent drive), gate, receipt, report;
+  maintain steps: locate, hygiene, source-wave, reconcile, report
   drive: the journey when there is one; else the author agent (agent: in config) drives one feature of the verify skill the way a user
   does and saves screenshots into the run's evidence folder; it may run commands and edit files only in the repo and that folder where
   its CLI can limit it (pi cannot), and a drive that changes a tracked file fails
   gate: a judge fail or unsure (or an agent drive with no judged capture) parks the run as awaiting_approval (exit 4); answer it with
   respond: approve or skip (each needs --reason) ends the run overridden, never pass, and its receipt says who and why, so
   receipt --verify refuses it; fix ends the run fail`;
+const MAINTAIN_TEXT = `maintain reads the verify skill and the source and edits nothing; HEAD, git status and the content of changed files must be the same before and after.
+  locate: the verify skill (.agents/skills/verify-<app>/SKILL.md); none: blocked, create it with done-done init
+  hygiene: every local link in the skill resolves; features/README.md lists each features/*.md file once
+  source-wave: one fresh read-only reader per feature file at the configured agent (agent, agent_config) explains it from source
+  reconcile: each file:line the skill or a reader cites must exist (a bare file name matches a tracked file); one tool-less call
+  merges the recipes and names recently changed source (git log, 30 days) that no feature covers. Result: clean (exit 0),
+  drift with findings (exit 1), or blocked (no skill, a reader that did not answer, a repo that changed, or no agent: the
+  readers and the merge call do not run, the plain checks still do; exit 3)`;
 const DOCTOR_TEXT = `doctor changes nothing except the --probe call record (the agent itself may keep its own session files) and exits 0 when every required item is ok, 2 otherwise.
   required: git (inside a repository), config (a valid .done-done.yaml), evidence_root (writable).
   optional: verify_skill (.agents/skills/verify-<app>/), agent (the configured agent, or with agent: auto the first
@@ -65,9 +75,9 @@ const FLAGS: Record<string, string> = {
   '--foreground': 'run every step in this process instead of a detached runner (use in CI)',
   '--run <run-id>': 'the run to show (default: the newest run of this checkout)',
   '--probe': 'ask the configured agent one JSON-schema question and require a valid answer (one call at the agent\'s model: its cheap default where it has one, else its own; set agent_config.<agent>.model to choose)',
-  '--step <name>': 'the step log to show (resolve, drive, check, judge, gate, receipt, report)',
+  '--step <name>': 'the step log to show (verify: resolve, drive, check, judge, gate, receipt, report; maintain: locate, hygiene, source-wave, reconcile, report)',
   '--feature <name>': 'with no journey, the author agent drives this feature of the verify skill (features/<name>.md); default: the only feature, else the agent picks the one the outcome is about',
-  '--action <approve|skip|fix>': 'approve: the captures do show the outcome; skip: go on without a judge pass; both end the run overridden; fix: end it fail, then fix the product or the verify skill',
+  '--action <approve|skip|fix>': 'approve: the captures do show the outcome; skip: go on without a judge pass; both end the run overridden; fix: end it fail, then fix the product or the verify skill (done-done maintain checks it against the source)',
   '--reason "<why>"': 'why (required for approve and skip); kept in the run and its receipt with who answered',
   '--limit <n>': 'how many past runs to list (default all)',
   '--agent <agent>': 'also add a SessionStart hook to .claude/settings.json (claude), .codex/hooks.json (codex) or .gemini/settings.json (gemini) that shows `done-done` to each session, or a plugin to .opencode/plugins (opencode) or an extension to .pi/extensions (pi) that adds it to the first message of each session (opt-in)',
@@ -131,8 +141,13 @@ const COMMANDS: Record<string, { usage: [string, string][]; flags: string[]; mor
     flags: ['--outcome "<what a user can now do>"', '--feature <name>', '--claim-id <id>', '--judge', '--wait', '--no-wait', '--foreground'],
     more: [RUNS_TEXT],
   },
+  maintain: {
+    usage: [['done-done maintain [--no-wait | --wait | --foreground]', 'check the verify skill against the source in a run: links, index, cited file:line, one read-only reader per feature; edits nothing']],
+    flags: ['--wait', '--no-wait', '--foreground'],
+    more: [MAINTAIN_TEXT, RUNS_TEXT],
+  },
   status: {
-    usage: [['done-done status [--run <run-id>]', "show a verify run's steps, result and next step"]],
+    usage: [['done-done status [--run <run-id>]', "show a run's steps, result, findings and next step"]],
     flags: ['--run <run-id>'],
     more: [RUNS_TEXT],
   },
@@ -173,7 +188,7 @@ const COMMANDS: Record<string, { usage: [string, string][]; flags: string[]; mor
 
 const rows = (pairs: [string, string][], width = Math.max(...pairs.map(([a]) => a.length)) + 3) => pairs.map(([a, b]) => `  ${a}${' '.repeat(Math.max(3, width - a.length))}${b}`).join('\n');
 const GLOBAL_TEXT = `global flags: --json (JSON instead of TOON), --full (do not truncate lists), --help (this command's usage)
-exit codes: 0 pass, 1 fail (also a run overridden at its gate), 2 usage or config error, 3 inconclusive, 4 the run is still running or waits at its gate (verify, rerun, status, respond)`;
+exit codes: 0 pass, 1 fail (also a run overridden at its gate), 2 usage or config error, 3 inconclusive, 4 the run is still running or a verify run waits at its gate (verify, maintain, rerun, status, respond)`;
 
 const USAGE_TEXT = `install: npm install -g --prefix ~/.local --allow-git=all github:umeranjum17/done-done-axi (installs done-done-axi and done-done), or run npx -y --allow-git=all github:umeranjum17/done-done-axi <command>
 usage:
@@ -812,12 +827,12 @@ type StepState = 'pending' | 'running' | 'awaiting_approval' | 'completed' | 'fa
 type GateFinding = { id: string; severity: 'error' | 'warning'; what: string; action: 'ask-user' };
 type Step = { name: string; status: StepState; started?: string; ended?: string; exit?: number; outputs?: string[]; findings?: unknown };
 type Run = {
-  // journey null: the author agent drives `feature` (features/<name>.md of the verify skill; unset until the agent picks one).
-  schema: 2; run_id: string; kind: 'verify'; app: string; repo: string; journey: string | null; feature?: string; author?: { agent: string; model: string };
-  claim: string; claim_id: string | null; judge?: boolean;
+  // journey null: the author agent drives `feature` (features/<name>.md of the verify skill; unset until the agent picks one); a maintain run has no journey or claim.
+  schema: 2; run_id: string; kind: 'verify' | 'maintain'; app: string; repo: string; journey?: string | null; feature?: string; author?: { agent: string; model: string };
+  claim?: string; claim_id: string | null; judge?: boolean;
   status: 'pending' | 'running' | 'awaiting_approval' | 'completed' | 'failed' | 'cancelled';
   runner?: { pid: number; started: string; heartbeat: string; journey_pgid?: number }; steps: Step[];
-  result?: 'pass' | 'fail' | 'inconclusive' | 'overridden'; reason?: string;
+  result?: 'pass' | 'fail' | 'inconclusive' | 'overridden' | MaintainResult; reason?: string; findings?: MaintainFinding[]; unverified?: string[]; git_status?: string;
   record?: string; receipt?: string; created: string; updated: string;
   inputs?: { head: string; journey: string; skill: string };
   // What respond needs to write the receipt once the caller answers the gate, and the answer.
@@ -959,9 +974,10 @@ function finishRun(dir: string, run: Run, result: Run['result'], reason?: string
   setStep(dir, run, report, 'completed');
 }
 
-// The verify steps: resolve the head, drive (the journey, or the author agent), check its evidence, judge, gate on a judge
-// that did not pass, record a receipt, report. Only the agent drive and the judge call a model; the rest is plain code.
-async function runVerify(dir: string): Promise<void> {
+// A run's steps in its runner. verify: resolve the head, drive (the journey, or the author agent), check its evidence, judge,
+// gate on a judge that did not pass, record a receipt, report; only the agent drive and the judge call a model.
+// maintain (maintain.ts) reads the verify skill and the source.
+async function runSteps(dir: string): Promise<void> {
   const run = loadRun(dir);
   if (run.status === 'cancelled') return;
   const started = now();
@@ -977,16 +993,17 @@ async function runVerify(dir: string): Promise<void> {
   }, HEARTBEAT_MS);
   let step: Step | undefined;
   const set = (s: Step, status: StepState, extra: Partial<Step> = {}) => setStep(dir, run, s, status, extra);
-  const begin = (name: string) => set((step = run.steps.find((s) => s.name === name)!), 'running');
+  const begin = (name: string) => (set((step = run.steps.find((s) => s.name === name)!), 'running'), step);
   const log = (name: string, result: Record<string, unknown>) => writeFileSync(join(dir, 'logs', `${name}.log`), `${encode(result)}\n`);
   const finish = (result: Run['result'], reason?: string) => {
     step = run.steps.find((s) => s.name === 'report');
     finishRun(dir, run, result, reason);
   };
   try {
-    const done = (n: string) => run.steps.find((s) => s.name === n)!.status === 'completed';
     const cfg = loadConfig(run.repo);
-    const journey = run.journey === null ? undefined : cfg.journeys[run.journey];
+    if (run.kind === 'maintain') return await maintainSteps(run, dir, cfg, { begin, set, log, finish });
+    const done = (n: string) => run.steps.find((s) => s.name === n)!.status === 'completed';
+    const journey = run.journey === null ? undefined : cfg.journeys[run.journey!];
     const command = journey?.command;
     const timeout = journey?.timeout ?? '30m';
     const limit = parseDuration(timeout);
@@ -1038,7 +1055,7 @@ async function runVerify(dir: string): Promise<void> {
       if (why) return finish('fail', `drive: ${why}`);
     } else {
       begin('drive');
-      rec = openRun(run.repo, cfg, run.journey, command!.replaceAll('${RUN_ID}', run.run_id), run.run_id);
+      rec = openRun(run.repo, cfg, run.journey!, command!.replaceAll('${RUN_ID}', run.run_id), run.run_id);
       const fd = openSync(join(dir, 'logs', 'drive.log'), 'a');
     // An async child keeps the heartbeat going while the journey runs. The journey gets its own process group, so a
     // timeout or a dead runner can kill it and everything it started.
@@ -1069,7 +1086,7 @@ async function runVerify(dir: string): Promise<void> {
       set(step!, code === PASS ? 'completed' : 'failed', { exit: code, findings });
       begin('judge');
     };
-    const checked = await runCheck(['--outcome', run.claim, ...files, ...(run.claim_id ? ['--claim-id', run.claim_id] : []), ...(run.judge ? ['--judge'] : [])], { dir, judging });
+    const checked = await runCheck(['--outcome', run.claim!, ...files, ...(run.claim_id ? ['--claim-id', run.claim_id] : []), ...(run.judge ? ['--judge'] : [])], { dir, judging });
     const logged: Record<string, unknown> = { ...checked.result, findings: checked.findings };
     delete logged.findings_omitted;
     log('check', logged);
@@ -1149,16 +1166,18 @@ function showRun(dir: string, cfg: Config, command: string, gone = false): numbe
     reapJourney(dir, run);
   }
   // An overridden run is never a pass: it exits 1 like a fail.
-  const code = status === 'pending' || status === 'running' || status === 'awaiting_approval' ? WAITING : status === 'cancelled' || status === 'failed' || run.result === 'fail' || run.result === 'overridden' ? FAIL : run.result === 'inconclusive' ? INCONCLUSIVE : PASS;
+  const code = status === 'pending' || status === 'running' || status === 'awaiting_approval' ? WAITING : status === 'cancelled' || status === 'failed' || run.result === 'fail' || run.result === 'overridden' || run.result === 'drift' ? FAIL : run.result === 'inconclusive' || run.result === 'blocked' ? INCONCLUSIVE : PASS;
   const drive = run.journey ?? (run.feature ? `--feature ${arg(run.feature)}` : '');
-  const again = `done-done verify ${drive ? `${drive} ` : ''}--outcome ${arg(run.claim)}${run.claim_id ? ` --claim-id ${arg(run.claim_id)}` : ''}`;
+  const again = run.kind === 'maintain' ? 'done-done maintain' : `done-done verify ${drive ? `${drive} ` : ''}--outcome ${arg(run.claim!)}${run.claim_id ? ` --claim-id ${arg(run.claim_id)}` : ''}`;
+  const findings = cap(run.findings ?? []);
   const ev = cap(rec ? evidenceOf(run.repo, cfg, rec) : []);
   const result: Record<string, unknown> = { command, run_id: run.run_id, kind: run.kind, status };
   if (code === WAITING) result.step = at?.name;
   if (run.result && status === 'completed') result.result = run.result;
   if (reason) result.reason = reason;
   Object.assign(result, {
-    claim: run.claim, journey: run.journey, ...(run.journey === null && { feature: run.feature ?? 'picked by the agent', author: run.author && `${run.author.agent} (model ${run.author.model || 'its own default'})` }),
+    ...(run.kind === 'verify' && { claim: run.claim, journey: run.journey }),
+    ...(run.kind === 'verify' && run.journey === null && { feature: run.feature ?? 'picked by the agent', author: run.author && `${run.author.agent} (model ${run.author.model || 'its own default'})` }),
     repo: run.repo, ...(rec && { head: rec.commit }),
     steps: run.steps.map((s) => ({ name: s.name, status: s === at && (status === 'failed' || (status === 'cancelled' && (s.status === 'running' || s.status === 'awaiting_approval'))) ? status : s.status })),
   });
@@ -1167,6 +1186,12 @@ function showRun(dir: string, cfg: Config, command: string, gone = false): numbe
   if (ev.items.length) result.evidence = ev.items;
   if (ev.omitted) result.evidence_omitted = ev.omitted;
   if (run.receipt) result.receipt = run.receipt;
+  if (run.git_status) result.git_status = run.git_status;
+  if (findings.items.length) result.findings = findings.items;
+  if (findings.omitted) result.findings_omitted = findings.omitted;
+  const unverified = cap(run.unverified ?? []);
+  if (unverified.items.length) result.unverified = unverified.items;
+  if (unverified.omitted) result.unverified_omitted = unverified.omitted;
   result.run = shown(run.repo, dir);
   const id = run.run_id;
   result.help =
@@ -1174,13 +1199,19 @@ function showRun(dir: string, cfg: Config, command: string, gone = false): numbe
       'Read the findings and look at the captures (evidence above), then answer the gate:',
       `done-done respond --run ${id} --action approve --reason "<why they do show the outcome>"   (ends overridden, never pass)`,
       `done-done respond --run ${id} --action skip --reason "<why to go on without a judge pass>"   (ends overridden, never pass)`,
-      `done-done respond --run ${id} --action fix   (ends fail; fix the product, or the verify skill's recipe, commit, then: done-done rerun --run ${id})`,
+      `done-done respond --run ${id} --action fix   (ends fail; fix the product, or the verify skill's recipe (done-done maintain checks it against the source), commit, then: done-done rerun --run ${id})`,
     ]
     : run.result === 'overridden' ? [`This head is not proven: ${run.response?.by} chose ${run.response?.action} past the judge, and receipt --verify refuses this receipt`, `Capture proof the judge passes: ${again}`]
     : code === WAITING ? [`The run goes on without this command; read it later: done-done status --run ${run.run_id}`]
+    : run.kind === 'maintain' && status === 'completed' ? (
+      run.result === 'clean' ? [`The verify skill matches the source; read the readers' recipes: done-done logs --step reconcile --run ${run.run_id}`]
+      : run.result === 'drift' ? [`Fix the findings in ${cfg.skill} (maintain edits nothing; --full lists them all), commit, then run again: ${again}`]
+      : /^locate: no verify skill/.test(run.reason ?? '') ? ['Create the verify skill: done-done init']
+      : /^locate:/.test(run.reason ?? '') ? [`Make ${cfg.skill} a real folder inside the repository (not a link), commit, then run again: ${again}`]
+      : [`Read the step logs in ${shown(run.repo, join(dir, 'logs'))}`, `Fix the cause, then run again: ${again}`])
     : code === PASS ? [`Verify this receipt (CI or merge): done-done receipt --verify ${rec!.commit}`]
-    : status === 'cancelled' ? [`Start again from the failed step: done-done rerun --run ${run.run_id}`, `List past runs: done-done history`]
-    : [`Read the step logs in ${shown(run.repo, join(dir, 'logs'))}`, `Fix the cause, commit, then run again from the failed step: done-done rerun --run ${run.run_id}`, `Or start a new run: ${again}`];
+    : status === 'cancelled' ? [...(run.kind === 'maintain' ? [] : [`Start again from the failed step: done-done rerun --run ${run.run_id}`]), `List past runs: done-done history`]
+    : [`Read the step logs in ${shown(run.repo, join(dir, 'logs'))}`, ...(run.kind === 'maintain' ? [] : [`Fix the cause, commit, then run again from the failed step: done-done rerun --run ${run.run_id}`]), `Or start a new run: ${again}`];
   emit(result);
   return code;
 }
@@ -1224,18 +1255,37 @@ async function cmdVerify(argv: string[]): Promise<number> {
   };
   saveRun(dir, run);
   logEvent(dir, { status: 'pending' });
-  if (values.foreground) await runVerify(dir);
-  else {
-    // Detached, with no pipe back to this process, so the runner goes on when this command or its shell ends.
-    const fd = openSync(join(dir, 'logs', 'runner.log'), 'a');
-    const child = spawn(process.execPath, [CLI_PATH, '__runner', dir], { cwd: repo, detached: true, stdio: ['ignore', fd, fd] });
-    child.unref();
-    closeSync(fd);
-    // --wait (the default) holds this command until the run ends; --no-wait returns at once.
-    if (!values['no-wait']) await waitRun(dir, child.pid!);
-    return showRun(dir, cfg, 'verify', !alive(child.pid!));
+  return launch(dir, cfg, 'verify', values);
+}
+
+// Run the steps in this process (--foreground), or in a detached runner with no pipe back to this process, so the
+// runner goes on when this command or its shell ends; --wait (the default) holds this command until the run ends.
+async function launch(dir: string, cfg: Config, command: string, how: { foreground?: boolean; 'no-wait'?: boolean }): Promise<number> {
+  if (how.foreground) {
+    await runSteps(dir);
+    return showRun(dir, cfg, command);
   }
-  return showRun(dir, cfg, 'verify');
+  const fd = openSync(join(dir, 'logs', 'runner.log'), 'a');
+  const child = spawn(process.execPath, [CLI_PATH, '__runner', dir], { cwd: loadRun(dir).repo, detached: true, stdio: ['ignore', fd, fd] });
+  child.unref();
+  closeSync(fd);
+  if (!how['no-wait']) await waitRun(dir, child.pid!);
+  return showRun(dir, cfg, command, !alive(child.pid!));
+}
+
+async function cmdMaintain(argv: string[]): Promise<number> {
+  const { values } = parseArgs({ args: argv, options: { wait: { type: 'boolean' }, 'no-wait': { type: 'boolean' }, foreground: { type: 'boolean' } } });
+  if ([values.wait, values['no-wait'], values.foreground].filter(Boolean).length > 1) throw new UsageError('pass only one of --wait, --no-wait and --foreground');
+  const repo = repoRoot();
+  const cfg = loadConfig(repo);
+  const id = newRunId(git(repo, 'rev-parse', 'HEAD'));
+  const dir = join(runsRoot(cfg.app), id);
+  mkdirSync(join(dir, 'logs'), { recursive: true });
+  const created = now();
+  const steps = ['locate', 'hygiene', 'source-wave', 'reconcile', 'report'].map((name) => ({ name, status: 'pending' as StepState }));
+  saveRun(dir, { schema: 2, run_id: id, kind: 'maintain', app: cfg.app, repo, claim_id: null, status: 'pending', steps, created, updated: created });
+  logEvent(dir, { status: 'pending' });
+  return launch(dir, cfg, 'maintain', values);
 }
 
 function cmdStatus(argv: string[]): number {
@@ -1298,6 +1348,7 @@ async function cmdRerun(argv: string[]): Promise<number> {
   const root = runsRoot(cfg.app);
   const srcId = pickId(root, repo, 'rerun', cfg, values.run);
   const src = loadRun(join(root, srcId));
+  if (src.kind === 'maintain') throw new UsageError(`run ${srcId} is a maintain run, which cannot be rerun`, 'Start a new one: done-done maintain');
   const open = shownStatus(src);
   if (open === 'pending' || open === 'running') throw new UsageError(`run ${srcId} is still ${open}, so it cannot be rerun while its runner lives`, `Read it: done-done status --run ${srcId}; stop it first: done-done abort --run ${srcId}`);
   const group = src.runner?.journey_pgid;
@@ -1328,12 +1379,7 @@ async function cmdRerun(argv: string[]): Promise<number> {
     if (s.status === 'completed' && existsSync(f)) writeFileSync(join(dir, 'logs', `${s.name}.log`), readFileSync(f));
   }
   logEvent(dir, { status: 'pending', rerun_of: srcId, reused: steps.filter((s) => s.status === 'completed').map((s) => s.name) });
-  const fd = openSync(join(dir, 'logs', 'runner.log'), 'a');
-  const child = spawn(process.execPath, [CLI_PATH, '__runner', dir], { cwd: src.repo, detached: true, stdio: ['ignore', fd, fd] });
-  child.unref();
-  closeSync(fd);
-  if (!values['no-wait']) await waitRun(dir, child.pid!);
-  return showRun(dir, cfg, 'rerun', !alive(child.pid!));
+  return launch(dir, cfg, 'rerun', values);
 }
 
 async function waitGone(pid: number): Promise<void> {
@@ -1346,9 +1392,10 @@ async function cmdAbort(argv: string[]): Promise<number> {
   const cfg = loadConfig(repo);
   const id = pickId(runsRoot(cfg.app), repo, 'abort', cfg, values.run);
   const dir = join(runsRoot(cfg.app), id);
+  const startAgain = (r: Run) => (r.kind === 'maintain' ? [] : [`Start again: done-done rerun --run ${id}`]);
   const closed = (r: Run, status = shownStatus(r)) => {
     if (status === 'pending' || status === 'running' || status === 'awaiting_approval') return false;
-    emit({ command: 'abort', run_id: id, status, reason: `run ${id} is already ${status}`, help: [`List past runs: done-done history`, `Start again: done-done rerun --run ${id}`] });
+    emit({ command: 'abort', run_id: id, status, reason: `run ${id} is already ${status}`, help: [`List past runs: done-done history`, ...startAgain(r)] });
     return true;
   };
   const latest = loadRun(dir);
@@ -1365,7 +1412,9 @@ async function cmdAbort(argv: string[]): Promise<number> {
     return FAIL;
   }
   if (!parked && latest.runner) {
-    try { process.kill(latest.runner.pid, 'SIGKILL'); } catch { /* exited since the check */ }
+    try { process.kill(-latest.runner.pid, 'SIGKILL'); } catch {
+      try { process.kill(latest.runner.pid, 'SIGKILL'); } catch { /* exited since the check */ }
+    }
     await waitGone(latest.runner.pid);
   }
   const after = loadRun(dir);
@@ -1380,7 +1429,7 @@ async function cmdAbort(argv: string[]): Promise<number> {
     rmSync(join(dir, 'respond.lock'), { force: true });
     throw e;
   }
-  emit({ command: 'abort', run_id: id, status: 'cancelled', reason: after.reason, help: [`Read the run: done-done status --run ${id}`, `Start again: done-done rerun --run ${id}`] });
+  emit({ command: 'abort', run_id: id, status: 'cancelled', reason: after.reason, help: [`Read the run: done-done status --run ${id}`, ...startAgain(after)] });
   return PASS;
 }
 
@@ -1424,7 +1473,7 @@ function cmdRespond(argv: string[]): number {
     const step = run.steps.find((s) => s.name === 'receipt')!;
     setStep(dir, run, step, 'running');
     const { gate: g } = run;
-    const rec: Receipt = { schema: 2, repo: cfg.app, head: g.head.commit, tree: g.head.tree, claim: run.claim, result: 'overridden', at: now(), files: g.cited, ...(g.judge && { judge: g.judge }), override: { action, by, reason, at: run.response.at } };
+    const rec: Receipt = { schema: 2, repo: cfg.app, head: g.head.commit, tree: g.head.tree, claim: run.claim!, result: 'overridden', at: now(), files: g.cited, ...(g.judge && { judge: g.judge }), override: { action, by, reason, at: run.response.at } };
     run.receipt = shown(repo, writeReceipt(cfg, rec));
     setStep(dir, run, step, 'completed');
     finishRun(dir, run, 'overridden', `gate: ${by} chose ${action}: ${reason}`);
@@ -1444,7 +1493,7 @@ function cmdHistory(argv: string[]): number {
   const root = runsRoot(cfg.app);
   const mine = existsSync(root) ? readdirSync(root).filter((x) => existsSync(join(root, x, 'run.json'))).map((x) => loadRun(join(root, x))).filter((r) => r.repo === repo).sort((a, b) => b.created.localeCompare(a.created)) : [];
   const matched = mine.slice(0, n);
-  const rows = cap(matched.map((r) => ({ run_id: r.run_id, kind: r.kind, status: shownStatus(r),...(r.result && { result: r.result }), claim: r.claim, journey: r.journey, created: r.created })));
+  const rows = cap(matched.map((r) => ({ run_id: r.run_id, kind: r.kind, status: shownStatus(r), ...(r.result && { result: r.result }), ...(r.kind === 'verify' && { claim: r.claim, journey: r.journey }), created: r.created })));
   emit({ command: 'history', runs: matched.length, history: rows.items, ...(rows.omitted && { history_omitted: rows.omitted }), help: rows.items.length ? [`Read the newest run: done-done status --run ${rows.items[0].run_id}`] : ['Start one: done-done verify --outcome "<what a user can now do>"'] });
   return PASS;
 }
@@ -2152,6 +2201,7 @@ async function main(argv: string[]): Promise<number> {
     if (cmd === 'check') return await cmdCheck(rest);
     if (cmd === 'receipt') return await cmdReceipt(rest);
     if (cmd === 'verify') return await cmdVerify(rest);
+    if (cmd === 'maintain') return await cmdMaintain(rest);
     if (cmd === 'status') return cmdStatus(rest);
     if (cmd === 'attach') return await cmdAttach(rest);
     if (cmd === 'logs') return cmdLogs(rest);
@@ -2160,7 +2210,7 @@ async function main(argv: string[]): Promise<number> {
     if (cmd === 'respond') return cmdRespond(rest);
     if (cmd === 'history') return cmdHistory(rest);
     if (cmd === '__runner') {
-      await runVerify(rest[0]);
+      await runSteps(rest[0]);
       return PASS;
     }
     if (cmd === '--help' || cmd === '-h' || cmd === 'help') {

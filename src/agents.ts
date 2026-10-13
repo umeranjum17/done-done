@@ -18,7 +18,7 @@ export type AgentCall = {
   schema: { required?: string[] } & Record<string, unknown>;
   cwd: string;
   timeoutMs: number;
-  tools: 'none' | 'read' | 'edit'; // none for the judge and readers; edit (the drive) may also run commands
+  tools: 'none' | 'read' | 'edit'; // none for the judge and most readers; read for the claude reader; edit (the drive) may also run commands
   record: string; // where the call record is written
   files?: string[]; // images attached to the prompt, for the answerer judge
   attempts?: number; // asks allowed for a bad tool-less answer, default ASK_ATTEMPTS
@@ -107,7 +107,7 @@ const ADAPTERS: Record<string, Adapter> = {
   claude: {
     argv: (c) => ['-p', '--output-format', 'json', '--json-schema', JSON.stringify(c.schema), '--model', c.model, '--no-session-persistence',
       ...(c.tools === 'edit' ? ['--permission-mode', 'acceptEdits', '--allowedTools', 'Bash', ...(c.dirs ?? []).flatMap((d) => ['--add-dir', d])] : ['--tools', c.tools === 'read' ? 'Read,Grep,Glob' : '']),
-      ...(c.tools === 'none' ? ['--setting-sources', ''] : [])],
+      ...(c.tools === 'edit' ? [] : ['--setting-sources', '']), ...(c.tools === 'read' ? ['--strict-mcp-config'] : [])],
     answer: (out) => {
       const r = JSON.parse(out);
       if (r.is_error) throw new ProviderError(String(r.result || r.subtype));
@@ -132,15 +132,14 @@ const ADAPTERS: Record<string, Adapter> = {
     },
     // An edit step keeps the user's own permissions, where a folder outside cwd asks and so is refused in `run`; only the
     // run's own folders are allowed.
-    env: (c): Record<string, string> => ({ OPENCODE_PERMISSION: JSON.stringify(c.tools === 'edit' ? { external_directory: Object.fromEntries((c.dirs ?? []).flatMap((d) => [[d, 'allow'], [`${d}/*`, 'allow']])) }
-      : c.tools === 'read' ? { '*': 'deny', read: 'allow', grep: 'allow', glob: 'allow', list: 'allow' } : { '*': 'deny' }) }),
+    env: (c): Record<string, string> => ({ OPENCODE_PERMISSION: JSON.stringify(c.tools === 'edit' ? { external_directory: Object.fromEntries((c.dirs ?? []).flatMap((d) => [[d, 'allow'], [`${d}/*`, 'allow']])) } : { '*': 'deny' }) }),
   },
   // pi -p reads the prompt on stdin (probed 12 Oct: with no positional message, stdin becomes the user
   // message); --mode json streams JSONL events whose assistant message_end holds the answer text,
   // --no-session keeps the probe ephemeral.
   // Pi has no permission gate for edit steps, so doctor warns about it. Without a model, pi runs its own default.
   pi: {
-    argv: (c) => ['-p', '--mode', 'json', '--no-session', ...(c.tools === 'none' ? ['--no-tools'] : c.tools === 'read' ? ['-t', 'read,grep,find,ls'] : []), ...(c.model ? ['--model', c.model] : [])],
+    argv: (c) => ['-p', '--mode', 'json', '--no-session', ...(c.tools === 'edit' ? [] : ['--no-tools']), ...(c.model ? ['--model', c.model] : [])],
     answer: (out, c) => {
       let text = '';
       let failure = '';

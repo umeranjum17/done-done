@@ -259,10 +259,8 @@ test('Checks block: form rules, not-proven and trusted config', () => {
   write(`## Checks\noutcome: x\nrepro: n/a\nproof: \`done-done run shots\`\nevidence: ${files[0]}\n`);
   assert.match(dd('check', '--from', '../pr.md').out, /does not name the project's verify skill verify-notes/);
   // A local file has no PR title, so the HEAD commit subject is its title, and a fix still needs a repro.
-  sh('commit', '-q', '--allow-empty', '-m', 'fix: home crash');
-  assert.match(dd('check', '--from', '../pr.md').out, /a fix needs a repro, not n\/a/);
-  sh('commit', '-q', '--allow-empty', '-m', 'docs: home');
-  assert.doesNotMatch(dd('check', '--from', '../pr.md').out, /a fix needs a repro/);
+  sh('commit', '-q', '--allow-empty', '-m', 'fix: home crash'); assert.match(dd('check', '--from', '../pr.md').out, /a fix needs a repro, not n\/a/);
+  sh('commit', '-q', '--allow-empty', '-m', 'docs: home'); assert.doesNotMatch(dd('check', '--from', '../pr.md').out, /a fix needs a repro/);
 });
 
 test('config is strict and scoped', () => {
@@ -614,14 +612,11 @@ test('the Firstmate merge gate refuses - (no worktree recorded) from any folder,
   mkdirSync(join(fm, 'data', 't3'), { recursive: true });
   writeFileSync(join(fm, 'data', 't3', 'checks.md'), checks);
   assert.equal(dd('receipt', '--from', join(fm, 'data', 't3', 'checks.md')).code, 0);
-  const none = gate('-', repo);
-  assert.equal(none.code, 2, none.out);
+  const none = gate('-', repo); assert.equal(none.code, 2, none.out);
   assert.match(none.out, /task t3 recorded no worktree, so there is no repo to check/, 'even run from the task\'s own repo, - is never checked');
   assert.equal(judged.calls().length, 0);
-  const wrong = gate(repo, dir);
-  assert.equal(wrong.code, 1, wrong.out);
-  assert.match(wrong.out, /result: fail/);
-  assert.doesNotMatch(wrong.out, /command: receipt/, 'a judge fail refuses before the receipt is read');
+  const wrong = gate(repo, dir); assert.equal(wrong.code, 1, wrong.out);
+  assert.match(wrong.out, /result: fail/); assert.doesNotMatch(wrong.out, /command: receipt/, 'a judge fail refuses before the receipt is read');
   assert.ok(judged.calls().length, 'the judge saw the captures');
   const missing = gate(join(dir, 'no-such-worktree'), repo);
   assert.equal(missing.code, 2, missing.out);
@@ -1370,8 +1365,7 @@ test('every command has its own --help, and a usage error names the command and 
   const { dd } = setup();
   const top = dd('--help');
   assert.equal(top.code, 0, top.out);
-  const version = dd('--version');
-  assert.deepEqual([version.code, version.out], [0, `${JSON.parse(readFileSync(join(dirname(CLI), '..', 'package.json'), 'utf8')).version}\n`]);
+  const version = dd('--version'); assert.deepEqual([version.code, version.out], [0, `${JSON.parse(readFileSync(join(dirname(CLI), '..', 'package.json'), 'utf8')).version}\n`]);
   for (const cmd of ['init', 'run', 'check', 'receipt', 'verify', 'status']) {
     const h = dd(cmd, '--help');
     assert.equal(h.code, 0, h.out);
@@ -1624,12 +1618,8 @@ test('bare done-done orients with the config state and the next step, and names 
   assert.deepEqual(b.journeys, ['shots']);
   assert.match(b.receipt, /^no receipt for /);
   assert.match(b.help[0], /done-done run shots/);
-  const { files } = shots();
-  assert.equal(dd('verify', 'shots', '--outcome', 'home renders', '--foreground').code, 0);
-  assert.equal(dd('receipt', '--outcome', 'home renders', ...files).code, 0);
-  const after = toon(dd());
-  assert.match(after.receipt, /^valid for HEAD [0-9a-f]{12}$/);
-  assert.equal(after.help[0], 'HEAD has a valid receipt for "home renders"; prove the next commit with done-done verify --outcome "<what a user can now do>"');
+  const { files } = shots(); assert.equal(dd('verify', 'shots', '--outcome', 'home renders', '--foreground').code, 0); assert.equal(dd('receipt', '--outcome', 'home renders', ...files).code, 0); const after = toon(dd());
+  assert.match(after.receipt, /^valid for HEAD [0-9a-f]{12}$/); assert.equal(after.help[0], 'HEAD has a valid receipt for "home renders"; prove the next commit with done-done verify --outcome "<what a user can now do>"');
   assert.equal(after.runs, toon(dd('history')).runs, 'bare counts the runs history lists');
 });
 
@@ -2358,10 +2348,8 @@ test('init in a terminal says why it asks again and refuses a model the agent do
   const agentAnswers = ['x', '9', '4', '2', 'model', 'muse', 'opencode-go/muse-spark-1.3-contributor'].join('\\n');
   const r = spawnSync('/bin/sh', ['-c', `(sleep 2; printf '${agentAnswers}\\n'; sleep 3; printf 'x\\n1\\n1\\n'; sleep 3) | /usr/bin/script -qec "${cmd}" /dev/null`], { cwd: t.repo, env: { ...t.env, PATH: `${bin}:${t.env.PATH}:/usr/bin:/bin` }, encoding: 'utf8', timeout: 60_000 });
   assert.equal(r.status, 0, r.stdout);
-  assert.match(r.stdout, /x is not on the list; type a number from 1 to 6/);
-  assert.match(r.stdout, /9 is not on the list; type a number from 1 to 6/);
-  assert.match(r.stdout, /model is not a model pi lists \(pi --list-models\); type it again/, 'the table header is not a model');
-  assert.match(r.stdout, /muse is not a model pi lists \(pi --list-models\); type it again/);
+  assert.match(r.stdout, /x is not on the list; type a number from 1 to 6/); assert.match(r.stdout, /9 is not on the list; type a number from 1 to 6/);
+  assert.match(r.stdout, /model is not a model pi lists \(pi --list-models\); type it again/, 'the table header is not a model'); assert.match(r.stdout, /muse is not a model pi lists \(pi --list-models\); type it again/);
   assert.match(r.stdout, /x is not on the list; type a number from 1 to 4/, 'the judge list says why too');
   const g = parse(readFileSync(join(t.env.DONE_DONE_HOME, 'config.yaml'), 'utf8'));
   assert.deepEqual([g.agent, g.agent_config.pi.model, g.judge.route], ['pi', 'opencode-go/muse-spark-1.3-contributor', 'claude-code']);
@@ -2440,10 +2428,8 @@ test('design fails a screen on each defect the judge names, alone or next to its
   assert.equal(empty.calls.length, 0, 'a blank frame fails without a request');
   assert.equal(design(answer(), '--mock', 'screen.png').code, 2);
   assert.match(toon(design(answer(), 'gone.png')).error, /gone\.png: cannot read \(ENOENT\)/);
-  writeFileSync(join(t.env.DONE_DONE_HOME, 'config.yaml'), 'judge:\n  route: answerer:opencode\n');
-  const judgeOnly = design(answer(), 'screen.png');
-  assert.equal(judgeOnly.code, 0, judgeOnly.out);
-  assert.equal(toon(judgeOnly).judge.author, 'no agent set');
+  writeFileSync(join(t.env.DONE_DONE_HOME, 'config.yaml'), 'judge:\n  route: answerer:opencode\n'); const judgeOnly = design(answer(), 'screen.png');
+  assert.equal(judgeOnly.code, 0, judgeOnly.out); assert.equal(toon(judgeOnly).judge.author, 'no agent set');
 });
 
 // A cheap model sometimes answers every kind with all-zero probabilities: that is a malformed answer to ask again, not
@@ -2723,9 +2709,7 @@ test('with no agent set, done-done never picks one: doctor, maintain and verify 
   assert.equal(ag.detail, 'no agent is set: ask the user which agent to use (claude, codex, opencode, pi, gemini, acp:<target>); never pick one for them');
   assert.match(ag.fix, /^Save the user's answer: done-done init --agent <agent> --model <model>, e\.g\. done-done init --agent opencode --model opencode-go\/muse-spark-1\.3-contributor$/);
   assert.ok(!toon(d).checks.some((c) => c.check === 'agent_settings'));
-  const by = (n) => toon(d).checks.find((c) => c.check === n);
-  assert.deepEqual([by('judge').status, by('judge').fix], ['missing', "Save the user's answer: done-done init --judge <agent> --judge-model <model>, e.g. done-done init --judge opencode --judge-model opencode-go/muse-spark-1.3-contributor"]);
-  assert.deepEqual([by('judge_choice').status, by('judge_choice').detail, by('judge_choice').fix], ['missing', 'unknown until the agent is set, since the judge is kept apart from it', '']);
+  const by = (n) => toon(d).checks.find((c) => c.check === n); assert.deepEqual([by('judge').status, by('judge').fix], ['missing', "Save the user's answer: done-done init --judge <agent> --judge-model <model>, e.g. done-done init --judge opencode --judge-model opencode-go/muse-spark-1.3-contributor"]); assert.deepEqual([by('judge_choice').status, by('judge_choice').detail, by('judge_choice').fix], ['missing', 'unknown until the agent is set, since the judge is kept apart from it', '']);
   const runs = join(env.DONE_DONE_HOME, 'runs', 'notes');
   for (const args of [['maintain', '--foreground'], ['verify', 'shots', '--outcome', 'home renders', '--judge', '--foreground']]) {
     const r = doctorIn(repo, path, ...args);

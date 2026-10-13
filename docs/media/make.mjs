@@ -53,7 +53,6 @@ const checks = (evidence) => `## Checks\noutcome: notes sync between two devices
 const run = term('done-done run sync');
 const id = run.out.match(/^run_id: (\S+)/m)?.[1];
 if (run.code !== 0 || !id) throw new Error(`done-done run sync failed (exit ${run.code}):\n${run.out}`);
-// Evidence lives outside the repo, in the run's own folder under ~/.done-done/evidence.
 const after = join(env.DONE_DONE_HOME, 'evidence', 'notes', id, 'after.png');
 writeFileSync(join(repo, 'pr-body.md'), checks(after));
 const body = term('cat pr-body.md');

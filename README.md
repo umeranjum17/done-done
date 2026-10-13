@@ -68,8 +68,6 @@ The skill tells your agent to use `done-done` if it is on PATH and otherwise run
 npx -y done-done-axi --help
 ```
 
-Headless `opencode run` refuses folders outside the repo, and done-done keeps its config and evidence in `~/.done-done`, so run it with `--auto` (or allow `~/.done-done` in opencode's `external_directory` permission).
-
 The skill stays a short stub and sends the agent to `--help` and the bare command for current instructions, so an installed copy cannot go stale against a newer CLI.
 
 Then, in agents that expose skills as slash commands (Claude Code, for example), invoke it directly:

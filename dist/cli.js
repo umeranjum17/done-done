@@ -1272,7 +1272,6 @@ async function waitRun(dir, pid) {
         await new Promise((r) => setTimeout(r, 200));
 }
 // The judge a command will start: the user's agent and judge (asked for when unset), refused when it is the author.
-// design starts no agent, so it asks only for the judge and keeps it apart from the agent only when one is set.
 async function preflightJudge(cfg, needsAgent = true) {
     if (needsAgent)
         await withChoice('agent', cfg);
@@ -1581,7 +1580,6 @@ function cmdRespond(argv) {
         throw e;
     }
 }
-// This checkout's verify and maintain runs, newest first: what history lists and bare done-done counts.
 function runsOf(repo, cfg) {
     const root = runsRoot(cfg.app);
     return existsSync(root) ? readdirSync(root).filter((x) => existsSync(join(root, x, 'run.json'))).map((x) => loadRun(join(root, x))).filter((r) => r.repo === repo).sort((a, b) => b.created.localeCompare(a.created)) : [];
@@ -1987,8 +1985,7 @@ function saveChoice(kind, { agent, model }) {
     renameSync(`${file}.tmp`, file);
     return `${kind === 'agent' ? agent : routeOf(agent)}${model ? ` (model ${model})` : ''} saved to ${file}`;
 }
-// Why a typed model name is not one the agent lists (opencode models, pi --list-models), or '' when it is listed or the
-// agent has no list to check against (a list that fails is named, and the model is kept as typed).
+// Why a typed model is not one the agent lists (opencode models, pi --list-models), or '' when it is listed or unchecked.
 function modelList(agent) {
     return agent === 'opencode' ? ['models'] : agent === 'pi' ? ['--list-models'] : null;
 }

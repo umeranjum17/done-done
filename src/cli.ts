@@ -2318,7 +2318,7 @@ async function cmdDoctor(argv: string[]): Promise<number> {
     );
     if (agent.agent === 'pi') checks.push({ check: 'tool_gate', status: 'warning', detail: 'pi has no permission gate: every pi tool runs without approval', fix: '' });
     // codex's sandbox covers its shell too, so a drive's recipe tool writes only where the drive may.
-    if (agent.agent === 'codex') checks.push({ check: 'tool_gate', status: 'warning', detail: "codex's drive sandbox lets its commands write only the repo, the run's evidence and scratch folders, $TMPDIR and /tmp; a recipe tool that writes elsewhere (chrome-devtools-axi: ~/.chrome-devtools-axi) fails until you add that folder with agent_args_override.codex: [--add-dir, <folder>]", fix: '' });
+    if (agent.agent === 'codex') checks.push({ check: 'tool_gate', status: 'warning', detail: "codex's drive sandbox lets its commands write only the repo, the run's evidence and scratch folders, $TMPDIR and /tmp; a tool that writes elsewhere needs its folder added with agent_args_override.codex: [--add-dir, <folder>] (see docs/reference.md, Drive by agent)", fix: '' });
   }
   // The judge the user set (judge.route), kept apart from the agent.
   let choice: JudgeChoice | undefined;

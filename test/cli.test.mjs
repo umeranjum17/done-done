@@ -2831,7 +2831,7 @@ test('doctor finds agent, judge and ffprobe binaries from PATH; missing optional
   assert.match(codexOnly.checks[4].detail, /^codex \(its own default model; set agent_config\.codex\.model to choose one; from config\) at .*codex$/);
   const codexGate = codexOnly.checks.find((x) => x.check === 'tool_gate');
   assert.equal(codexGate.status, 'warning');
-  assert.match(codexGate.detail, /^codex's drive sandbox lets its commands write only the repo, the run's evidence and scratch folders, \$TMPDIR and \/tmp; .*agent_args_override\.codex: \[--add-dir, <folder>\]$/);
+  assert.match(codexGate.detail, /^codex's drive sandbox lets its commands write only the repo, the run's evidence and scratch folders, \$TMPDIR and \/tmp; a tool that writes elsewhere needs its folder added with agent_args_override\.codex: \[--add-dir, <folder>\] \(see docs\/reference\.md, Drive by agent\)$/);
   const codexJudge = codexOnly.checks.find((x) => x.check === 'judge');
   assert.deepEqual([codexJudge.status, codexJudge.detail], ['missing', 'judge: opencode is not on PATH'], 'the judge the user set is never swapped for an installed one');
   agent('opencode');

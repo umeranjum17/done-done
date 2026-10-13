@@ -11,7 +11,7 @@ export class UsageError extends Error {
 }
 
 export type Config = {
-  agent: 'auto' | string[]; // the author agent: auto, or the user's fallback list
+  agent: string; // the agent done-done starts, set by the user; '' until they do
   agent_config: Record<string, { model?: string; effort?: string }>;
   agent_args_override: Record<string, string[]>; // extra CLI flags, after done-done's own
   agent_path_override: Record<string, string>; // a binary per agent instead of the one on PATH
@@ -28,12 +28,12 @@ export type Config = {
   from: Record<string, 'global' | 'repo'>; // the file that set each key path; a key path not here is the built-in default
 };
 
-// The coding agents done-done can start, in the order `agent: auto` looks for them on PATH.
+// The coding agents a user can set as agent.
 export const AGENTS = ['claude', 'codex', 'opencode', 'pi', 'gemini'];
 // The agents whose CLI can read an attached image, so they judge through the answerer route; claude judges through claude-code.
 export const ANSWERER_JUDGES = ['opencode'];
 // Or acp:<target>, any agent the user's acpx bridge can start; the target is one argv word, so it never reads as a flag.
-const isAgent = (v: unknown) => AGENTS.includes(v as string) || (typeof v === 'string' && /^acp:[A-Za-z0-9][\w.-]*$/.test(v));
+export const isAgent = (v: unknown) => AGENTS.includes(v as string) || (typeof v === 'string' && /^acp:[A-Za-z0-9][\w.-]*$/.test(v));
 // The cost guard is this table: a default model for an agent here is always its cheap one, never a flagship,
 // whatever the vendor; any other model runs only when the user names it. gemini's is the CLI's own
 // `flash-lite` alias (its cli-reference.md: the fastest model for simple tasks). pi and acp:<target> have no public
@@ -123,7 +123,7 @@ function apply(target: Config, text: string | undefined, file: string, scope: 'g
       spec.type === 'string' ? typeof value === 'string'
       : spec.type === 'boolean' ? typeof value === 'boolean'
       : spec.type === 'string[]' ? Array.isArray(value) && value.every((v) => typeof v === 'string')
-      : spec.type === 'agent' ? value === 'auto' || [value].flat().every(isAgent) && [value].flat().length > 0
+      : spec.type === 'agent' ? value === '' || isAgent(value)
       : spec.type === 'route' ? typeof value === 'string' && (['', 'auto', 'claude-code'].includes(value) || ANSWERER_JUDGES.some((a) => value === `answerer:${a}`))
       : spec.type === 'claude_code' ? isMap(value) && Object.entries(value).every(([k, v]) => k === 'config_dir' && typeof v === 'string')
       : spec.type === 'agent_config' ? isMap(value) && Object.entries(value).every(([a, c]) => isAgent(a) && isMap(c) && Object.entries(c).every(([k, m]) => ['model', 'effort'].includes(k) && typeof m === 'string'))
@@ -134,7 +134,7 @@ function apply(target: Config, text: string | undefined, file: string, scope: 'g
       : isMap(value) && Object.values(value).every((j: any) => j && typeof j.command === 'string');
     const want = {
       journeys: 'a map of name: {command: <string>}',
-      agent: `auto, or one or a list of ${AGENTS.join(', ')}, acp:<target>`,
+      agent: `one of ${AGENTS.join(', ')}, acp:<target>, or '' for unset`,
       agent_config: `a map of <agent>: {model: <string>, effort: <string>} for ${AGENTS.join(', ')}, acp:<target>`,
       args: `a map of <agent>: [<flag>, ...] for ${AGENTS.join(', ')}`,
       paths: `a map of <agent>: <binary name or absolute path> for ${AGENTS.join(', ')}`,
@@ -165,7 +165,6 @@ function apply(target: Config, text: string | undefined, file: string, scope: 'g
     }
     target.from[key] = scope;
     if (b) t[a][b] = value;
-    else if (key === 'agent') target.agent = value === 'auto' ? 'auto' : ([value].flat() as string[]);
     else t[a] = value;
   }
 }
@@ -182,7 +181,7 @@ function readOptional(path: string): string | undefined {
 // The built-in defaults, before any config file is read.
 function defaultConfig(repo: string): Config {
   return {
-    agent: 'auto',
+    agent: '',
     agent_config: Object.fromEntries(Object.entries(CHEAP).map(([a, c]) => [a, { ...c }])),
     agent_args_override: {},
     agent_path_override: {},
@@ -222,11 +221,12 @@ export function loadConfig(repo: string, projectText?: string | null): Config {
 export function globalConfigText(): string {
   const short = (p: string) => (p.startsWith(`${homedir()}/`) ? `~${p.slice(homedir().length)}` : p);
   const agents = Object.entries(CHEAP).map(([a, c]) => `  ${a}:\n    model: ${c.model}\n${c.effort ? `    effort: ${c.effort}\n` : ''}`).join('');
-  return `# done-done global config. \`done-done init\` writes it once and never overwrites it.
+  return `# done-done global config. \`done-done init\` writes it once; \`init --agent\` then sets agent and its model in place.
 # A repo's .done-done.yaml may set agent (and the repo keys); every key here except agent is global-only.
 
-# The coding agent done-done starts: auto (the first of ${AGENTS.join(', ')} on PATH), one of them, acp:<target>, or an ordered fallback list such as [opencode, claude].
-agent: auto
+# The coding agent done-done starts: one of ${AGENTS.join(', ')}, or acp:<target>. done-done never picks one: while this
+# is empty it asks you in a terminal, or stops with the command that sets it: done-done init --agent <agent> --model <model>.
+agent: ""
 
 # Model and reasoning effort per agent (effort: ${EFFORTS.join(', ')}; gemini and acp:<target> have no effort flag). These are the cheap defaults.
 agent_config:

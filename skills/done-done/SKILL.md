@@ -33,6 +33,9 @@ Results are TOON: read `result` and follow the `help` lines through
 tree: commit the done-done setup (config, capture script) before you capture. `fail` or
 `inconclusive` is not done: fix the cause and re-run, or tell the user exactly what is still unproven.
 
+done-done starts a coding agent the user chose. When it says no agent is set, ask the user which agent
+(and model) to use and save their answer with the command it prints; never choose one for them.
+
 ## Request
 
 $ARGUMENTS

@@ -109,7 +109,7 @@ cd your-app
 done-done init
 ```
 
-`init` writes a minimal `.done-done.yaml` (only if you don't already have one) that names your app, and a commented global `~/.done-done/config.yaml` (only if there is none) with every machine setting at its cheap default: `agent:` (`auto`, one agent, or a fallback list), `agent_config.<agent>` with `model` and `effort`, `agent_args_override`, `agent_path_override`, `acpx_path` and `agent_timeout`. `agent:` in `.done-done.yaml` overrides the global one; the rest stays global ([Config](docs/reference.md#config)). A plain `init` never overwrites an existing config. It also scaffolds a verify skill at `.agents/skills/verify-<app>` from the repo's own files, for your agent to finish with one live drive. Evidence lives outside the repo, in `~/.done-done/evidence/<app>`, so it outlives the checkout that captured it. Then describe how to capture proof — swap the command for whatever drives your real app and saves screenshots, recordings or logs:
+`init` writes a minimal `.done-done.yaml` (only if you don't already have one) that names your app, and a commented global `~/.done-done/config.yaml` (only if there is none) with every machine setting at its cheap default: `agent:` (the one coding agent done-done starts; done-done never picks it, so `init` asks you in a terminal, or takes `--agent <agent> --model <model>`), `agent_config.<agent>` with `model` and `effort`, `agent_args_override`, `agent_path_override`, `acpx_path` and `agent_timeout`. `agent:` in `.done-done.yaml` overrides the global one; the rest stays global ([Config](docs/reference.md#config)). A plain `init` never overwrites an existing config. It also scaffolds a verify skill at `.agents/skills/verify-<app>` from the repo's own files, for your agent to finish with one live drive. Evidence lives outside the repo, in `~/.done-done/evidence/<app>`, so it outlives the checkout that captured it. Then describe how to capture proof — swap the command for whatever drives your real app and saves screenshots, recordings or logs:
 
 ```yaml
 journeys:
@@ -119,7 +119,7 @@ journeys:
 
 The command runs from the repo root with `DONE_DONE_EVIDENCE_ROOT` (a new folder for this run in the evidence root) and `DONE_DONE_RUN_ID` set, and `${RUN_ID}` in it is replaced. A run that writes nothing into its folder fails.
 
-Optional: `done-done init --agent <claude|codex|opencode|gemini|pi>` adds a session hook or plugin to the repo that shows each session the bare `done-done` state. Each agent's file and behavior are in the [reference](docs/reference.md#set-up-a-repo).
+Optional: `done-done init --hook <claude|codex|opencode|gemini|pi>` adds a session hook or plugin to the repo that shows each session the bare `done-done` state. Each agent's file and behavior are in the [reference](docs/reference.md#set-up-a-repo).
 
 Record the recipe in the repo so anyone can re-run the proof, then commit it (and `.claude/settings.json`, `.codex/hooks.json`, `.gemini/settings.json`, `.opencode/plugins/done-done.js` or `.pi/extensions/done-done.js` if you added a hook):
 

@@ -2027,7 +2027,7 @@ process.stdout.write(JSON.stringify({ type: 'result', is_error: false, structure
   assert.equal(probe.code, 0, probe.out);
   const probed = right.calls().find((c) => c.probe).probe;
   assert.deepEqual(probed.map((p) => [p.command, p.status]), [['respond', 2], ['receipt', 2], ['verify', 2]]);
-  assert.match(probed[0].out, /cannot run inside an agent drive/);
+  assert.match(probed[0].out, /respond refuses to run inside an agent drive \(DONE_DONE_DRIVE is set\), so the agent does not answer its own gate, write a receipt or start a run by accident; this guards against accidents and is not a sandbox/);
   // The judge is apart from the author the run recorded, even when the config names another agent during the drive.
   const seen = right.calls().length;
   const switched = verify({ ...right.env, DRIVE: 'switch' }, 'the note Umer added shows in the list after a switch');
@@ -2039,6 +2039,11 @@ process.stdout.write(JSON.stringify({ type: 'result', is_error: false, structure
   assert.equal(logged.code, 4, logged.out);
   assert.deepEqual([logged.o.status, logged.o.step, logged.o.findings.length], ['awaiting_approval', 'gate', 1]);
   assert.match(logged.o.findings[0].what, /session\.log: the judge did not read this capture/);
+  // With the judge off, an agent drive parks at the gate saying so, and its judge step shows skipped, not pending.
+  const off = verify(right.env, 'the note Umer added shows in the list', '--no-judge');
+  assert.equal(off.code, 4, off.out);
+  assert.equal(off.o.findings[0].what, 'the judge is off (--no-judge), and an agent drive passes only with a judge pass');
+  assert.equal(off.o.steps.find((x) => x.name === 'judge').status, 'skipped');
   // A drive that changes a tracked file fails: its captures would not be of the committed code.
   const edit = verify({ ...right.env, DRIVE: 'edit' }, 'the note Umer added shows in the list');
   assert.equal(edit.code, 1, edit.out);
@@ -4667,13 +4672,18 @@ test('maintain with auto_fix on a clean skill ends clean with no branch and no j
   assert.equal(t.branches(), '');
 });
 
-test('maintain with auto_fix refuses a judge that is the fixer\'s own agent and model, even with judge.allow_same', () => {
+test('maintain with auto_fix refuses a judge that is the fixer\'s own agent at any model, even with judge.allow_same', () => {
   const t = fixSetup(2);
   writeFileSync(join(t.env.DONE_DONE_HOME, 'config.yaml'), 'agent: opencode\nagent_config:\n  opencode: { model: opencode-go/author }\njudge:\n  route: answerer:opencode\n  model: opencode-go/author\n  allow_same: true\n');
   const { r, m } = t.maintain();
   assert.equal(r.code, 2, r.out);
-  assert.match(m.error, /the judge is never the agent that did the work; judge\.allow_same does not apply to maintain fixes/);
+  assert.match(m.error, /the judge is never the agent that did the work; judge\.allow_same does not apply to auto_fix/);
   assert.match(m.help[0], /done-done init --judge <agent> --judge-model <model>/);
+  // The fixer's agent at another model is the same agent, so it is refused too.
+  writeFileSync(join(t.env.DONE_DONE_HOME, 'config.yaml'), 'agent: opencode\nagent_config:\n  opencode: { model: opencode-go/author }\njudge:\n  route: answerer:opencode\n  model: opencode-go/other\n');
+  const other = t.maintain();
+  assert.equal(other.r.code, 2, other.r.out);
+  assert.match(other.m.error, /the judge opencode \(model opencode-go\/other\) is the fixer's own agent \(opencode\) at any model/);
   assert.deepEqual(t.calls(), [], 'no run starts, so no reader, judge or fixer is called');
   assert.equal(t.branches(), '');
 });

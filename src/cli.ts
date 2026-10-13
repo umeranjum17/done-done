@@ -33,7 +33,7 @@ const CHECKS_TEXT = `Checks block (--from): the newest "## Checks" heading, then
   evidence: <the evidence file paths, or "not proven: <cause>">`;
 const RUNS_TEXT = `runs: each verify or maintain run lives in $DONE_DONE_HOME/runs/<app>/<run-id> (run.json, events.jsonl, logs/<step>.log,
   agents/<n>-<name>.json for each agent call) and goes on when the command that started it ends;
-  verify steps: resolve, drive, check, judge (unless --no-judge), gate, receipt, report;
+  verify steps: resolve, drive, check, judge (skipped with --no-judge), gate, receipt, report;
   maintain steps: locate, hygiene, source-wave, reconcile, triage and fix (only with auto_fix.maintain above 0), report
   drive: the journey when there is one; else the author agent (agent: in config) drives one feature of the verify skill the way a user
   does and saves screenshots into the run's evidence folder; it may run commands and edit files only in the repo and that folder where
@@ -1037,7 +1037,11 @@ async function runSteps(dir: string): Promise<void> {
   }, HEARTBEAT_MS);
   let step: Step | undefined;
   const set = (s: Step, status: StepState, extra: Partial<Step> = {}) => setStep(dir, run, s, status, extra);
-  const begin = (name: string) => (set((step = run.steps.find((s) => s.name === name)!), 'running'), step);
+  // A step that starts skips the earlier steps still pending (the judge when it is off).
+  const begin = (name: string) => {
+    for (const s of run.steps.slice(0, run.steps.findIndex((s) => s.name === name))) if (s.status === 'pending') s.status = 'skipped';
+    return (set((step = run.steps.find((s) => s.name === name)!), 'running'), step);
+  };
   const log = (name: string, result: Record<string, unknown>) => writeFileSync(join(dir, 'logs', `${name}.log`), `${encode(result)}\n`);
   const finish = (result: Run['result'], reason?: string) => {
     step = run.steps.find((s) => s.name === 'report');
@@ -1146,7 +1150,9 @@ async function runSteps(dir: string): Promise<void> {
     const clean = judgeRan ? checkFindings === 0 : checked.code === PASS;
     const notJudged = judgeRan && run.journey === null ? (checked.judge?.not_judged ?? []) as string[] : [];
     const asks: Finding[] = !clean ? [] : judgeRan ? [...judgeFindings, ...notJudged.map((name): Finding => ({ level: 'inconclusive', why: `${name}: the judge did not read this capture, and an agent drive passes only with a judge pass on every capture` }))]
-      : run.journey === null ? [{ level: 'inconclusive', why: 'the judge judged no capture (only PNG and JPEG captures are judged), and an agent drive passes only with a judge pass' }] : [];
+      : run.journey !== null ? []
+      : run.judge ? [{ level: 'inconclusive', why: 'the judge judged no capture (only PNG and JPEG captures are judged), and an agent drive passes only with a judge pass' }]
+      : [{ level: 'inconclusive', why: 'the judge is off (--no-judge), and an agent drive passes only with a judge pass' }];
     if (asks.length) {
       begin('gate');
       const findings: GateFinding[] = asks.map((f, i) => ({ id: `gate-${i + 1}`, severity: f.level === 'fail' ? 'error' : 'warning', what: f.why, action: 'ask-user' }));
@@ -2495,7 +2501,7 @@ async function main(argv: string[]): Promise<number> {
     return PASS;
   }
   try {
-    if (process.env.DONE_DONE_DRIVE && DRIVE_REFUSED.includes(cmd)) throw new UsageError(`${cmd} cannot run inside an agent drive: the agent that did the work never answers a gate, writes a receipt or starts a run`, 'Stop the drive and report what you captured; done-done answers the run and writes the receipt');
+    if (process.env.DONE_DONE_DRIVE && DRIVE_REFUSED.includes(cmd)) throw new UsageError(`${cmd} refuses to run inside an agent drive (DONE_DONE_DRIVE is set), so the agent does not answer its own gate, write a receipt or start a run by accident; this guards against accidents and is not a sandbox`, 'Stop the drive and report what you captured; done-done answers the run and writes the receipt');
     if (cmd === 'init') return await cmdInit(rest);
     if (cmd === 'doctor') return await cmdDoctor(rest);
     if (cmd === 'run') return cmdRun(rest);

@@ -1107,7 +1107,8 @@ async function runSteps(dir) {
         // The gate: when the check itself is clean but the judge did not pass a capture (or judged none of an agent's), the run
         // waits for the caller (respond), who can move it on but never make it a pass. The runner ends here.
         const clean = judgeRan ? checkFindings === 0 : checked.code === PASS;
-        const asks = !clean ? [] : judgeRan ? judgeFindings
+        const notJudged = judgeRan && run.journey === null ? (checked.judge?.not_judged ?? []) : [];
+        const asks = !clean ? [] : judgeRan ? [...judgeFindings, ...notJudged.map((name) => ({ level: 'inconclusive', why: `${name}: the judge did not read this capture, and an agent drive passes only with a judge pass on every capture` }))]
             : run.journey === null ? [{ level: 'inconclusive', why: 'the judge judged no capture (only PNG and JPEG captures are judged), and an agent drive passes only with a judge pass' }] : [];
         if (asks.length) {
             begin('gate');

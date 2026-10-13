@@ -1913,11 +1913,12 @@ test('verify with no journey: the author agent drives the verify skill feature, 
     const s = stubAgents(t.env, verdict(p));
     symlinkSync(process.execPath, join(s.bin, 'node'));
     writeFileSync(join(s.bin, 'claude'), `#!${process.execPath}
-const { appendFileSync, copyFileSync, readFileSync } = require('node:fs');
+const { appendFileSync, copyFileSync, readFileSync, writeFileSync } = require('node:fs');
 appendFileSync(${JSON.stringify(join(s.bin, 'calls.jsonl'))}, JSON.stringify({ agent: 'claude', argv: process.argv.slice(2), stdin: readFileSync(0, 'utf8'), cwd: process.cwd(), evidence: process.env.DONE_DONE_EVIDENCE_ROOT, tmp: process.env.TMPDIR }) + '\\n');
 copyFileSync(${JSON.stringify(join(t.dir, 'screen.png'))}, process.env.DONE_DONE_EVIDENCE_ROOT + '/note.png');
 if (process.env.DRIVE === 'edit') appendFileSync('src/app.js', '// changed\\n');
-process.stdout.write(JSON.stringify({ type: 'result', is_error: false, structured_output: { feature: 'features/add-note.md', captures: ['note.png'], blocker: '' } }));
+if (process.env.DRIVE === 'log') writeFileSync(process.env.DONE_DONE_EVIDENCE_ROOT + '/session.log', 'ok\\n');
+process.stdout.write(JSON.stringify({ type: 'result', is_error: false, structured_output: { feature: 'features/add-note.md', captures: process.env.DRIVE === 'log' ? ['note.png', 'session.log'] : ['note.png'], blocker: '' } }));
 `, { mode: 0o755 });
     return s;
   };
@@ -1971,6 +1972,11 @@ process.stdout.write(JSON.stringify({ type: 'result', is_error: false, structure
   assert.equal(t.dd('abort', '--run', abortRun.o.run_id).code, 0);
   assert.equal(toon(t.dd('status', '--run', abortRun.o.run_id)).status, 'cancelled');
   assert.equal(t.dd('respond', '--run', abortRun.o.run_id, '--action', 'fix').code, 2);
+  // A capture the judge cannot read is not covered by the judge's pass on the others: the run parks at the gate.
+  const logged = verify({ ...right.env, DRIVE: 'log' }, 'the note Umer added shows in the list');
+  assert.equal(logged.code, 4, logged.out);
+  assert.deepEqual([logged.o.status, logged.o.step, logged.o.findings.length], ['awaiting_approval', 'gate', 1]);
+  assert.match(logged.o.findings[0].what, /session\.log: the judge did not read this capture/);
   // A drive that changes a tracked file fails: its captures would not be of the committed code.
   const edit = verify({ ...right.env, DRIVE: 'edit' }, 'the note Umer added shows in the list');
   assert.equal(edit.code, 1, edit.out);

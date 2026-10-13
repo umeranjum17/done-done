@@ -1682,13 +1682,11 @@ function checkChoice(agent, model) {
 // Save the user's agent (and model) in the global config, in place, keeping its comments and every other key.
 function saveAgent(agent, model) {
     const file = join(home(), 'config.yaml');
-    const doc = parseDocument(readFileSync(file, 'utf8'));
-    const fresh = !doc.has('agent');
+    let text = readFileSync(file, 'utf8');
+    if (!parseDocument(text).has('agent'))
+        text = text.replace(/^# agent: .*$/m, `agent: ${agent}`);
+    const doc = parseDocument(text);
     doc.set('agent', doc.createNode(agent));
-    if (fresh) {
-        const items = doc.contents.items;
-        items.unshift(items.pop());
-    }
     if (model)
         doc.setIn(['agent_config', agent, 'model'], model);
     writeFileSync(`${file}.tmp`, doc.toString({ lineWidth: 0 }));

@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { createInterface } from 'node:readline/promises';
 import { parseArgs } from 'node:util';
 import { encode } from '@toon-format/toon';
-import { Document, parseDocument, type YAMLMap } from 'yaml';
+import { Document, parseDocument } from 'yaml';
 import { ACPX_INSTALL, agentChoices, askAgent, findBin, JUDGES, knownAgentOf, noAgent, selectAgent, selectJudge, supported, type AgentAnswer, type JudgeChoice } from './agents.js';
 import { AGENTS, CHEAP, type Config, globalConfigText, home, isAgent, loadConfig, parseDuration, UsageError } from './config.js';
 import { backend, type Capture, judge, judgeable, type Judged, onPath, quote } from './judge.js';
@@ -1650,13 +1650,10 @@ function checkChoice(agent: string, model: string) {
 // Save the user's agent (and model) in the global config, in place, keeping its comments and every other key.
 function saveAgent(agent: string, model: string): string {
   const file = join(home(), 'config.yaml');
-  const doc = parseDocument(readFileSync(file, 'utf8'));
-  const fresh = !doc.has('agent');
+  let text = readFileSync(file, 'utf8');
+  if (!parseDocument(text).has('agent')) text = text.replace(/^# agent: .*$/m, `agent: ${agent}`);
+  const doc = parseDocument(text);
   doc.set('agent', doc.createNode(agent));
-  if (fresh) {
-    const items = (doc.contents as YAMLMap).items;
-    items.unshift(items.pop()!);
-  }
   if (model) doc.setIn(['agent_config', agent, 'model'], model);
   writeFileSync(`${file}.tmp`, doc.toString({ lineWidth: 0 }));
   renameSync(`${file}.tmp`, file);

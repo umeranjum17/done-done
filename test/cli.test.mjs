@@ -2242,7 +2242,11 @@ test('with no agent set, done-done never picks one: doctor, maintain and verify 
   assert.match(yml, /^# The coding agent done-done starts/m, 'the comments stay');
   assert.match(init.global_config, /^written /, 'init writes the commented global first, then sets agent in it');
   assert.match(yml, /^agent: opencode$/m);
-  assert.equal(Object.keys(parse(yml))[0], 'agent', 'the saved agent takes the template\'s place, at the top');
+  const lines = yml.split('\n');
+  const agentAt = lines.findIndex((l) => l.startsWith('agent: '));
+  assert.ok(agentAt > lines.findIndex((l) => l.startsWith('# done-done global config')), 'the agent key comes after the file header');
+  assert.ok(agentAt > lines.findIndex((l) => l.startsWith('# The coding agent done-done starts')), 'and after the agent comment block it describes');
+  assert.ok(agentAt < lines.findIndex((l) => l.startsWith('agent_config:')), 'and before agent_config');
   assert.match(toon(doctorIn(repo, path, 'doctor')).checks[4].detail, /^opencode \(model opencode-go\/test-model; from config\) at /);
   assert.equal(toon(doctorIn(repo, path, 'init')).agent, 'unchanged (opencode)');
   for (const [args, error] of [[['--model', 'x'], /--model needs --agent/], [['--agent', 'codex'], /done-done cannot start codex/], [['--agent', 'opencode', '--model', 'muse'], /provider\/model/]]) {

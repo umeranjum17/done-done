@@ -261,6 +261,8 @@ export function selectJudge(cfg: Config, found: { agent: string; model: string; 
 
 type Ran = { status: number | null; stdout: string; stderr: string; error?: Error };
 
+const DRAIN_MS = 500;
+
 // One agent process. An edit step gets its own process group, so whatever it started (a dev server, a browser) is
 // killed with it when it ends or times out.
 function start(bin: string, argv: string[], c: AgentCall, cwd: string, input: string, env: NodeJS.ProcessEnv): Promise<Ran> {
@@ -270,6 +272,7 @@ function start(bin: string, argv: string[], c: AgentCall, cwd: string, input: st
     let stdout = '';
     let stderr = '';
     let error: Error | undefined;
+    let drain: NodeJS.Timeout | undefined;
     const kill = () => {
       try {
         if (group) process.kill(-child.pid!, 'SIGKILL');
@@ -290,8 +293,15 @@ function start(bin: string, argv: string[], c: AgentCall, cwd: string, input: st
     if (group) c.onSpawn?.(child.pid);
     child.stdout.setEncoding('utf8').on('data', (d) => (stdout += d));
     child.stderr.setEncoding('utf8').on('data', (d) => (stderr += d));
+    child.on('exit', () => {
+      drain = setTimeout(() => {
+        child.stdout.destroy();
+        child.stderr.destroy();
+      }, DRAIN_MS);
+    });
     child.on('close', (status) => {
       clearTimeout(timer);
+      clearTimeout(drain);
       if (group) kill();
       done({ status, stdout, stderr, error });
     });

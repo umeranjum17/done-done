@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import { createHash, randomBytes } from 'node:crypto';
-import { accessSync, appendFileSync, closeSync, constants, existsSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
+import { accessSync, appendFileSync, closeSync, constants, existsSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { homedir, userInfo } from 'node:os';
 import { delimiter, dirname, isAbsolute, join, matchesGlob, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -879,11 +879,11 @@ function skillHash(repo: string, cfg: Config): string {
   }
 }
 
-// The drive's input is the journey command, or for an agent drive the feature it was asked to drive.
-function inputsOf(repo: string, cfg: Config, journey: string | null, feature?: string) {
+// The drive's input is the journey command, or for an agent drive the author agent and model that drove it.
+function inputsOf(repo: string, cfg: Config, journey: string | null, author?: { agent: string; model: string }) {
   const h = head(repo);
   const j = journey === null ? undefined : cfg.journeys[journey];
-  const drive = journey === null ? `agent\n${feature ?? ''}` : `${j?.command ?? ''}\n${j?.timeout ?? '30m'}`;
+  const drive = journey === null ? `agent\n${author?.agent ?? ''}\n${author?.model ?? ''}` : `${j?.command ?? ''}\n${j?.timeout ?? '30m'}`;
   return { head: h.commit, journey: sha256(Buffer.from(drive)), skill: skillHash(repo, cfg) };
 }
 
@@ -1220,7 +1220,7 @@ async function cmdVerify(argv: string[]): Promise<number> {
   const run: Run = {
     schema: 2, run_id: id, kind: 'verify', app: cfg.app, repo, journey, ...drive, claim: values.outcome, claim_id: values['claim-id'] ?? null, judge: judging, status: 'pending',
     steps: STEPS.map((name) => ({ name, status: 'pending' })), created, updated: created,
-    inputs: inputsOf(repo, cfg, journey, drive?.feature),
+    inputs: inputsOf(repo, cfg, journey, drive?.author),
   };
   saveRun(dir, run);
   logEvent(dir, { status: 'pending' });
@@ -1305,7 +1305,7 @@ async function cmdRerun(argv: string[]): Promise<number> {
   // A source run with no journey is driven again by the author agent config names now; schema 2 runs before PR 4 always had a journey.
   const journey = src.journey ?? null;
   const drive = journey === null ? agentDrive(src.repo, cfg, src.feature) : undefined;
-  const inputs = inputsOf(src.repo, loadConfig(src.repo), journey, drive?.feature);
+  const inputs = inputsOf(src.repo, loadConfig(src.repo), journey, drive?.author);
   const same = !!src.inputs && (['head', 'journey', 'skill'] as const).every((k) => src.inputs![k] === inputs[k]);
   const driveReuse = same && drivesClean(src.record, src.inputs?.head);
   const reused = (name: string) => (name === 'resolve' && same) || (name === 'drive' && driveReuse);
@@ -1370,11 +1370,16 @@ async function cmdAbort(argv: string[]): Promise<number> {
   }
   const after = loadRun(dir);
   if (closed(after, after.status)) return FAIL;
-  reapJourney(dir, after);
-  after.status = 'cancelled';
-  after.reason = 'aborted';
-  logEvent(dir, { status: 'cancelled' });
-  saveRun(dir, after);
+  try {
+    reapJourney(dir, after);
+    after.status = 'cancelled';
+    after.reason = 'aborted';
+    logEvent(dir, { status: 'cancelled' });
+    saveRun(dir, after);
+  } catch (e) {
+    rmSync(join(dir, 'respond.lock'), { force: true });
+    throw e;
+  }
   emit({ command: 'abort', run_id: id, status: 'cancelled', reason: after.reason, help: [`Read the run: done-done status --run ${id}`, `Start again: done-done rerun --run ${id}`] });
   return PASS;
 }
@@ -1405,24 +1410,29 @@ function cmdRespond(argv: string[]): number {
   const run = loadRun(dir);
   if (run.status !== 'awaiting_approval' || !run.gate || !createOnce(join(dir, 'respond.lock')))
     throw new UsageError(`run ${id} is not waiting at its gate (it is ${run.status === 'awaiting_approval' ? 'being answered' : shownStatus(run)})`, `Read it: done-done status --run ${id}`);
-  const gate = run.steps.find((s) => s.name === 'gate')!;
-  const by = answeredBy(repo);
-  run.response = { action, by, ...(reason && { reason }), at: now() };
-  logEvent(dir, { step: 'gate', response: action, by, ...(reason && { reason }) });
-  if (action === 'fix') {
-    setStep(dir, run, gate, 'failed');
-    finishRun(dir, run, 'fail', `gate: ${by} chose fix: ${reason || run.gate.findings[0].what}`);
+  try {
+    const gate = run.steps.find((s) => s.name === 'gate')!;
+    const by = answeredBy(repo);
+    run.response = { action, by, ...(reason && { reason }), at: now() };
+    logEvent(dir, { step: 'gate', response: action, by, ...(reason && { reason }) });
+    if (action === 'fix') {
+      setStep(dir, run, gate, 'failed');
+      finishRun(dir, run, 'fail', `gate: ${by} chose fix: ${reason || run.gate.findings[0].what}`);
+      return showRun(dir, cfg, 'respond');
+    }
+    setStep(dir, run, gate, 'completed');
+    const step = run.steps.find((s) => s.name === 'receipt')!;
+    setStep(dir, run, step, 'running');
+    const { gate: g } = run;
+    const rec: Receipt = { schema: 2, repo: cfg.app, head: g.head.commit, tree: g.head.tree, claim: run.claim, result: 'overridden', at: now(), files: g.cited, ...(g.judge && { judge: g.judge }), override: { action, by, reason, at: run.response.at } };
+    run.receipt = shown(repo, writeReceipt(cfg, rec));
+    setStep(dir, run, step, 'completed');
+    finishRun(dir, run, 'overridden', `gate: ${by} chose ${action}: ${reason}`);
     return showRun(dir, cfg, 'respond');
+  } catch (e) {
+    rmSync(join(dir, 'respond.lock'), { force: true });
+    throw e;
   }
-  setStep(dir, run, gate, 'completed');
-  const step = run.steps.find((s) => s.name === 'receipt')!;
-  setStep(dir, run, step, 'running');
-  const { gate: g } = run;
-  const rec: Receipt = { schema: 2, repo: cfg.app, head: g.head.commit, tree: g.head.tree, claim: run.claim, result: 'overridden', at: now(), files: g.cited, ...(g.judge && { judge: g.judge }), override: { action, by, reason, at: run.response.at } };
-  run.receipt = shown(repo, writeReceipt(cfg, rec));
-  setStep(dir, run, step, 'completed');
-  finishRun(dir, run, 'overridden', `gate: ${by} chose ${action}: ${reason}`);
-  return showRun(dir, cfg, 'respond');
 }
 
 function cmdHistory(argv: string[]): number {

@@ -131,11 +131,11 @@ One project-agnostic primitive: with an `instance` block, every run starts the a
 ```yaml
 instance:
   command: node server.mjs
-  ready: { url: http://127.0.0.1:$DONE_DONE_PORT/health }  # or { command: curl -sf $DONE_DONE_BASE_URL/ }
+  ready: { url: http://127.0.0.1:$DONE_DONE_PORT/health }
   ready_timeout: 30s
 ```
 
-done-done picks a free local port it owns (a port that is already taken is never used) and passes `DONE_DONE_PORT` and `DONE_DONE_BASE_URL` to the instance, the journey and the agent drive, so a recipe uses `$DONE_DONE_BASE_URL` instead of a hard-coded port. HOME and XDG_CONFIG_HOME/XDG_DATA_HOME/XDG_CACHE_HOME point under the run's scratch folder. Readiness is HTTP 2xx for `ready.url` or exit 0 for `ready.command`; past `ready_timeout` the run fails and the instance is killed. The group is killed at run end (pass, fail, park, timeout, or a dead runner on the next read). No `instance` block keeps today's behaviour.
+done-done picks a free local port it owns (a port that is already taken is never used) and passes `DONE_DONE_PORT` and `DONE_DONE_BASE_URL` to the instance, the journey and the agent drive, so a recipe uses `$DONE_DONE_BASE_URL` instead of a hard-coded port. HOME and XDG_CONFIG_HOME/XDG_DATA_HOME/XDG_CACHE_HOME point under the run's scratch folder. Readiness is an HTTP 2xx from `ready.url`; past `ready_timeout` the run fails and the instance is killed. The group is killed at run end (pass, fail, park, timeout, or a dead runner on the next read). No `instance` block keeps today's behaviour.
 
 ### Check a claim
 

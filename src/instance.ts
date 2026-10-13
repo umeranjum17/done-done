@@ -1,4 +1,4 @@
-import { spawn, spawnSync } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import { mkdirSync, openSync, closeSync } from 'node:fs';
 import { createServer } from 'node:net';
 import { dirname, join } from 'node:path';
@@ -6,7 +6,7 @@ import { parseDuration } from './config.js';
 
 // A run-instance harness: each run starts the app under test on its own port,
 // with its own HOME/XDG folders, waits until ready, and kills it at run end.
-export type Instance = { command: string; ready: { url?: string; command?: string }; ready_timeout: string };
+export type Instance = { command: string; ready: { url: string }; ready_timeout: string };
 
 // A free local port done-done owns: bind 127.0.0.1:0, read it back, release.
 // A fixed port that is already taken can never be used.
@@ -47,16 +47,6 @@ async function waitUrl(url: string, timeoutMs: number): Promise<boolean> {
   }
 }
 
-function waitCommand(command: string, env: NodeJS.ProcessEnv, cwd: string, timeoutMs: number): boolean {
-  const end = Date.now() + timeoutMs;
-  for (;;) {
-    const r = spawnSync(command, { cwd, shell: true, stdio: 'ignore', env });
-    if (r.status === 0) return true;
-    if (Date.now() >= end) return false;
-    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 300);
-  }
-}
-
 export type Started = { pgid: number; env: Record<string, string> };
 
 // Start the instance, wait for readiness, or kill it and throw a clear reason.
@@ -79,13 +69,10 @@ export async function startInstance(repo: string, inst: Instance, runId: string,
   };
   child.unref?.();
   const timeoutMs = parseDuration(inst.ready_timeout)!;
-  const ready = inst.ready.url !== undefined
-    ? await waitUrl(expand(inst.ready.url, extra as Record<string, string>), timeoutMs)
-    : waitCommand(inst.ready.command!.replaceAll('${RUN_ID}', runId), env, repo, timeoutMs);
+  const ready = await waitUrl(expand(inst.ready.url, extra as Record<string, string>), timeoutMs);
   if (!ready) {
     kill();
-    const what = inst.ready.url !== undefined ? `GET ${inst.ready.url} never returned 2xx` : `readiness command never exited 0`;
-    throw new Error(`instance not ready within ${inst.ready_timeout}: ${what} (port ${port} owned by this run; the instance was killed)`);
+    throw new Error(`instance not ready within ${inst.ready_timeout}: GET ${inst.ready.url} never returned 2xx (port ${port} owned by this run; the instance was killed)`);
   }
   return { pgid, env: extra as Record<string, string> };
 }

@@ -22,7 +22,7 @@ export type Config = {
   skill: string;
   journeys: Record<string, { command: string; timeout?: string }>;
   // Primitive 1 (run-instance harness): start the app under test on its own port per run. Null when unset: today's behaviour.
-  instance: { command: string; ready: { url?: string; command?: string }; ready_timeout: string } | null;
+  instance: { command: string; ready: { url: string }; ready_timeout: string } | null;
   evidence: { local_root: string; root: string; allow_dirty: boolean; ignore_paths: string[] };
   checks: { not_proven: 'inconclusive' | 'allow'; fix_title: string };
   // enabled: verify judges unless false (--judge turns it on for a run); check and receipt judge with --judge or true; rerun repeats its source run.
@@ -147,7 +147,7 @@ function apply(target: Config, text: string | undefined, file: string, scope: 'g
       : isMap(value) && Object.values(value).every((j: any) => j && typeof j.command === 'string');
     const want = {
       journeys: 'a map of name: {command: <string>}',
-      instance: '{command: <string>, ready: {url: <http url>} or {command: <shell command>}, ready_timeout: <duration>}',
+      instance: '{command: <string>, ready: {url: <http url>}, ready_timeout: <duration>}',
       agent: `one of ${AGENTS.join(', ')}, or acp:<target>`,
       agent_config: `a map of <agent>: {model: <string>, effort: <string>} for ${AGENTS.join(', ')}, acp:<target>`,
       args: `a map of <agent>: [<flag>, ...] for ${AGENTS.join(', ')}`,
@@ -161,15 +161,11 @@ function apply(target: Config, text: string | undefined, file: string, scope: 'g
     if (key === 'judge.route' && (value === 'auto' || value === '')) throw new UsageError(`${file}: judge.route ${value === '' ? 'must not be empty; to leave it unset, remove the key' : 'auto is gone: done-done never picks the judge, the user sets it'}`, `Delete the judge.route line in ${file}, then run: done-done init --judge <agent> --judge-model <model>`);
     if (key === 'agent' && value === '') throw new UsageError(`${file}: agent must not be empty; to leave it unset, remove the key`);
     if (key === 'instance') {
-      // instance: {command, ready: {url} or {command}, ready_timeout}. Validated here; the harness owns the port.
+      // instance: {command, ready: {url}, ready_timeout}. Validated here; the harness owns the port.
       const v = value as { command?: unknown; ready?: unknown; ready_timeout?: unknown };
       const fail = (why: string) => { throw new UsageError(`${file}: instance ${why}`); };
       if (!isMap(value) || typeof v.command !== 'string' || !v.command) fail('needs a command string');
-      if (!isMap(v.ready)) fail('needs ready: {url: <http url>} or ready: {command: <shell command>}');
-      else {
-        const r = v.ready as Record<string, unknown>;
-        if ((typeof r.url === 'string') === (typeof r.command === 'string')) fail('needs exactly one of ready.url and ready.command');
-      }
+      if (!isMap(v.ready) || typeof v.ready.url !== 'string') fail('needs ready: {url: <http url>}');
       if (v.ready_timeout !== undefined && (typeof v.ready_timeout !== 'string' || parseDuration(v.ready_timeout) === null))
         fail('ready_timeout must be a duration such as 30s, 2m or 1h');
       target.from[key] = scope;

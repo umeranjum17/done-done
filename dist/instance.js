@@ -1,4 +1,4 @@
-import { spawn, spawnSync } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import { mkdirSync, openSync, closeSync } from 'node:fs';
 import { createServer } from 'node:net';
 import { dirname, join } from 'node:path';
@@ -40,17 +40,6 @@ async function waitUrl(url, timeoutMs) {
         await new Promise((r) => setTimeout(r, 200));
     }
 }
-function waitCommand(command, env, cwd, timeoutMs) {
-    const end = Date.now() + timeoutMs;
-    for (;;) {
-        const r = spawnSync(command, { cwd, shell: true, stdio: 'ignore', env });
-        if (r.status === 0)
-            return true;
-        if (Date.now() >= end)
-            return false;
-        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 300);
-    }
-}
 // Start the instance, wait for readiness, or kill it and throw a clear reason.
 export async function startInstance(repo, inst, runId, scratch, baseEnv, logFile) {
     const port = await pickPort();
@@ -75,13 +64,10 @@ export async function startInstance(repo, inst, runId, scratch, baseEnv, logFile
     };
     child.unref?.();
     const timeoutMs = parseDuration(inst.ready_timeout);
-    const ready = inst.ready.url !== undefined
-        ? await waitUrl(expand(inst.ready.url, extra), timeoutMs)
-        : waitCommand(inst.ready.command.replaceAll('${RUN_ID}', runId), env, repo, timeoutMs);
+    const ready = await waitUrl(expand(inst.ready.url, extra), timeoutMs);
     if (!ready) {
         kill();
-        const what = inst.ready.url !== undefined ? `GET ${inst.ready.url} never returned 2xx` : `readiness command never exited 0`;
-        throw new Error(`instance not ready within ${inst.ready_timeout}: ${what} (port ${port} owned by this run; the instance was killed)`);
+        throw new Error(`instance not ready within ${inst.ready_timeout}: GET ${inst.ready.url} never returned 2xx (port ${port} owned by this run; the instance was killed)`);
     }
     return { pgid, env: extra };
 }

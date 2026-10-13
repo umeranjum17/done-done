@@ -4787,15 +4787,6 @@ test('an instance serves the journey on its own port with its own HOME, then sto
   assert.notEqual(spawnSync('curl', ['-sf', `http://127.0.0.1:${port}/`], { timeout: 8000 }).status, 0, 'the instance stops at run end');
 });
 
-test('an instance is ready when its readiness command exits 0', () => {
-  const t = setup('app: notes\njudge:\n  enabled: false\nevidence:\n  root: .proof\ninstance:\n  command: node server.mjs\n  ready:\n    command: curl -sf $DONE_DONE_BASE_URL/\n  ready_timeout: 15s\njourneys:\n  probe:\n    command: curl -sf $DONE_DONE_BASE_URL/ > $DONE_DONE_EVIDENCE_ROOT/reply.txt\n');
-  writeFileSync(join(t.repo, 'server.mjs'), `import {createServer} from 'node:http';\ncreateServer((q,s)=>s.writeHead(200).end('ok')).listen(Number(process.env.DONE_DONE_PORT),'127.0.0.1');\n`);
-  t.sh('add', '-A');
-  t.sh('commit', '-qm', 'instance fixture');
-  const r = t.dd('run', 'probe');
-  assert.equal(r.code, 0, r.out);
-});
-
 test('an unreadied instance fails the run with its reason and is killed', () => {
   const t = setup();
   writeFileSync(join(t.repo, '.done-done.yaml'), 'app: notes\njudge:\n  enabled: false\nevidence:\n  root: .proof\ninstance:\n  command: node hang.mjs\n  ready:\n    url: http://127.0.0.1:$DONE_DONE_PORT/health\n  ready_timeout: 2s\njourneys:\n  probe:\n    command: echo hi > $DONE_DONE_EVIDENCE_ROOT/out.txt\n');

@@ -84,7 +84,8 @@ const localTarget = (t: string) => (/^[a-z][\w+.-]*:/i.test(t) ? '' : t.split('#
 
 // A path:line or path:line-line. A path with a / is checked; a bare name is checked only when its extension is one
 // of the tracked files', so host:port text is never read as a citation.
-const CITE = /(?<![\w/.-])((?:(?:[\w.-]+|\([\w.-]+\)|\[[\w.-]+\])\/)*[\w-][\w.-]*\.[A-Za-z]\w*):(\d+)(?:-(\d+))?\b/g;
+// ponytail: a file name after a / may open with one bracket or paren group (pages/[id].tsx); [[...rest]].tsx is not a citation, add when a repo cites one.
+const CITE = /(?<![\w/.-])((?:(?:[\w.-]+|\([\w.-]+\)|\[[\w.-]+\])\/)*(?:[\w-][\w.-]*|(?<=\/)(?:\[[\w.-]+\]|\([\w.-]+\))[\w.-]*)\.[A-Za-z]\w*):(\d+)(?:-(\d+))?\b/g;
 
 // Whether the file at `p` really lies under the repo: a symlinked folder on the way to it is followed, so it counts by where it points.
 const realInside = (repo: string, p: string) => realpathSync(p).startsWith(`${realpathSync(repo)}${sep}`);

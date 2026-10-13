@@ -1,10 +1,10 @@
 import { spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { dirname, isAbsolute, join } from 'node:path';
 import { stripVTControlCharacters } from 'node:util';
-import { AGENTS, CHEAP_MODELS, type Config } from './config.js';
-import { onPath } from './judge.js';
+import { AGENTS, ANSWERER_JUDGES, CHEAP_MODELS, type Config, UsageError } from './config.js';
+import { claudeLoggedIn, isExecutable, onPath } from './judge.js';
 
 // How done-done starts a coding agent for one step: a fresh, single-shot session that
 // answers one JSON-schema question. The prompt goes on stdin or in a 0600 prompt file, never in
@@ -20,6 +20,8 @@ export type AgentCall = {
   timeoutMs: number;
   tools: 'none' | 'read' | 'edit'; // none for the judge and most readers; read for the claude reader
   record: string; // where the call record is written
+  files?: string[]; // images attached to the prompt, for the answerer judge
+  attempts?: number; // asks allowed for a bad tool-less answer, default ASK_ATTEMPTS
 };
 export type AgentAnswer = { ok: boolean; answer?: Record<string, unknown>; error?: string; record?: string; recordError?: string };
 
@@ -112,7 +114,7 @@ const ADAPTERS: Record<string, Adapter> = {
   // and the answer is the JSON object in the text parts of its JSON event stream.
   opencode: {
     file: true,
-    argv: (c, dir) => ['run', 'Follow the attached instructions.', '--format', 'json', '-m', c.model, '-f', join(dir, 'prompt.md')],
+    argv: (c, dir) => ['run', 'Follow the attached instructions.', '--format', 'json', '-m', c.model, '-f', join(dir, 'prompt.md'), ...(c.files ?? []).flatMap((f) => ['-f', f])],
     answer: (out, c) => {
       const events = out.split('\n').filter((l) => l.startsWith('{')).map((l) => JSON.parse(l));
       const error = events.find((e) => e.type === 'error');
@@ -204,6 +206,50 @@ export function agentPath(agent: string): string {
   return acpxRuns.get(acpx) ? acpx : '';
 }
 
+// The judge: a fresh, tools-off, single-shot call through BYOKit, never the author's agent and model unless the user
+// accepts that. claude judges through the kit's claude-code route; any other agent whose CLI reads images, through
+// the kit's answerer backend over that CLI. independence: agent (another agent), model (the author's agent at
+// another model) or session-only (the author's agent and model in a fresh session).
+export type JudgeChoice = { route: string; agent: string; model: string; independence: 'agent' | 'model' | 'session-only'; from: 'config' | 'auto'; author: { agent: string; model: string } };
+
+export const claudeBin = (cfg: Config) => cfg.judge.claude_code.bin || onPath('claude');
+// claude can judge only when the backend would accept its bin and sign-in folder and it is signed in to that folder.
+const claudeReady = (cfg: Config) => {
+  const bin = claudeBin(cfg);
+  const dir = cfg.judge.claude_code.config_dir;
+  return !!bin && isAbsolute(bin) && isExecutable(bin) && isAbsolute(dir) && existsSync(dir) && claudeLoggedIn(bin, realpathSync(dir));
+};
+const routeOf = (agent: string) => (agent === 'claude' ? 'claude-code' : `answerer:${agent}`);
+const canJudge = (agent: string) => agent === 'claude' || ANSWERER_JUDGES.includes(agent);
+export const JUDGES = AGENTS.filter(canJudge);
+
+export function selectJudge(cfg: Config, found: { agent: string; model: string; path: string }): JudgeChoice {
+  const author = found.path ? found : { agent: 'none', model: '', path: '' };
+  // acp:claude-code is claude for independence; an author with no known model is never apart by model.
+  const same = knownAgentOf(author.agent);
+  const pick = (agent: string, model: string, from: JudgeChoice['from']): JudgeChoice => {
+    const independence = agent !== same ? 'agent' : author.model && model !== author.model ? 'model' : 'session-only';
+    return { route: routeOf(agent), agent, model, independence, from, author: { agent: author.agent, model: author.model } };
+  };
+  const route = cfg.judge.route;
+  if (route === 'auto') {
+    // The first installed agent that can judge and is not the author, at its cheap model; else the author's agent.
+    const ready = AGENTS.filter((a) => canJudge(a) && (a === 'claude' ? claudeReady(cfg) : onPath(a)));
+    const other = ready.find((a) => a !== same);
+    if (other) return pick(other, CHEAP_MODELS[other], 'auto');
+    if (ready.includes(same)) return pick(same, CHEAP_MODELS[same], 'auto');
+    throw new UsageError(`judge: no installed agent can judge (judge.route auto looks for ${JUDGES.join(', ')})`, 'Install one of them, or set judge.route in ~/.done-done/config.yaml');
+  }
+  const agent = route === 'claude-code' ? 'claude' : route.slice('answerer:'.length);
+  if (route !== 'claude-code' && !ANSWERER_JUDGES.includes(agent)) throw new UsageError(`judge: done-done cannot judge through ${agent} yet (done-done cannot send its CLI an image)`, `Set judge.route to claude-code or answerer:<one of ${ANSWERER_JUDGES.join(', ')}>`);
+  const model = cfg.judge.model || CHEAP_MODELS[agent] || '';
+  if (!model) throw new UsageError(`judge: no model for ${route}`, `Set judge.model in ~/.done-done/config.yaml`);
+  const choice = pick(agent, model, 'config');
+  if (choice.independence === 'session-only' && !cfg.judge.allow_same)
+    throw new UsageError(`judge: judge.route ${route} at model ${model} is the author's own agent and model (${author.agent}), and the judge is never the agent that did the work`, 'Set judge.route or judge.model to another agent or model, or set judge.allow_same: true in ~/.done-done/config.yaml to accept a fresh session of the same one');
+  return choice;
+}
+
 export function askAgent(c: AgentCall): AgentAnswer {
   const adapter = adapterFor(c.agent);
   const started = Date.now();
@@ -250,7 +296,7 @@ export function askAgent(c: AgentCall): AgentAnswer {
         if (e instanceof ProviderError) throw e;
         // Only a tool-less call is asked again: an edit or read step may already have changed the repo or read it.
         lastError = (e as Error).message;
-        if (c.tools !== 'none' || attempts >= ASK_ATTEMPTS) throw new Error(`the agent did not answer with valid JSON after ${attempts} ${attempts === 1 ? 'try' : 'tries'}: ${lastError}`);
+        if (c.tools !== 'none' || attempts >= (c.attempts ?? ASK_ATTEMPTS)) throw new Error(`the agent did not answer with valid JSON after ${attempts} ${attempts === 1 ? 'try' : 'tries'}: ${lastError}`);
       }
     }
   } catch (e) {

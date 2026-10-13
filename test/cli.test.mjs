@@ -8,6 +8,7 @@ import { basename, dirname, join } from 'node:path';
 import { after, test } from 'node:test';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { crc32, deflateSync } from 'node:zlib';
+import jpeg from 'jpeg-js';
 import { parse } from 'yaml';
 import { decode } from '@toon-format/toon';
 
@@ -19,7 +20,7 @@ const json = (r) => JSON.parse(r.out);
 
 const isIgnored = (repo, path) => spawnSync('git', ['check-ignore', '--no-index', '-q', '--', path], { cwd: repo }).status === 0;
 
-function png(w, h, pixel) {
+function png(w, h, pixel, colour = 2) {
   const chunk = (type, data) => {
     const len = Buffer.alloc(4);
     len.writeUInt32BE(data.length);
@@ -27,14 +28,15 @@ function png(w, h, pixel) {
     crc.writeUInt32BE(crc32(Buffer.concat([Buffer.from(type), data])));
     return Buffer.concat([len, Buffer.from(type), data, crc]);
   };
+  const channels = colour === 6 ? 4 : 3;
   const ihdr = Buffer.alloc(13);
   ihdr.writeUInt32BE(w, 0);
   ihdr.writeUInt32BE(h, 4);
   ihdr[8] = 8;
-  ihdr[9] = 2;
-  const raw = Buffer.alloc(h * (w * 3 + 1));
+  ihdr[9] = colour;
+  const raw = Buffer.alloc(h * (w * channels + 1));
   for (let y = 0; y < h; y++)
-    for (let x = 0; x < w; x++) raw.set(pixel(x, y), y * (w * 3 + 1) + 1 + x * 3);
+    for (let x = 0; x < w; x++) raw.set(pixel(x, y), y * (w * channels + 1) + 1 + x * channels);
   return Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), chunk('IHDR', ihdr), chunk('IDAT', deflateSync(raw)), chunk('IEND', Buffer.alloc(0))]);
 }
 const screen = (seed = 0) => png(200, 120, (x, y) => [(x * 3 + seed) % 256, (y * 5) % 256, (x + y) % 256]);
@@ -604,10 +606,12 @@ test('the Firstmate merge gate treats - as no worktree and refuses a missing wor
 test('init writes a minimal config that keeps evidence outside the repo, and is idempotent', () => {
   const { dir, repo, dd } = bareRepo();
   const r = dd('init');
-  assert.equal(r.code, 0, r.out);
+  assert.equal(r.code, 2, r.out);
   const d = toon(r);
   assert.equal(d.command, 'init');
-  assert.equal(d.result, 'pass');
+  assert.equal(d.result, 'fail');
+  assert.equal(d.agent, 'not set', 'a non-terminal init with no agent writes the config and stops with the ask');
+  assert.match(d.help.join('\n'), /no agent is set: ask the user which agent to use/);
   assert.equal(d.config, 'written');
   assert.equal(d.gitignore, 'unchanged', 'nothing to ignore: the evidence root is outside the repo');
   assert.match(d.help.join('\n'), /journeys: .*done-done run smoke/s, 'the next step shows a journey, then the run');
@@ -615,10 +619,19 @@ test('init writes a minimal config that keeps evidence outside the repo, and is 
   assert.deepEqual(parse(readFileSync(yml, 'utf8')), { app: 'repo' }, 'the app is pinned and no in-repo evidence root is set');
   assert.ok(!existsSync(join(repo, '.gitignore')), 'no .gitignore is written');
   assert.match(d.evidence_root, /evidence[/\\]repo$/, 'init names the out-of-repo evidence root');
+  const globalYml = join(dir, 'home', 'config.yaml');
+  assert.equal(d.global_config, `written ${globalYml}`);
+  const globalText = readFileSync(globalYml, 'utf8');
+  const g = parse(globalText);
+  assert.deepEqual(Object.keys(g), ['agent_config', 'agent_args_override', 'agent_path_override', 'acpx_path', 'agent_timeout', 'evidence', 'judge'], 'every global key, named as in no-mistakes where the meaning is the same');
+  assert.deepEqual([g.agent, g.agent_config.claude, g.agent_config.opencode, g.agent_timeout], [undefined, { model: 'claude-haiku-5-5', effort: 'low' }, { model: 'opencode-go/muse-spark-1.3-contributor', effort: 'low' }, '30m'], 'no agent key until the user picks one, and the cheap defaults');
+  for (const key of Object.keys(g)) assert.match(globalText, new RegExp(`# .*\\n${key}:`), `${key} has a comment`);
   const before = readFileSync(yml);
   const again = dd('init');
-  assert.equal(again.code, 0, again.out);
+  assert.equal(again.code, 2, again.out);
   assert.equal(toon(again).config, 'unchanged');
+  assert.equal(toon(again).global_config, 'unchanged');
+  assert.equal(readFileSync(globalYml, 'utf8'), globalText, 'init never overwrites the global config');
   assert.equal(toon(again).gitignore, 'unchanged');
   assert.deepEqual(json(dd('init', '--json')), toon(again), '--json is the same result as JSON');
   assert.deepEqual(readFileSync(yml), before, 'repeat init preserves the config');
@@ -630,12 +643,12 @@ test('init leaves a customized config untouched and only appends a missing ignor
   writeFileSync(join(repo, '.done-done.yaml'), custom);
   writeFileSync(join(repo, '.gitignore'), 'node_modules/\n');
   const ymlBefore = readFileSync(join(repo, '.done-done.yaml'));
-  assert.equal(dd('init').code, 0);
+  assert.equal(dd('init').code, 2);
   assert.deepEqual(readFileSync(join(repo, '.done-done.yaml')), ymlBefore, 'customized config is byte-preserved');
   assert.ok(isIgnored(repo, 'node_modules/'), 'existing ignore entries kept');
   assert.ok(isIgnored(repo, '.verify/'), 'configured evidence root is now ignored by git');
   const snapshot = readFileSync(join(repo, '.gitignore'));
-  assert.equal(dd('init').code, 0);
+  assert.equal(dd('init').code, 2);
   assert.deepEqual(readFileSync(join(repo, '.gitignore')), snapshot, 'the second init appends nothing');
   writeFileSync(join(repo, '.done-done.yaml'), 'app: notes\nevidence:\n  root: ..proof\n');
   const dots = toon(dd('init'));
@@ -650,9 +663,9 @@ test('init is a no-op when the evidence root is already tracked and ignored', ()
   writeFileSync(join(repo, '.proof', 'old.log'), '$ notes add milk\n');
   sh('add', '-f', '.gitignore', '.proof/old.log');
   sh('commit', '-qm', 'tracked evidence');
-  assert.equal(dd('init').code, 0);
+  assert.equal(dd('init').code, 2);
   const snapshot = readFileSync(join(repo, '.gitignore'));
-  assert.equal(dd('init').code, 0);
+  assert.equal(dd('init').code, 2);
   assert.deepEqual(readFileSync(join(repo, '.gitignore')), snapshot, 'a tracked evidence root does not grow .gitignore');
 });
 
@@ -672,15 +685,15 @@ test('init refuses a malformed config with a clear error and no rewrite', () => 
 test('init works in a repo path with a space', () => {
   const { repo, dd } = bareRepo('my project');
   const r = dd('init');
-  assert.equal(r.code, 0, r.out);
+  assert.equal(r.code, 2, r.out);
   assert.equal(parse(readFileSync(join(repo, '.done-done.yaml'), 'utf8')).app, 'my project');
 });
 
-test('init --agent claude adds a SessionStart hook that shows the bare state, merges, and never duplicates', () => {
+test('init --hook claude adds a SessionStart hook that shows the bare state, merges, and never duplicates', () => {
   const { dir, repo, env, dd } = bareRepo();
   const settings = join(repo, '.claude', 'settings.json');
-  const r = dd('init', '--agent', 'claude');
-  assert.equal(r.code, 0, r.out);
+  const r = dd('init', '--hook', 'claude');
+  assert.equal(r.code, 2, r.out);
   assert.equal(toon(r).claude_hook, 'added to .claude/settings.json');
   const hooks = JSON.parse(readFileSync(settings, 'utf8')).hooks.SessionStart;
   assert.equal(hooks.length, 1);
@@ -697,39 +710,39 @@ test('init --agent claude adds a SessionStart hook that shows the bare state, me
   const off = hook(join(dir, 'empty'));
   assert.deepEqual([off.status, off.stdout, off.stderr], [0, '', ''], 'without done-done on PATH the hook is silent and exits 0');
   const before = readFileSync(settings);
-  assert.equal(toon(dd('init', '--agent', 'claude')).claude_hook, 'unchanged');
+  assert.equal(toon(dd('init', '--hook', 'claude')).claude_hook, 'unchanged');
   assert.deepEqual(readFileSync(settings), before, 'a second run adds no duplicate');
   // An existing settings file keeps its other keys and hooks.
   const other = { permissions: { allow: ['Bash(npm test)'] }, hooks: { SessionStart: [{ matcher: 'startup', hooks: [{ type: 'command', command: 'echo hi' }] }], Stop: [{ hooks: [{ type: 'command', command: 'echo bye' }] }] } };
   const two = bareRepo();
   mkdirSync(join(two.repo, '.claude'));
   writeFileSync(join(two.repo, '.claude', 'settings.json'), JSON.stringify(other));
-  assert.equal(two.dd('init', '--agent', 'claude').code, 0);
+  assert.equal(two.dd('init', '--hook', 'claude').code, 2);
   const merged = JSON.parse(readFileSync(join(two.repo, '.claude', 'settings.json'), 'utf8'));
   assert.deepEqual(merged, { ...other, hooks: { ...other.hooks, SessionStart: [...other.hooks.SessionStart, hooks[0]] } }, 'both hooks and every other key are kept');
   // Another agent is a usage error naming the supported values; a malformed settings file is left untouched.
-  const bad = two.dd('init', '--agent', 'cursor');
+  const bad = two.dd('init', '--hook', 'cursor');
   assert.equal(bad.code, 2, bad.out);
   assert.match(toon(bad).error, /supported values are claude, codex, opencode/);
   writeFileSync(join(two.repo, '.claude', 'settings.json'), '{ nope');
-  const broken = two.dd('init', '--agent', 'claude');
+  const broken = two.dd('init', '--hook', 'claude');
   assert.equal(broken.code, 2, broken.out);
   assert.match(toon(broken).help[0], /Fix \.claude\/settings\.json/);
   assert.equal(readFileSync(join(two.repo, '.claude', 'settings.json'), 'utf8'), '{ nope');
-  // --agent with --journey records the journey and still adds the hook.
+  // --hook with --journey records the journey and still adds the hook.
   const three = bareRepo();
-  const both = three.dd('init', '--journey', 'smoke', '--agent', 'claude', '--', 'echo hi');
-  assert.equal(both.code, 0, both.out);
+  const both = three.dd('init', '--journey', 'smoke', '--hook', 'claude', '--', 'echo hi');
+  assert.equal(both.code, 2, both.out);
   assert.deepEqual([toon(both).journey, toon(both).claude_hook], ['smoke', 'added to .claude/settings.json']);
   assert.match(toon(both).help.join('\n'), /Commit \.claude\/settings\.json/);
   assert.deepEqual(JSON.parse(readFileSync(join(three.repo, '.claude', 'settings.json'), 'utf8')).hooks.SessionStart, hooks);
 });
 
-test('init --agent codex adds a SessionStart hook that shows the bare state, merges, and never duplicates', () => {
+test('init --hook codex adds a SessionStart hook that shows the bare state, merges, and never duplicates', () => {
   const { dir, repo, env, dd } = bareRepo();
   const hooksFile = join(repo, '.codex', 'hooks.json');
-  const r = dd('init', '--agent', 'codex');
-  assert.equal(r.code, 0, r.out);
+  const r = dd('init', '--hook', 'codex');
+  assert.equal(r.code, 2, r.out);
   assert.equal(toon(r).codex_hook, 'added to .codex/hooks.json');
   const hooks = JSON.parse(readFileSync(hooksFile, 'utf8')).hooks.SessionStart;
   assert.equal(hooks.length, 1);
@@ -746,19 +759,19 @@ test('init --agent codex adds a SessionStart hook that shows the bare state, mer
   const off = hook(join(dir, 'empty'));
   assert.deepEqual([off.status, off.stdout, off.stderr], [0, '', ''], 'without done-done on PATH the hook is silent and exits 0');
   const before = readFileSync(hooksFile);
-  assert.equal(toon(dd('init', '--agent', 'codex')).codex_hook, 'unchanged');
+  assert.equal(toon(dd('init', '--hook', 'codex')).codex_hook, 'unchanged');
   assert.deepEqual(readFileSync(hooksFile), before, 'a second run adds no duplicate');
   // An existing hooks file keeps its other keys and hooks.
   const other = { description: 'team hooks', hooks: { SessionStart: [{ matcher: 'startup', hooks: [{ type: 'command', command: 'echo hi' }] }], Stop: [{ hooks: [{ type: 'command', command: 'echo bye' }] }] } };
   const two = bareRepo();
   mkdirSync(join(two.repo, '.codex'));
   writeFileSync(join(two.repo, '.codex', 'hooks.json'), JSON.stringify(other));
-  assert.equal(two.dd('init', '--agent', 'codex').code, 0);
+  assert.equal(two.dd('init', '--hook', 'codex').code, 2);
   const merged = JSON.parse(readFileSync(join(two.repo, '.codex', 'hooks.json'), 'utf8'));
   assert.deepEqual(merged, { ...other, hooks: { ...other.hooks, SessionStart: [...other.hooks.SessionStart, hooks[0]] } }, 'both hooks and every other key are kept');
   // A malformed hooks file is left untouched.
   writeFileSync(join(two.repo, '.codex', 'hooks.json'), '{ nope');
-  const broken = two.dd('init', '--agent', 'codex');
+  const broken = two.dd('init', '--hook', 'codex');
   assert.equal(broken.code, 2, broken.out);
   assert.match(toon(broken).help[0], /Fix \.codex\/hooks\.json/);
   assert.equal(readFileSync(join(two.repo, '.codex', 'hooks.json'), 'utf8'), '{ nope');
@@ -767,7 +780,7 @@ test('init --agent codex adds a SessionStart hook that shows the bare state, mer
 test('init --journey records the capture recipe and the journey re-runs from any checkout', () => {
   const { dir, repo, env, sh, dd } = bareRepo();
   const r = dd('init', '--journey', 'smoke', '--', 'echo added: milk > $DONE_DONE_EVIDENCE_ROOT/${RUN_ID}.log');
-  assert.equal(r.code, 0, r.out);
+  assert.equal(r.code, 2, r.out);
   assert.equal(toon(r).config, 'written');
   assert.equal(toon(r).journey, 'smoke');
   assert.equal(parse(readFileSync(join(repo, '.done-done.yaml'), 'utf8')).journeys.smoke.command, 'echo added: milk > $DONE_DONE_EVIDENCE_ROOT/${RUN_ID}.log', 'the ${RUN_ID} placeholder is stored verbatim');
@@ -786,7 +799,7 @@ test('init --journey records the capture recipe and the journey re-runs from any
   assert.equal(in2.status, 0, in2.stdout + in2.stderr);
   assert.ok(!(in2.stdout + in2.stderr).includes('not in the repo'), 'the recipe travels with the repo');
   // Re-recording the journey updates the stored command.
-  assert.equal(dd('init', '--journey', 'smoke', '--', 'echo added: eggs > $DONE_DONE_EVIDENCE_ROOT/${RUN_ID}.log').code, 0);
+  assert.equal(dd('init', '--journey', 'smoke', '--', 'echo added: eggs > $DONE_DONE_EVIDENCE_ROOT/${RUN_ID}.log').code, 2);
   assert.equal(parse(readFileSync(join(repo, '.done-done.yaml'), 'utf8')).journeys.smoke.command, 'echo added: eggs > $DONE_DONE_EVIDENCE_ROOT/${RUN_ID}.log');
   assert.equal(dd('init', '--journey', 'smoke').code, 2, 'a journey with no command after -- is a usage error');
 });
@@ -797,13 +810,13 @@ test('init --journey keeps the comments and formatting of an existing config', (
   const original = `# team proof config\napp: notes\n\njourneys:\n  shots:\n    command: ${long}\n`;
   writeFileSync(join(repo, '.done-done.yaml'), original);
   const r = dd('init', '--journey', 'smoke', '--', 'echo hi');
-  assert.equal(r.code, 0, r.out);
+  assert.equal(r.code, 2, r.out);
   assert.equal(readFileSync(join(repo, '.done-done.yaml'), 'utf8'), `${original}  smoke:\n    command: echo hi\n`);
 });
 
 test('init --journey records the command a run executes, shell syntax included', () => {
   const { repo, sh, dd } = bareRepo();
-  assert.equal(dd('init', '--journey', 'unit', '--', 'echo', 'added', '>', '$DONE_DONE_EVIDENCE_ROOT/out.txt').code, 0);
+  assert.equal(dd('init', '--journey', 'unit', '--', 'echo', 'added', '>', '$DONE_DONE_EVIDENCE_ROOT/out.txt').code, 2);
   assert.equal(parse(readFileSync(join(repo, '.done-done.yaml'), 'utf8')).journeys.unit.command, 'echo added > $DONE_DONE_EVIDENCE_ROOT/out.txt');
   sh('add', '-A');
   sh('commit', '-qm', 'recipe');
@@ -820,7 +833,7 @@ test('re-recording a journey replaces only its command and keeps its other keys 
   const { repo, dd } = bareRepo();
   const original = 'app: notes\njourneys:\n  smoke:\n    command: old # keep\n    timeout: 60\n';
   writeFileSync(join(repo, '.done-done.yaml'), original);
-  assert.equal(dd('init', '--journey', 'smoke', '--', 'echo new').code, 0);
+  assert.equal(dd('init', '--journey', 'smoke', '--', 'echo new').code, 2);
   assert.equal(readFileSync(join(repo, '.done-done.yaml'), 'utf8'), 'app: notes\njourneys:\n  smoke:\n    command: echo new # keep\n    timeout: 60\n');
 });
 
@@ -863,11 +876,11 @@ test('a run command outside the repo hints that its recipe is not recorded', () 
   assert.match(toon(none).help.join('\n'), /not in the repo/);
 });
 
-test('init --agent opencode adds a session plugin that shows the bare state, merges, and never duplicates', async () => {
+test('init --hook opencode adds a session plugin that shows the bare state, merges, and never duplicates', async () => {
   const { dir, repo, env, dd } = bareRepo();
   const plugin = join(repo, '.opencode', 'plugins', 'done-done.js');
-  const r = dd('init', '--agent', 'opencode');
-  assert.equal(r.code, 0, r.out);
+  const r = dd('init', '--hook', 'opencode');
+  assert.equal(r.code, 2, r.out);
   assert.equal(toon(r).opencode_plugin, 'added to .opencode/plugins/done-done.js');
   assert.match(toon(r).help.join('\n'), /Commit \.opencode\/plugins\/done-done\.js/);
   const body = readFileSync(plugin, 'utf8');
@@ -925,36 +938,36 @@ test('init --agent opencode adds a session plugin that shows the bare state, mer
     else process.env.DONE_DONE_HOME = prevHome;
   }
   const before = readFileSync(plugin);
-  assert.equal(toon(dd('init', '--agent', 'opencode')).opencode_plugin, 'unchanged');
+  assert.equal(toon(dd('init', '--hook', 'opencode')).opencode_plugin, 'unchanged');
   assert.deepEqual(readFileSync(plugin), before, 'a second run adds no duplicate');
   // An existing plugins directory keeps its other plugins and project config keys.
   const two = bareRepo();
   mkdirSync(join(two.repo, '.opencode', 'plugins'), { recursive: true });
   writeFileSync(join(two.repo, '.opencode', 'plugins', 'other.js'), 'export const Other = async () => ({});\n');
   writeFileSync(join(two.repo, 'opencode.json'), JSON.stringify({ $schema: 'https://opencode.ai/config.json', theme: 'dark' }));
-  assert.equal(two.dd('init', '--agent', 'opencode').code, 0);
+  assert.equal(two.dd('init', '--hook', 'opencode').code, 2);
   assert.equal(readFileSync(join(two.repo, '.opencode', 'plugins', 'other.js'), 'utf8'), 'export const Other = async () => ({});\n', 'other plugins are kept');
   assert.deepEqual(JSON.parse(readFileSync(join(two.repo, 'opencode.json'), 'utf8')), { $schema: 'https://opencode.ai/config.json', theme: 'dark' }, 'project config keys are kept');
 });
 
-test('init --agent opencode refuses to overwrite a plugin file with other content', () => {
+test('init --hook opencode refuses to overwrite a plugin file with other content', () => {
   const { repo, dd } = bareRepo();
   const plugin = join(repo, '.opencode', 'plugins', 'done-done.js');
   mkdirSync(join(repo, '.opencode', 'plugins'), { recursive: true });
   writeFileSync(plugin, 'export const Mine = async () => ({});\n');
-  const r = dd('init', '--agent', 'opencode');
+  const r = dd('init', '--hook', 'opencode');
   assert.equal(r.code, 2, r.out);
   assert.match(toon(r).error, /\.opencode\/plugins\/done-done\.js already exists/);
   assert.equal(readFileSync(plugin, 'utf8'), 'export const Mine = async () => ({});\n', 'the existing file is kept');
 });
 
-test('init --agent gemini and --agent pi give the model the bare state at the start of each session', async () => {
+test('init --hook gemini and --hook pi give the model the bare state at the start of each session', async () => {
   const { dir, repo, env, dd } = bareRepo();
   const bin = join(dir, 'bin');
   mkdirSync(bin);
   writeFileSync(join(bin, 'done-done'), `#!/bin/sh\nexec ${JSON.stringify(process.execPath)} ${JSON.stringify(CLI)} "$@"\n`, { mode: 0o755 });
-  const g = dd('init', '--agent', 'gemini');
-  assert.equal(g.code, 0, g.out);
+  const g = dd('init', '--hook', 'gemini');
+  assert.equal(g.code, 2, g.out);
   assert.equal(toon(g).gemini_hook, 'added to .gemini/settings.json');
   assert.match(toon(g).help.join('\n'), /Commit \.gemini\/settings\.json/);
   const settings = join(repo, '.gemini', 'settings.json');
@@ -967,12 +980,12 @@ test('init --agent gemini and --agent pi give the model the bare state at the st
   assert.deepEqual(JSON.parse(on.stdout), { hookSpecificOutput: { additionalContext: dd().out.trim() } }, 'the bare state goes to the model as additionalContext');
   const off = hook(join(dir, 'empty'));
   assert.deepEqual([off.status, off.stdout, off.stderr], [0, '', ''], 'without done-done on PATH the hook is silent and exits 0');
-  assert.equal(toon(dd('init', '--agent', 'gemini')).gemini_hook, 'unchanged');
-  const p = dd('init', '--agent', 'pi');
-  assert.equal(p.code, 0, p.out);
+  assert.equal(toon(dd('init', '--hook', 'gemini')).gemini_hook, 'unchanged');
+  const p = dd('init', '--hook', 'pi');
+  assert.equal(p.code, 2, p.out);
   assert.equal(toon(p).pi_extension, 'added to .pi/extensions/done-done.js');
   assert.match(toon(p).help.join('\n'), /Commit \.pi\/extensions\/done-done\.js/);
-  assert.equal(toon(dd('init', '--agent', 'pi')).pi_extension, 'unchanged');
+  assert.equal(toon(dd('init', '--hook', 'pi')).pi_extension, 'unchanged');
   // Drive the written extension as pi does: its default export registers handlers; the first prompt of a session gains the state.
   const prevPath = process.env.PATH;
   const prevHome = process.env.DONE_DONE_HOME;
@@ -1034,7 +1047,7 @@ const featureFiles = (skillDir) => readdirSync(join(skillDir, 'features')).sort(
 test('init scaffolds a verify skill with real launch and features for a web app', () => {
   const { repo, dd } = shapeRepo('web', 'shop');
   const r = dd('init');
-  assert.equal(r.code, 0, r.out);
+  assert.equal(r.code, 2, r.out);
   assert.equal(toon(r).verify_skill, 'written');
   const dir = join(repo, '.agents', 'skills', 'verify-shop');
   assert.deepEqual(featureFiles(dir), ['README.md', 'get-cart.md', 'post-checkout.md'], 'each route becomes a feature');
@@ -1055,7 +1068,7 @@ test('init scaffolds a verify skill with real launch and features for a web app'
 
 test('init scaffolds a verify skill with real bin and commands for a CLI tool', () => {
   const { repo, dd } = shapeRepo('cli', 'notes');
-  assert.equal(dd('init').code, 0);
+  assert.equal(dd('init').code, 2);
   const dir = join(repo, '.agents', 'skills', 'verify-notes');
   const body = readFileSync(join(dir, 'SKILL.md'), 'utf8');
   assert.match(body, /^name: verify-notes$/m);
@@ -1070,7 +1083,7 @@ test('init never overwrites an existing verify skill', () => {
   mkdirSync(dirname(skill), { recursive: true });
   writeFileSync(skill, '# hand-written\n');
   const r = dd('init');
-  assert.equal(r.code, 0, r.out);
+  assert.equal(r.code, 2, r.out);
   assert.equal(toon(r).verify_skill, 'unchanged');
   assert.equal(readFileSync(skill, 'utf8'), '# hand-written\n', 'the existing file is kept');
 });
@@ -1081,7 +1094,7 @@ test('init maps the app, not its dependencies, and lists each feature slug once'
   writeFileSync(join(repo, 'node_modules', 'lib', 'index.js'), "router.get('/vendored/route');\nprogram.command('vendored');\n");
   writeFileSync(join(repo, 'routes.js'), "app.get('/a/b');\napp.get('/a-b');\n");
   const r = dd('init');
-  assert.equal(r.code, 0, r.out);
+  assert.equal(r.code, 2, r.out);
   const dir = join(repo, '.agents', 'skills', 'verify-notes');
   assert.deepEqual(featureFiles(dir), ['README.md', 'add.md', 'get-a-b-2.md', 'get-a-b.md', 'list.md'], 'node_modules is skipped and each distinct route keeps its own file');
   assert.match(readFileSync(join(dir, 'features', 'get-a-b-2.md'), 'utf8'), /^# GET \/a-b$/m);
@@ -1091,7 +1104,7 @@ test('init keeps distinct routes whose slugs collide after truncation', () => {
   const { repo, dd } = shapeRepo('cli', 'notes');
   writeFileSync(join(repo, 'routes.js'), "app.get('/api/organizations/:id/members/invitations/pending');\napp.get('/api/organizations/:id/members/invitations/expired');\n");
   const r = dd('init');
-  assert.equal(r.code, 0, r.out);
+  assert.equal(r.code, 2, r.out);
   const dir = join(repo, '.agents', 'skills', 'verify-notes');
   const feats = featureFiles(dir).filter((f) => f.startsWith('get-api-organizations'));
   assert.equal(feats.length, 2, 'both routes get a feature file');
@@ -1105,7 +1118,7 @@ test('init does not read a README that is a symlink out of the repo', () => {
   rmSync(join(repo, 'README.md'));
   symlinkSync(join(dir, 'secret.md'), join(repo, 'README.md'));
   const r = dd('init');
-  assert.equal(r.code, 0, r.out);
+  assert.equal(r.code, 2, r.out);
   assert.deepEqual(featureFiles(join(repo, '.agents', 'skills', 'verify-notes')), ['README.md', 'add.md', 'list.md'], 'the symlink target is not scanned');
 });
 
@@ -1113,7 +1126,7 @@ test('init keeps a command in the feature map and says how many features it left
   const { repo, dd } = shapeRepo('cli', 'notes');
   writeFileSync(join(repo, 'routes.js'), ['1', '2', '3', '4', '5', '6'].map((n) => `app.get('/r${n}');`).join('\n') + '\n');
   const r = dd('init');
-  assert.equal(r.code, 0, r.out);
+  assert.equal(r.code, 2, r.out);
   const dir = join(repo, '.agents', 'skills', 'verify-notes');
   assert.deepEqual(featureFiles(dir), ['README.md', 'add.md', 'get-r1.md', 'get-r2.md', 'get-r3.md', 'get-r4.md']);
   assert.match(readFileSync(join(dir, 'features', 'README.md'), 'utf8'), /3 more found and not listed/, 'six routes and two commands show five, and say three were left out');
@@ -1127,7 +1140,7 @@ test('init reads server routes only, not client calls or component files', () =>
   writeFileSync(join(repo, 'client.js'), "axios.get('/api/cart');\n");
   writeFileSync(join(repo, 'server.js'), "app.get('/server');\n");
   const r = dd('init');
-  assert.equal(r.code, 0, r.out);
+  assert.equal(r.code, 2, r.out);
   assert.deepEqual(featureFiles(join(repo, '.agents', 'skills', 'verify-notes')), ['README.md', 'add.md', 'get-server.md', 'list.md']);
 });
 
@@ -1135,7 +1148,7 @@ test('init takes the readiness port only from the dev script', () => {
   const { repo, dd } = shapeRepo('web', 'shop');
   writeFileSync(join(repo, 'package.json'), JSON.stringify({ name: 'shop', scripts: { dev: 'next dev' }, dependencies: { react: '^19.0.0' } }));
   writeFileSync(join(repo, 'README.md'), '# shop\nDATABASE_URL=postgres://localhost:5432/app\n');
-  assert.equal(dd('init').code, 0);
+  assert.equal(dd('init').code, 2);
   const body = readFileSync(join(repo, '.agents', 'skills', 'verify-shop', 'SKILL.md'), 'utf8');
   assert.doesNotMatch(body, /localhost:5432/, 'a database URL in the README is not the app port');
 });
@@ -1143,7 +1156,7 @@ test('init takes the readiness port only from the dev script', () => {
 test('init does not map README code samples as routes or commands', () => {
   const { repo, dd } = shapeRepo('cli', 'notes');
   writeFileSync(join(repo, 'README.md'), "# notes\n\n```js\napp.get('/docs-example');\nprogram.command('demo');\n```\n");
-  assert.equal(dd('init').code, 0);
+  assert.equal(dd('init').code, 2);
   assert.deepEqual(featureFiles(join(repo, '.agents', 'skills', 'verify-notes')), ['README.md', 'add.md', 'list.md'], 'only source and bin commands become features');
 });
 
@@ -1151,7 +1164,7 @@ test('init keeps the config when the verify skill cannot be written', () => {
   const { repo, dd } = shapeRepo('cli', 'notes');
   writeFileSync(join(repo, '.agents'), 'not a directory\n');
   const r = dd('init');
-  assert.equal(r.code, 0, r.out);
+  assert.equal(r.code, 2, r.out);
   assert.match(toon(r).verify_skill, /^skipped, .*could not be written/, 'the scaffold is skipped with a reason');
   assert.equal(existsSync(join(repo, '.done-done.yaml')), true, 'the config written before the scaffold is kept');
 });
@@ -1159,7 +1172,7 @@ test('init keeps the config when the verify skill cannot be written', () => {
 test('init reads a package.json larger than 20 KB', () => {
   const { repo, dd } = shapeRepo('web', 'shop');
   writeFileSync(join(repo, 'package.json'), JSON.stringify({ name: 'shop', scripts: { dev: 'vite --port 5173' }, dependencies: { react: '^19.0.0' }, description: 'x'.repeat(30000) }));
-  assert.equal(dd('init').code, 0);
+  assert.equal(dd('init').code, 2);
   const body = readFileSync(join(repo, '.agents', 'skills', 'verify-shop', 'SKILL.md'), 'utf8');
   assert.match(body, /npm run dev \(vite --port 5173\)/, 'scripts past the old 20000-character cut are still read');
 });
@@ -1180,7 +1193,7 @@ test('init skips the verify skill behind a symlinked ancestor and writes the res
   symlinkSync(join(dir, 'elsewhere'), join(repo, '.agents'));
   writeFileSync(join(repo, '.done-done.yaml'), 'skill: .agents/skills/verify-notes\n');
   const r = dd('init');
-  assert.equal(r.code, 0, r.out);
+  assert.equal(r.code, 2, r.out);
   assert.match(toon(r).verify_skill, /^skipped, \.agents is a symlink/);
   assert.equal(existsSync(join(dir, 'elsewhere', 'skills')), false, 'nothing is written through the symlink');
   assert.equal(existsSync(join(repo, '.done-done.yaml')), true, 'the rest of init still ran');
@@ -1192,7 +1205,7 @@ test('init skips the verify skill when a symlink sits beneath the skill dir', ()
   mkdirSync(join(dir, 'elsewhere'));
   symlinkSync(join(dir, 'elsewhere'), join(repo, '.agents', 'skills', 'verify-notes', 'features'));
   const r = dd('init');
-  assert.equal(r.code, 0, r.out);
+  assert.equal(r.code, 2, r.out);
   assert.match(toon(r).verify_skill, /features is a symlink/);
   assert.deepEqual(readdirSync(join(dir, 'elsewhere')), [], 'no feature file is written through the symlink');
   assert.equal(existsSync(join(repo, '.agents', 'skills', 'verify-notes', 'SKILL.md')), false, 'no partial scaffold');
@@ -1209,7 +1222,7 @@ test('init outside a git repository reports a clear usage error', () => {
 test('a repo set up by init captures, checks and receipts real evidence that outlives the checkout', () => {
   const { dir, repo, env, sh, dd } = bareRepo();
   const init = dd('init');
-  assert.equal(init.code, 0);
+  assert.equal(init.code, 2);
   // Follow init's hint as printed: its example journey, placeholder filled in, becomes the config.
   const example = toon(init).help[0].match(/journeys: \{.*\} \}/)[0].replace('<drive the real app>', 'echo added: milk');
   appendFileSync(join(repo, '.done-done.yaml'), `${example}\n`);
@@ -1252,7 +1265,7 @@ test('a repo set up by init captures, checks and receipts real evidence that out
 
 test('overlapping runs from two checkouts sharing the evidence root never claim each other\'s files', () => {
   const { dir, repo, env, sh, dd } = bareRepo();
-  assert.equal(dd('init').code, 0);
+  assert.equal(dd('init').code, 2);
   sh('add', '-A');
   sh('commit', '-qm', 'config');
   const lane2 = join(dir, 'lane2');
@@ -1626,7 +1639,7 @@ process.stdout.write(JSON.stringify({ type: 'result', subtype: 'success', is_err
   const stub = (a, li = loggedIn) => writeFileSync(join(cfgDir, 'stub.json'), JSON.stringify({ loggedIn: li, answer: a, reason: 'The screen shows the notes list.' }));
   stub(answer);
   mkdirSync(t.env.DONE_DONE_HOME, { recursive: true });
-  writeFileSync(join(t.env.DONE_DONE_HOME, 'config.yaml'), `agent: opencode\njudge:\n  route: claude-code\n  model: claude-test-1\n  claude_code: { bin: ${JSON.stringify(bin)}, config_dir: ${JSON.stringify(cfgDir)} }\n`);
+  writeFileSync(join(t.env.DONE_DONE_HOME, 'config.yaml'), `agent: opencode\njudge:\n  route: claude-code\n  model: claude-test-1\n  claude_code: { config_dir: ${JSON.stringify(cfgDir)} }\nagent_path_override: { claude: ${JSON.stringify(bin)} }\n`);
   const calls = () => (existsSync(join(cfgDir, 'calls.jsonl')) ? readFileSync(join(cfgDir, 'calls.jsonl'), 'utf8').trim().split('\n').map((l) => JSON.parse(l)) : []);
   return { ...t, cfgDir, stub, calls };
 }
@@ -1778,6 +1791,7 @@ test('without the optional kit, --judge is a config error naming the npx command
   cpSync(join(root, 'package.json'), join(pkg, 'package.json'));
   mkdirSync(join(pkg, 'node_modules', '@toon-format'), { recursive: true });
   symlinkSync(join(root, 'node_modules', 'yaml'), join(pkg, 'node_modules', 'yaml'));
+  symlinkSync(join(root, 'node_modules', 'jpeg-js'), join(pkg, 'node_modules', 'jpeg-js'));
   symlinkSync(join(root, 'node_modules', '@toon-format', 'toon'), join(pkg, 'node_modules', '@toon-format', 'toon'));
   const args = ['check', '--judge', '--outcome', "Umer's notes list shows three notes", files[0]];
   const plain = spawnSync(process.execPath, [join(pkg, 'dist', 'cli.js'), ...args], { cwd: j.repo, env: j.env, encoding: 'utf8' });
@@ -1912,6 +1926,13 @@ process.stdout.write(JSON.stringify({ type: 'result', is_error: false, structure
     return { code: r.status, out: r.stdout + r.stderr, o: r.stdout.startsWith('command') ? toon({ out: r.stdout }) : undefined };
   };
   const right = agents(CORRECT);
+  // With no agent set and no terminal to ask in, a drive stops and tells the caller to ask the user; it never picks one.
+  writeFileSync(join(t.env.DONE_DONE_HOME, 'config.yaml'), '');
+  const unset = verify(right.env, 'the note Umer added shows in the list');
+  assert.equal(unset.code, 2, unset.out);
+  assert.match(unset.out, /no agent is set: ask the user which agent to use/);
+  assert.equal(right.calls().length, 0, 'no agent was started');
+  writeFileSync(join(t.env.DONE_DONE_HOME, 'config.yaml'), 'agent: claude\n');
   const ok = verify(right.env, 'the note Umer added shows in the list');
   assert.equal(ok.code, 0, ok.out);
   assert.deepEqual([ok.o.result, ok.o.journey, ok.o.feature, ok.o.author], ['pass', null, 'add-note', 'claude (model claude-haiku-5-5)']);
@@ -1922,7 +1943,7 @@ process.stdout.write(JSON.stringify({ type: 'result', is_error: false, structure
   assert.equal(drive.evidence, join(t.repo, '.proof', ok.o.run_id), "the drive gets the run's own evidence folder");
   const runDir = join(t.env.DONE_DONE_HOME, 'runs', 'notes', ok.o.run_id);
   assert.equal(drive.tmp, join(runDir, 'tmp'), "the drive's scratch is the run's own tmp folder");
-  assert.deepEqual(drive.argv.slice(drive.argv.indexOf('--permission-mode')), ['--permission-mode', 'acceptEdits', '--allowedTools', 'Bash', '--add-dir', drive.evidence, '--add-dir', drive.tmp], 'edits only in the repo, the evidence folder and the run scratch');
+  assert.deepEqual(drive.argv.slice(drive.argv.indexOf('--permission-mode')), ['--permission-mode', 'acceptEdits', '--allowedTools', 'Bash', '--add-dir', drive.evidence, '--add-dir', drive.tmp, '--effort', 'low'], 'edits only in the repo, the evidence folder and the run scratch, at the configured effort');
   assert.match(drive.stdin, /Never add steps or data to make the outcome look true/, 'the drive is told not to stage the claim');
   assert.match(drive.stdin, /Outcome to prove: the note Umer added shows in the list[\s\S]*verify-notes\/features\/add-note\.md/, 'the claim and the feature recipe go on stdin');
   assert.ok(!drive.argv.some((a) => a.includes('Umer added')), 'never in argv');
@@ -1990,7 +2011,7 @@ test('a rerun refused by the judge preflight exits 2 and creates no run folder',
 test('auto judge skips a claude judge with no sign-in folder, so doctor and verify judge through opencode', () => {
   const t = setup();
   mkdirSync(t.env.DONE_DONE_HOME, { recursive: true });
-  writeFileSync(join(t.env.DONE_DONE_HOME, 'config.yaml'), 'agent: [opencode, claude]\n');
+  writeFileSync(join(t.env.DONE_DONE_HOME, 'config.yaml'), 'agent: opencode\n');
   const verdict = JSON.stringify({ relevance: { probabilities: CORRECT, rationale: 'The list shows the notes.', personReason: 'The list shows the notes.' } });
   const s = stubAgents(t.env, verdict);
   symlinkSync(process.execPath, join(s.bin, 'node'));
@@ -2014,7 +2035,7 @@ test('auto judge skips an installed claude that is not signed in, even with its 
   const verdict = JSON.stringify({ relevance: { probabilities: CORRECT, rationale: 'The list shows the notes.', personReason: 'The list shows the notes.' } });
   const s = stubAgents(t.env, verdict);
   symlinkSync(process.execPath, join(s.bin, 'node'));
-  writeFileSync(join(t.env.DONE_DONE_HOME, 'config.yaml'), `agent: [opencode, claude]\njudge:\n  claude_code: { bin: ${JSON.stringify(join(s.bin, 'claude'))}, config_dir: ${JSON.stringify(cfgDir)} }\n`);
+  writeFileSync(join(t.env.DONE_DONE_HOME, 'config.yaml'), `agent: opencode\njudge:\n  claude_code: { config_dir: ${JSON.stringify(cfgDir)} }\nagent_path_override: { claude: ${JSON.stringify(join(s.bin, 'claude'))} }\n`);
   const d = toon(doctorIn(t.repo, s.env, 'doctor'));
   const choice = d.checks.find((c) => c.check === 'judge_choice');
   assert.match(choice.detail, /^answerer:opencode /, choice.detail);
@@ -2028,7 +2049,7 @@ test('auto judge skips an installed claude that is not signed in, even with its 
 test('auto judge with claude as the only agent and no sign-in folder has no judge: doctor is missing and verify --judge exits 2', () => {
   const t = setup();
   mkdirSync(t.env.DONE_DONE_HOME, { recursive: true });
-  writeFileSync(join(t.env.DONE_DONE_HOME, 'config.yaml'), 'agent: auto\n');
+  writeFileSync(join(t.env.DONE_DONE_HOME, 'config.yaml'), 'agent: claude\n');
   const env = pathEnv(t.env, ['claude']);
   symlinkSync(process.execPath, join(env.PATH, 'node'));
   const d = toon(doctorIn(t.repo, env, 'doctor'));
@@ -2043,14 +2064,172 @@ test('auto judge with claude as the only agent and no sign-in folder has no judg
   assert.doesNotMatch(run.reason, /judge: judge:/);
 });
 
-test('auto judge skips a claude route with a relative bin, since the claude-code route needs absolute paths', () => {
+test('agent_path_override takes a name on PATH or an absolute path, and refuses a relative path', () => {
   const t = setup();
-  mkdirSync(join(t.env.DONE_DONE_HOME, 'claude'), { recursive: true });
-  writeFileSync(join(t.env.DONE_DONE_HOME, 'config.yaml'), `agent: opencode\njudge:\n  claude_code: { bin: claude, config_dir: ${JSON.stringify(join(t.env.DONE_DONE_HOME, 'claude'))} }\n`);
+  mkdirSync(t.env.DONE_DONE_HOME, { recursive: true });
+  writeFileSync(join(t.env.DONE_DONE_HOME, 'config.yaml'), 'agent: opencode\nagent_path_override: { claude: bin/claude }\n');
   const env = pathEnv(t.env, ['claude', 'opencode']);
-  const choice = toon(doctorIn(t.repo, env, 'doctor')).checks.find((c) => c.check === 'judge_choice');
-  assert.match(choice.detail, /^answerer:opencode /, choice.detail);
-  assert.doesNotMatch(choice.detail, /claude-code/);
+  assert.match(toon(doctorIn(t.repo, env, 'doctor')).checks[1].detail, /agent_path_override must be a map of <agent>: <binary name or absolute path>/);
+  writeFileSync(join(t.env.DONE_DONE_HOME, 'config.yaml'), 'agent: opencode\nagent_path_override: { opencode: claude }\n');
+  const d = toon(doctorIn(t.repo, env, 'doctor'));
+  assert.match(d.checks.find((c) => c.check === 'agent').detail, /^opencode .* at .*\/claude$/, 'a bare name is looked up on PATH');
+  assert.match(d.checks.find((c) => c.check === 'agent_settings').detail, /path claude \(~?.*config\.yaml\)/);
+});
+
+// The design check: the same judge looks at each screen for visual defects, one tools-off request per screen.
+test('design fails a screen on each defect the judge names, alone or next to its mock, and passes a clean one', () => {
+  const t = setup();
+  mkdirSync(t.env.DONE_DONE_HOME, { recursive: true });
+  writeFileSync(join(t.env.DONE_DONE_HOME, 'config.yaml'), 'agent: claude\n');
+  writeFileSync(join(t.dir, 'mock.png'), screen(3));
+  writeFileSync(join(t.dir, 'blank.png'), blank());
+  const kinds = ['aspect', 'clipped-text', 'overlap', 'off-screen', 'blank-strip', 'layout'];
+  const answer = (flagged = {}) => JSON.stringify(Object.fromEntries(kinds.map((k) => [k, { probabilities: flagged[k] ?? { defect: 0.03, none: 0.97 }, rationale: 'Looked.', personReason: flagged[k] ? `${k} at the header, top left` : 'Nothing of this kind.' }])));
+  // Run from outside any repo, as a project's own capture step might.
+  const design = (reply, ...args) => {
+    const s = stubAgents(t.env, reply);
+    symlinkSync(process.execPath, join(s.bin, 'node'));
+    const r = spawnSync(process.execPath, [CLI, 'design', ...args], { cwd: t.dir, env: s.env, encoding: 'utf8' });
+    return { code: r.status, out: r.stdout + r.stderr, calls: s.calls() };
+  };
+  const bad = design(answer({ aspect: { defect: 0.9, none: 0.1 }, 'blank-strip': { defect: 0.85, none: 0.15 } }), 'screen.png', 'screen2.png', '--mock', 'screen.png=mock.png');
+  assert.equal(bad.code, 1, bad.out);
+  const b = toon(bad);
+  assert.equal(b.result, 'fail');
+  assert.deepEqual([b.judge.route, b.judge.model, b.judge.independence, b.judge.author], ['answerer:opencode', 'opencode-go/muse-spark-1.3-contributor', 'agent', 'claude (model claude-haiku-5-5)']);
+  assert.deepEqual(b.screens.map((s) => [s.path, s.verdict, s.mock ?? null]), [['screen.png', 'fail', 'mock.png'], ['screen2.png', 'fail', null]]);
+  assert.deepEqual(b.screens[0].defects, [{ kind: 'aspect', where: 'aspect at the header, top left' }, { kind: 'blank-strip', where: 'blank-strip at the header, top left' }]);
+  assert.match(b.help[0], /^Fix each defect named above, .*done-done design screen\.png screen2\.png --mock screen\.png=mock\.png$/);
+  assert.equal(bad.calls.length, 2, 'one tools-off request per screen');
+  assert.deepEqual(bad.calls.map((c) => c.attached), [['PNG', 'PNG'], ['PNG']], 'a screen with a mock sends both images; one without, the screen alone');
+  assert.ok(bad.calls.every((c) => JSON.parse(c.permission)['*'] === 'deny' && !/screen2?\.png|mock\.png/.test(c.file) && !c.file.includes(t.dir)), 'every tool is denied, and no path reaches the prompt');
+  assert.match(bad.calls[0].file, /"mock"/);
+  assert.doesNotMatch(bad.calls[1].file, /"mock"/);
+  const ok = design(answer(), 'screen.png');
+  assert.equal(ok.code, 0, ok.out);
+  assert.deepEqual([toon(ok).result, toon(ok).screens[0].verdict, toon(ok).screens[0].defects], ['pass', 'pass', []]);
+  const unsure = design(answer({ layout: { defect: 0.5, none: 0.5 } }), 'screen.png');
+  assert.equal(unsure.code, 3, unsure.out);
+  assert.match(toon(unsure).screens[0].reason, /^not confident enough about layout$/);
+  const empty = design(answer(), 'blank.png');
+  assert.equal(empty.code, 1, empty.out);
+  assert.match(toon(empty).screens[0].reason, /blank frame/);
+  assert.equal(empty.calls.length, 0, 'a blank frame fails without a request');
+  assert.equal(design(answer(), '--mock', 'screen.png').code, 2);
+  assert.match(toon(design(answer(), 'gone.png')).error, /gone\.png: cannot read \(ENOENT\)/);
+});
+
+test('design measures a blank strip along an edge, but not a nav rail with icons or a uniform frame', () => {
+  const t = setup();
+  mkdirSync(t.env.DONE_DONE_HOME, { recursive: true });
+  writeFileSync(join(t.env.DONE_DONE_HOME, 'config.yaml'), 'agent: claude\n');
+  // A light screen with a few dark text lines; the judge stub says every kind is clean, so only the pixels can fail it.
+  const light = [245, 240, 230];
+  const text = (x, y) => x >= 60 && x < 220 && y % 30 >= 10 && y % 30 < 16;
+  writeFileSync(join(t.dir, 'strip.png'), png(240, 160, (x, y) => (x < 24 ? [20, 22, 20] : text(x, y) ? [40, 40, 40] : light)));
+  writeFileSync(join(t.dir, 'rail.png'), png(240, 160, (x, y) => (x < 48 ? (x >= 14 && x < 34 && y % 40 >= 10 && y % 40 < 30 ? [220, 220, 220] : [30, 30, 36]) : text(x, y) ? [40, 40, 40] : light)));
+  writeFileSync(join(t.dir, 'uniform.png'), png(240, 160, () => [20, 22, 20]));
+  const clean = JSON.stringify(Object.fromEntries(['aspect', 'clipped-text', 'overlap', 'off-screen', 'blank-strip', 'layout'].map((k) => [k, { probabilities: { defect: 0.02, none: 0.98 }, rationale: 'Looked.', personReason: 'Nothing of this kind.' }])));
+  const s = stubAgents(t.env, clean);
+  symlinkSync(process.execPath, join(s.bin, 'node'));
+  const design = (...args) => {
+    const r = spawnSync(process.execPath, [CLI, 'design', '--full', ...args], { cwd: t.dir, env: s.env, encoding: 'utf8' });
+    return { code: r.status, out: r.stdout + r.stderr };
+  };
+  const strip = design('strip.png');
+  assert.equal(strip.code, 1, strip.out);
+  assert.deepEqual(toon(strip).screens[0].defects, [{ kind: 'blank-strip', where: 'left edge: a plain #141614 band 24 px deep (10% of the width), full height, with nothing in it' }]);
+  const rail = design('rail.png');
+  assert.equal(rail.code, 0, rail.out);
+  assert.deepEqual(toon(rail).screens[0].defects, [], 'a dark rail that holds icons is content, not a strip');
+  const uniform = design('uniform.png');
+  assert.equal(uniform.code, 1, uniform.out);
+  assert.match(toon(uniform).screens[0].reason, /blank frame/);
+  assert.deepEqual(toon(uniform).screens[0].defects, [], 'a whole uniform screen is the blank-frame check, not a strip');
+});
+
+test('design does not report a strip its approved mock has too, but reports one the mock lacks', () => {
+  const t = setup();
+  mkdirSync(t.env.DONE_DONE_HOME, { recursive: true });
+  writeFileSync(join(t.env.DONE_DONE_HOME, 'config.yaml'), 'agent: claude\n');
+  const light = [245, 240, 230];
+  writeFileSync(join(t.dir, 'strip.png'), png(240, 160, (x) => (x < 24 ? [20, 22, 20] : light)));
+  writeFileSync(join(t.dir, 'band-mock.png'), png(240, 160, (x) => (x < 24 ? [20, 22, 20] : light)));
+  writeFileSync(join(t.dir, 'plain-mock.png'), png(240, 160, (x, y) => (x >= 60 && x < 220 && y % 30 >= 10 && y % 30 < 16 ? [40, 40, 40] : light)));
+  const clean = JSON.stringify(Object.fromEntries(['aspect', 'clipped-text', 'overlap', 'off-screen', 'blank-strip', 'layout'].map((k) => [k, { probabilities: { defect: 0.02, none: 0.98 }, rationale: 'Looked.', personReason: 'Nothing of this kind.' }])));
+  const s = stubAgents(t.env, clean);
+  symlinkSync(process.execPath, join(s.bin, 'node'));
+  const design = (...args) => {
+    const r = spawnSync(process.execPath, [CLI, 'design', '--full', ...args], { cwd: t.dir, env: s.env, encoding: 'utf8' });
+    return { code: r.status, out: r.stdout + r.stderr };
+  };
+  const matched = design('strip.png', '--mock', 'strip.png=band-mock.png');
+  assert.equal(matched.code, 0, matched.out);
+  assert.deepEqual(toon(matched).screens[0].defects, [], 'a band the approved mock has too is approved design');
+  const unmatched = design('strip.png', '--mock', 'strip.png=plain-mock.png');
+  assert.equal(unmatched.code, 1, unmatched.out);
+  assert.deepEqual(toon(unmatched).screens[0].defects, [{ kind: 'blank-strip', where: 'left edge: a plain #141614 band 24 px deep (10% of the width), full height, with nothing in it' }]);
+  writeFileSync(join(t.dir, 'mock.webp'), Buffer.concat([Buffer.from('RIFF'), Buffer.from([4, 0, 0, 0]), Buffer.from('WEBP')]));
+  const unmeasurable = design('strip.png', '--mock', 'strip.png=mock.webp');
+  assert.equal(unmeasurable.code, 3, unmeasurable.out);
+  assert.deepEqual([toon(unmeasurable).screens[0].verdict, toon(unmeasurable).screens[0].reason], ['unsure', 'approved mock could not be measured; give a PNG or JPEG mock']);
+});
+
+test('design does not read a transparent margin as a strip, on a dark screen either', () => {
+  const t = setup();
+  mkdirSync(t.env.DONE_DONE_HOME, { recursive: true });
+  writeFileSync(join(t.env.DONE_DONE_HOME, 'config.yaml'), 'agent: claude\n');
+  // An RGBA capture on a near-black screen whose left tenth is fully transparent, as a window capture's shadow margin is.
+  writeFileSync(join(t.dir, 'margin.png'), png(240, 160, (x) => (x < 24 ? [0, 0, 0, 0] : [16, 18, 20, 255]), 6));
+  const clean = JSON.stringify(Object.fromEntries(['aspect', 'clipped-text', 'overlap', 'off-screen', 'blank-strip', 'layout'].map((k) => [k, { probabilities: { defect: 0.02, none: 0.98 }, rationale: 'Looked.', personReason: 'Nothing of this kind.' }])));
+  const s = stubAgents(t.env, clean);
+  symlinkSync(process.execPath, join(s.bin, 'node'));
+  const r = spawnSync(process.execPath, [CLI, 'design', '--full', 'margin.png'], { cwd: t.dir, env: s.env, encoding: 'utf8' });
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  assert.deepEqual(toon({ out: r.stdout + r.stderr }).screens[0].defects, [], 'the margin is transparent, not a band');
+});
+
+test('design reports an opaque black strip that has transparent pixels beside it on the same edge', () => {
+  const t = setup();
+  mkdirSync(t.env.DONE_DONE_HOME, { recursive: true });
+  writeFileSync(join(t.env.DONE_DONE_HOME, 'config.yaml'), 'agent: claude\n');
+  writeFileSync(join(t.dir, 'partial.png'), png(240, 160, (x, y) => (x < 24 ? (y < 30 ? [0, 0, 0, 0] : [0, 0, 0, 255]) : [245, 240, 230, 255]), 6));
+  writeFileSync(join(t.dir, 'clear-edge.png'), png(240, 160, (x) => (x === 0 ? [0, 0, 0, 0] : x < 24 ? [0, 0, 0, 255] : [245, 240, 230, 255]), 6));
+  writeFileSync(join(t.dir, 'clear-inside.png'), png(240, 160, (x) => (x === 3 ? [0, 0, 0, 0] : x < 8 ? [0, 0, 0, 255] : [245, 240, 230, 255]), 6));
+  const clean = JSON.stringify(Object.fromEntries(['aspect', 'clipped-text', 'overlap', 'off-screen', 'blank-strip', 'layout'].map((k) => [k, { probabilities: { defect: 0.02, none: 0.98 }, rationale: 'Looked.', personReason: 'Nothing of this kind.' }])));
+  const s = stubAgents(t.env, clean);
+  symlinkSync(process.execPath, join(s.bin, 'node'));
+  const design = (name) => spawnSync(process.execPath, [CLI, 'design', '--full', name], { cwd: t.dir, env: s.env, encoding: 'utf8' });
+  const partial = design('partial.png');
+  assert.equal(partial.status, 1, partial.stdout + partial.stderr);
+  assert.deepEqual(toon({ out: partial.stdout + partial.stderr }).screens[0].defects, [{ kind: 'blank-strip', where: 'left edge: a plain #000000 band 24 px deep (10% of the width), full height, with nothing in it' }]);
+  const edge = design('clear-edge.png');
+  assert.equal(edge.status, 1, edge.stdout + edge.stderr);
+  assert.deepEqual(toon({ out: edge.stdout + edge.stderr }).screens[0].defects, [{ kind: 'blank-strip', where: 'left edge: a plain #000000 band 24 px deep (10% of the width), full height, with nothing in it' }]);
+  const inside = design('clear-inside.png');
+  assert.equal(inside.status, 1, inside.stdout + inside.stderr);
+  assert.deepEqual(toon({ out: inside.stdout + inside.stderr }).screens[0].defects, [{ kind: 'blank-strip', where: 'left edge: a plain #000000 band 8 px deep (3% of the width), full height, with nothing in it' }]);
+});
+
+test('design judges a JPEG longer than the judge size, downscaled to a PNG', () => {
+  const t = setup();
+  mkdirSync(t.env.DONE_DONE_HOME, { recursive: true });
+  writeFileSync(join(t.env.DONE_DONE_HOME, 'config.yaml'), 'agent: claude\n');
+  const data = Buffer.alloc(1300 * 90 * 4);
+  for (let i = 0; i < data.length; i += 4) {
+    const p = i / 4, x = p % 1300, y = Math.floor(p / 1300);
+    data.set([(x * 7) % 256, (y * 11) % 256, (x + y) % 256, 255], i);
+  }
+  writeFileSync(join(t.dir, 'long.jpg'), jpeg.encode({ width: 1300, height: 90, data }, 90).data);
+  const clean = JSON.stringify(Object.fromEntries(['aspect', 'clipped-text', 'overlap', 'off-screen', 'blank-strip', 'layout'].map((k) => [k, { probabilities: { defect: 0.02, none: 0.98 }, rationale: 'Looked.', personReason: 'Nothing of this kind.' }])));
+  const s = stubAgents(t.env, clean);
+  symlinkSync(process.execPath, join(s.bin, 'node'));
+  const r = spawnSync(process.execPath, [CLI, 'design', '--full', 'long.jpg'], { cwd: t.dir, env: s.env, encoding: 'utf8' });
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  assert.equal(toon({ out: r.stdout + r.stderr }).screens[0].verdict, 'pass');
+  const calls = s.calls();
+  assert.equal(calls.length, 1, 'one request for the screen');
+  assert.deepEqual(calls[0].attached, ['PNG'], 'the judge is sent the downscaled screen');
 });
 
 // doctor: read-only health check. Required items (git, config, evidence root) gate
@@ -2073,12 +2252,14 @@ const doctorIn = (cwd, env, ...args) => {
 };
 
 test('doctor passes in a set-up repo and lists every check', () => {
-  const { dd } = setup();
+  const { dd, env } = setup();
+  mkdirSync(env.DONE_DONE_HOME, { recursive: true });
+  writeFileSync(join(env.DONE_DONE_HOME, 'config.yaml'), 'agent: claude\n');
   const r = dd('doctor');
   assert.equal(r.code, 0, r.out);
   const d = toon(r);
   assert.equal(d.result, 'pass');
-  assert.deepEqual(d.checks.map((c) => c.check), ['git', 'config', 'evidence_root', 'verify_skill', 'agent', 'judge', 'ffprobe', 'judge_choice']);
+  assert.deepEqual(d.checks.map((c) => c.check), ['git', 'config', 'evidence_root', 'verify_skill', 'agent', 'judge', 'ffprobe', 'judge_choice', 'agent_settings']);
   assert.deepEqual(d.checks.slice(0, 3).map((c) => c.status), ['ok', 'ok', 'ok']);
   assert.match(d.checks[1].detail, /app notes/);
   assert.equal(d.checks[3].status, 'missing', 'no verify skill yet, and that is optional');
@@ -2086,7 +2267,7 @@ test('doctor passes in a set-up repo and lists every check', () => {
   assert.ok(d.help.length >= 1);
   const j = json(dd('doctor', '--json'));
   assert.equal(j.result, 'pass');
-  assert.equal(j.checks.length, 8);
+  assert.equal(j.checks.length, 9);
 });
 
 test('doctor does not send a repo with a malformed global config to init', () => {
@@ -2149,43 +2330,154 @@ test('doctor in a bare repo fails with the init fix; a malformed config names th
   assert.match(toon(outside).checks[0].fix, /inside a git repository/);
 });
 
-test('with no agent key, doctor names agent: auto and the cheap default judge model', () => {
+test('with no agent set, done-done never picks one: doctor, maintain and verify --judge tell the calling agent to ask the user', () => {
   const { repo, env } = setup();
   mkdirSync(join(env.DONE_DONE_HOME, 'claude'), { recursive: true });
-  const d = toon(doctorIn(repo, pathEnv(env, ['claude']), 'doctor'));
-  assert.match(d.checks[4].detail, /^claude \(model claude-haiku-5-5; agent: auto\)/);
-  assert.match(d.checks[7].detail, /^claude-code \(model claude-haiku-5-5; judge\.route auto\) judges the author claude/);
+  const path = pathEnv(env, ['claude', 'opencode']);
+  const d = doctorIn(repo, path, 'doctor');
+  assert.equal(d.code, 0, 'the agent is optional for doctor');
+  const ag = toon(d).checks[4];
+  assert.equal(ag.status, 'missing', 'an installed claude and opencode are not a choice');
+  assert.equal(ag.detail, 'no agent is set: ask the user which agent to use (claude, opencode, pi, gemini, acp:<target>); never pick one for them');
+  assert.match(ag.fix, /^Save the user's answer: done-done init --agent <agent> --model <model>, e\.g\. done-done init --agent opencode --model opencode-go\/muse-spark-1\.3-contributor$/);
+  assert.ok(!toon(d).checks.some((c) => c.check === 'agent_settings'));
+  for (const c of toon(d).checks.filter((c) => c.check.startsWith('judge'))) assert.deepEqual([c.status, c.detail, c.fix], ['missing', 'unknown until the agent is set, since the judge is kept apart from it', ag.fix]);
+  const runs = join(env.DONE_DONE_HOME, 'runs', 'notes');
+  for (const args of [['maintain', '--foreground'], ['verify', 'shots', '--outcome', 'home renders', '--judge', '--foreground']]) {
+    const r = doctorIn(repo, path, ...args);
+    assert.equal(r.code, 2, r.out);
+    assert.equal(toon(r).error, ag.detail);
+    assert.deepEqual(toon(r).help, [ag.fix]);
+    assert.equal(existsSync(runs), false, 'no run starts without the user\'s agent');
+  }
+  // init --agent saves the user's answer in place in the commented global config; doctor then names it.
+  const init = toon(doctorIn(repo, path, 'init', '--agent', 'opencode', '--model', 'opencode-go/test-model'));
+  assert.match(init.agent, /^opencode \(model opencode-go\/test-model\) saved to .*config\.yaml$/);
+  const yml = readFileSync(join(env.DONE_DONE_HOME, 'config.yaml'), 'utf8');
+  assert.deepEqual([parse(yml).agent, parse(yml).agent_config.opencode.model, parse(yml).agent_config.claude.model], ['opencode', 'opencode-go/test-model', 'claude-haiku-5-5']);
+  assert.match(yml, /^# The coding agent done-done starts/m, 'the comments stay');
+  assert.match(init.global_config, /^written /, 'init writes the commented global first, then sets agent in it');
+  assert.match(yml, /^agent: opencode$/m);
+  const lines = yml.split('\n');
+  const agentAt = lines.findIndex((l) => l.startsWith('agent: '));
+  assert.ok(agentAt > lines.findIndex((l) => l.startsWith('# done-done global config')), 'the agent key comes after the file header');
+  assert.ok(agentAt > lines.findIndex((l) => l.startsWith('# The coding agent done-done starts')), 'and after the agent comment block it describes');
+  assert.ok(agentAt < lines.findIndex((l) => l.startsWith('agent_config:')), 'and before agent_config');
+  assert.match(toon(doctorIn(repo, path, 'doctor')).checks[4].detail, /^opencode \(model opencode-go\/test-model; from config\) at /);
+  assert.equal(toon(doctorIn(repo, path, 'init')).agent, 'unchanged (opencode)');
+  for (const [args, error] of [[['--model', 'x'], /--model needs --agent/], [['--agent', 'codex'], /done-done cannot start codex/], [['--agent', 'opencode', '--model', 'muse'], /provider\/model/]]) {
+    const bad = doctorIn(repo, path, 'init', ...args);
+    assert.equal(bad.code, 2, bad.out);
+    assert.match(toon(bad).error, error);
+  }
 });
 
-test('doctor reports the judge missing when claude has no sign-in or judge.claude_code.bin is relative', () => {
+test('init --agent names the repo config agent that overrides the one it saves', () => {
+  const { repo, env, dd } = setup('app: notes\nagent: claude\n');
+  const r = dd('init', '--agent', 'opencode', '--model', 'opencode-go/test-model');
+  assert.equal(r.code, 0, r.out);
+  assert.match(toon(r).agent, /^opencode \(model opencode-go\/test-model\) saved to .*config\.yaml; \.done-done\.yaml overrides it with claude$/);
+  assert.equal(parse(readFileSync(join(env.DONE_DONE_HOME, 'config.yaml'), 'utf8')).agent, 'opencode');
+  assert.equal(readFileSync(join(repo, '.done-done.yaml'), 'utf8'), 'app: notes\nagent: claude\n', 'the repo file is not written');
+});
+
+test('init --agent puts the key before the first top-level key when the example comment is gone', () => {
+  const { dir, dd } = bareRepo();
+  dd('init');
+  const globalYml = join(dir, 'home', 'config.yaml');
+  writeFileSync(globalYml, readFileSync(globalYml, 'utf8').replace(/^# agent: opencode\n/m, ''));
+  const r = dd('init', '--agent', 'opencode', '--model', 'opencode-go/test-model');
+  assert.equal(r.code, 0, r.out);
+  const text = readFileSync(globalYml, 'utf8');
+  const lines = text.split('\n');
+  const agentAt = lines.findIndex((l) => l.startsWith('agent: '));
+  assert.ok(agentAt >= 0 && agentAt < lines.findIndex((l) => l.startsWith('agent_config:')), 'the key lands before agent_config, not at the end');
+  assert.equal(parse(text).agent, 'opencode');
+  assert.equal(parse(text).agent_config.opencode.model, 'opencode-go/test-model');
+});
+
+test('init --agent replaces the example comment even when a key sits above it', () => {
+  const { dir, dd } = bareRepo();
+  const globalYml = join(dir, 'home', 'config.yaml');
+  mkdirSync(join(dir, 'home'), { recursive: true });
+  writeFileSync(globalYml, `evidence:\n  local_root: ${join(dir, 'ev')}\n# agent: opencode\nagent_config:\n  claude: { model: claude-haiku-5-5 }\n`);
+  const r = dd('init', '--agent', 'opencode');
+  assert.equal(r.code, 0, r.out);
+  const text = readFileSync(globalYml, 'utf8');
+  const lines = text.split('\n');
+  const agentAt = lines.findIndex((l) => l.startsWith('agent: '));
+  assert.ok(agentAt > lines.findIndex((l) => l.startsWith('evidence:')) && agentAt < lines.findIndex((l) => l.startsWith('agent_config:')), 'the key takes the example comment\'s place, after the key above it');
+  assert.equal(parse(text).agent, 'opencode');
+  assert.ok(!text.includes('# agent: opencode'), 'the example comment is replaced by the key');
+});
+
+test('agent "" is refused in the repo and the global config; removing the key leaves it unset', () => {
+  const { repo, env, dd } = setup('app: notes\nagent: ""\n');
+  const inRepo = dd('init');
+  assert.equal(inRepo.code, 2, inRepo.out);
+  assert.match(toon(inRepo).error, /\.done-done\.yaml: agent must not be empty; to leave it unset, remove the key$/);
+  writeFileSync(join(repo, '.done-done.yaml'), 'app: notes\n');
+  mkdirSync(env.DONE_DONE_HOME, { recursive: true });
+  writeFileSync(join(env.DONE_DONE_HOME, 'config.yaml'), 'agent: ""\n');
+  const inGlobal = dd('init');
+  assert.equal(inGlobal.code, 2, inGlobal.out);
+  assert.match(toon(inGlobal).error, /config\.yaml: agent must not be empty/);
+  writeFileSync(join(env.DONE_DONE_HOME, 'config.yaml'), 'agent_timeout: 30m\n');
+  assert.equal(toon(dd('init')).agent, 'not set', 'with the key removed, the agent is unset and init asks for it');
+});
+
+test('the run error names agent_path_override only when the override is set and does not start', () => {
+  const { repo, env, sh } = setup();
+  mkdirSync(env.DONE_DONE_HOME, { recursive: true });
+  const skill = join(repo, '.agents', 'skills', 'verify-notes');
+  mkdirSync(join(skill, 'features'), { recursive: true });
+  writeFileSync(join(skill, 'SKILL.md'), '# verify-notes\n');
+  writeFileSync(join(skill, 'features', 'README.md'), '# features\n\n- [Home](home.md)\n');
+  writeFileSync(join(skill, 'features', 'home.md'), '# Home\n\nThe app starts at src/app.js:1.\n');
+  sh('add', '-A');
+  sh('commit', '-qm', 'skill');
+  const path = pathEnv(env, ['ffprobe']);
+  const config = join(env.DONE_DONE_HOME, 'config.yaml');
+  writeFileSync(config, 'agent: pi\n');
+  assert.match(toon(doctorIn(repo, path, 'maintain', '--foreground')).reason, /\(pi is not on PATH\)/);
+  const gone = join(env.DONE_DONE_HOME, 'gone', 'pi');
+  writeFileSync(config, `agent: pi\nagent_path_override: { pi: ${JSON.stringify(gone)} }\n`);
+  assert.match(toon(doctorIn(repo, path, 'maintain', '--foreground')).reason, /\(agent_path_override\.pi .*gone\/pi is not an executable file\)/);
+});
+
+test('doctor reports the judge missing when claude has no sign-in, whichever binary agent_path_override names', () => {
   const { repo, env, dd } = setup();
+  mkdirSync(env.DONE_DONE_HOME, { recursive: true });
+  writeFileSync(join(env.DONE_DONE_HOME, 'config.yaml'), 'agent: claude\n');
   const noSignIn = toon(doctorIn(repo, pathEnv(env, ['claude']), 'doctor'));
   assert.equal(noSignIn.checks[5].status, 'missing', 'a claude binary alone with no sign-in is not a judge');
   assert.match(noSignIn.checks[5].detail, /no installed agent can judge/);
   mkdirSync(env.DONE_DONE_HOME, { recursive: true });
-  writeFileSync(join(env.DONE_DONE_HOME, 'config.yaml'), 'judge:\n  claude_code: { bin: claude }\n');
+  writeFileSync(join(env.DONE_DONE_HOME, 'config.yaml'), 'agent: claude\nagent_path_override: { claude: claude }\n');
   const relative = toon(doctorIn(repo, pathEnv(env, ['claude']), 'doctor'));
   assert.equal(relative.checks[5].status, 'missing');
   assert.match(relative.checks[5].detail, /no installed agent can judge/);
   writeFileSync(join(env.DONE_DONE_HOME, 'config.yaml'), 'judge:\n  bin: /usr/bin/claude\n');
   assert.match(toon(dd('doctor')).checks[1].detail, /unknown key judge\.bin/, 'a key that never shipped is unknown');
+  writeFileSync(join(env.DONE_DONE_HOME, 'config.yaml'), 'judge:\n  claude_code: { bin: /usr/bin/claude }\n');
+  assert.match(toon(dd('doctor')).checks[1].detail, /the claude binary is agent_path_override\.claude/, 'the old key points at its replacement');
 });
 
-test('doctor reports the judge missing when judge.claude_code.bin does not exist', () => {
+test('doctor reports the judge missing when agent_path_override.claude does not exist', () => {
   const { repo, env } = setup();
   mkdirSync(join(env.DONE_DONE_HOME, 'claude'), { recursive: true });
-  writeFileSync(join(env.DONE_DONE_HOME, 'config.yaml'), `judge:\n  claude_code: { bin: ${JSON.stringify(join(env.DONE_DONE_HOME, 'gone', 'claude'))} }\n`);
+  writeFileSync(join(env.DONE_DONE_HOME, 'config.yaml'), `agent: claude\nagent_path_override: { claude: ${JSON.stringify(join(env.DONE_DONE_HOME, 'gone', 'claude'))} }\n`);
   const j = toon(doctorIn(repo, pathEnv(env, ['claude']), 'doctor'));
   assert.equal(j.checks[5].status, 'missing');
   assert.match(j.checks[5].detail, /no installed agent can judge/);
 });
 
-test('doctor reports the judge missing when judge.claude_code.bin is a directory', () => {
+test('doctor reports the judge missing when agent_path_override.claude is a directory', () => {
   const { repo, env } = setup();
   mkdirSync(join(env.DONE_DONE_HOME, 'claude'), { recursive: true });
   const dirBin = join(env.DONE_DONE_HOME, 'bindir');
   mkdirSync(dirBin, { recursive: true });
-  writeFileSync(join(env.DONE_DONE_HOME, 'config.yaml'), `judge:\n  claude_code: { bin: ${JSON.stringify(dirBin)} }\n`);
+  writeFileSync(join(env.DONE_DONE_HOME, 'config.yaml'), `agent: claude\nagent_path_override: { claude: ${JSON.stringify(dirBin)} }\n`);
   const j = toon(doctorIn(repo, pathEnv(env, ['claude']), 'doctor'));
   assert.equal(j.checks[5].status, 'missing');
   assert.match(j.checks[5].detail, /no installed agent can judge/);
@@ -2196,7 +2488,7 @@ test('doctor reports the judge missing when its sign-in folder is a ~/.claude', 
   const userHome = join(env.DONE_DONE_HOME, 'userhome');
   const claudeDir = join(userHome, '.claude');
   mkdirSync(claudeDir, { recursive: true });
-  writeFileSync(join(env.DONE_DONE_HOME, 'config.yaml'), `judge:\n  route: claude-code\n  allow_same: true\n  claude_code: { config_dir: ${JSON.stringify(claudeDir)} }\n`);
+  writeFileSync(join(env.DONE_DONE_HOME, 'config.yaml'), `agent: claude\njudge:\n  route: claude-code\n  allow_same: true\n  claude_code: { config_dir: ${JSON.stringify(claudeDir)} }\n`);
   const j = toon(doctorIn(repo, { ...pathEnv(env, ['claude']), HOME: userHome }, 'doctor'));
   assert.equal(j.checks[5].status, 'missing');
   assert.match(j.checks[5].fix, /not your ~\/\.claude/);
@@ -2205,29 +2497,35 @@ test('doctor reports the judge missing when its sign-in folder is a ~/.claude', 
 test('doctor finds agent, judge and ffprobe binaries from PATH; missing optionals never fail it', () => {
   const { repo, env } = setup();
   mkdirSync(join(env.DONE_DONE_HOME, 'claude'), { recursive: true });
+  const agent = (a) => writeFileSync(join(env.DONE_DONE_HOME, 'config.yaml'), `agent: ${a}\n`);
+  agent('claude');
   const full = doctorIn(repo, pathEnv(env, ['claude', 'codex', 'opencode', 'ffprobe']), 'doctor');
   assert.equal(full.code, 0, full.out);
   const f = toon(full);
-  assert.match(f.checks[4].detail, /^claude \(model claude-haiku-5-5; agent: auto\) at .*claude/, 'claude wins over codex and opencode');
+  assert.match(f.checks[4].detail, /^claude \(model claude-haiku-5-5; from config\) at .*claude/);
   assert.equal(f.checks[7].status, 'ok', 'auto picks the first agent that can judge and is not the author');
   assert.match(f.checks[7].detail, /^answerer:opencode \(model opencode-go\/muse-spark-1\.3-contributor; judge\.route auto\) judges the author claude \(model claude-haiku-5-5\): a different agent from the author$/);
   assert.match(f.checks[5].detail, /^answerer:opencode .*: opencode at .* and the judge kit are present; the model is never called/, 'the judge CLI is never run');
   assert.match(f.checks[6].detail, /found at .*ffprobe/);
+  agent('codex');
   const codexOnly = toon(doctorIn(repo, pathEnv(env, ['codex']), 'doctor'));
   assert.equal(codexOnly.checks[4].status, 'missing');
-  assert.match(codexOnly.checks[4].detail, /^codex \(its own default model; set agent_config\.codex\.model to choose one; agent: auto\) at .*, but done-done cannot start codex yet \(claude, opencode, pi and gemini for now\)/);
+  assert.match(codexOnly.checks[4].detail, /^codex \(its own default model; set agent_config\.codex\.model to choose one; from config\) at .*, but done-done cannot start codex yet \(claude, opencode, pi and gemini for now\)/);
+  assert.match(codexOnly.checks[4].fix, /ask the user which agent to use and save it: done-done init --agent <agent> --model <model>/);
   assert.equal(codexOnly.checks[7].status, 'missing', 'no installed agent can judge');
   assert.match(codexOnly.checks[7].detail, /no installed agent can judge \(judge\.route auto looks for claude, opencode\)/);
+  agent('opencode');
   const two = toon(doctorIn(repo, pathEnv(env, ['codex', 'opencode']), 'doctor'));
-  assert.match(two.checks[4].detail, /^opencode .* at /, 'auto skips an installed agent done-done cannot start');
+  assert.match(two.checks[4].detail, /^opencode .* at /);
   assert.equal(two.checks[7].status, 'warning', 'the only agent that can judge is the author at its own model: a warning, and the run judges it');
   assert.match(two.checks[7].detail, /^answerer:opencode .* judges the author opencode .*: the author's agent and model in a fresh session \(session-only independence\)$/);
   assert.match(two.checks[7].fix, /Install another agent that can judge \(claude or opencode\) so the judge is apart from the author/);
+  agent('claude');
   const none = doctorIn(repo, pathEnv(env, []), 'doctor');
   assert.equal(none.code, 0, 'missing optionals still exit 0 when every required item is ok');
   const n = toon(none);
-  assert.deepEqual(n.checks.slice(4).map((c) => c.status), ['missing', 'missing', 'missing', 'missing']);
-  assert.match(n.checks[4].fix, /Install claude, opencode, pi and gemini, or set agent: to an installed one of claude, codex, opencode, pi, gemini/);
+  assert.deepEqual(n.checks.slice(4).map((c) => c.status), ['missing', 'missing', 'missing', 'missing', 'ok']);
+  assert.match(n.checks[4].fix, /^Install claude, or ask the user which agent to use/, 'a missing agent is never swapped for an installed one');
   assert.match(n.checks[5].fix, /set judge\.route/);
   assert.match(n.checks[6].fix, /ffprobe/);
   const repoYaml = readFileSync(join(repo, '.done-done.yaml'), 'utf8');
@@ -2238,7 +2536,7 @@ test('doctor finds agent, judge and ffprobe binaries from PATH; missing optional
   writeFileSync(join(repo, '.done-done.yaml'), repoYaml);
   const unwaived = toon(doctorIn(repo, claudeOnly, 'doctor'));
   assert.equal(unwaived.checks[7].status, 'warning', 'auto runs a session-only judge without allow_same, so doctor warns, not missing');
-  writeFileSync(join(env.DONE_DONE_HOME, 'config.yaml'), 'judge:\n  allow_same: true\n');
+  writeFileSync(join(env.DONE_DONE_HOME, 'config.yaml'), 'agent: claude\njudge:\n  allow_same: true\n');
   const same = toon(doctorIn(repo, claudeOnly, 'doctor'));
   assert.deepEqual([same.checks[7].status, /judge\.allow_same accepts it/.test(same.checks[7].detail)], ['warning', true]);
 });
@@ -2249,9 +2547,9 @@ test('with no agent installed, the judge has no author to keep apart: doctor rec
   mkdirSync(claudeHome, { recursive: true });
   const bin = join(env.DONE_DONE_HOME, 'claude-bin');
   writeFileSync(bin, '#!/bin/sh\necho \'{"loggedIn":true}\'\n', { mode: 0o755 });
-  writeFileSync(join(env.DONE_DONE_HOME, 'config.yaml'), `judge:\n  claude_code: { bin: ${JSON.stringify(bin)}, config_dir: ${JSON.stringify(claudeHome)} }\n`);
+  writeFileSync(join(env.DONE_DONE_HOME, 'config.yaml'), `agent: opencode\njudge:\n  claude_code: { config_dir: ${JSON.stringify(claudeHome)} }\nagent_path_override: { claude: ${JSON.stringify(bin)} }\n`);
   const d = toon(doctorIn(repo, pathEnv(env, []), 'doctor'));
-  assert.match(d.checks[4].detail, /^claude \(model claude-haiku-5-5; agent: auto\) is not on PATH/);
+  assert.match(d.checks[4].detail, /^opencode \(model opencode-go\/muse-spark-1\.3-contributor; from config\) is not on PATH/);
   assert.equal(d.checks[7].status, 'ok', 'a judge with no author to keep apart is another agent');
   assert.match(d.checks[7].detail, /judges the author none \(model none\)/);
 });
@@ -2260,9 +2558,9 @@ test('judge.route empty is auto, and a judge.model under auto is ignored with a 
   const { repo, env } = setup();
   mkdirSync(env.DONE_DONE_HOME, { recursive: true });
   mkdirSync(join(env.DONE_DONE_HOME, 'claude'), { recursive: true });
-  writeFileSync(join(env.DONE_DONE_HOME, 'config.yaml'), "judge:\n  route: ''\n");
+  writeFileSync(join(env.DONE_DONE_HOME, 'config.yaml'), "agent: claude\njudge:\n  route: ''\n");
   assert.equal(toon(doctorIn(repo, pathEnv(env, ['claude']), 'doctor')).checks[1].status, 'ok');
-  writeFileSync(join(env.DONE_DONE_HOME, 'config.yaml'), 'judge:\n  model: x\n');
+  writeFileSync(join(env.DONE_DONE_HOME, 'config.yaml'), 'agent: claude\njudge:\n  model: x\n');
   const d = toon(doctorIn(repo, pathEnv(env, ['claude']), 'doctor'));
   assert.equal(d.checks[1].status, 'ok');
   assert.equal(d.checks[7].status, 'warning');
@@ -2291,6 +2589,8 @@ journeys:
   shots:
     command: node -e "require('fs').writeFileSync(process.env.DONE_DONE_EVIDENCE_ROOT + '/session.log', 'saved 3 notes')"
 `);
+  mkdirSync(t.env.DONE_DONE_HOME, { recursive: true });
+  writeFileSync(join(t.env.DONE_DONE_HOME, 'config.yaml'), 'agent: claude\n');
   const r = t.dd('verify', 'shots', '--outcome', 'three notes are saved', '--foreground');
   const runDir = join(t.env.DONE_DONE_HOME, 'runs', 'notes', toon(r).run_id);
   const run = JSON.parse(readFileSync(join(runDir, 'run.json'), 'utf8'));
@@ -2318,11 +2618,14 @@ process.stdout.write(JSON.stringify({ type: 'result', is_error: ${JSON.stringify
   stub('opencode', `console.log('mise tools: opencode');
 console.log(JSON.stringify({ type: 'step_start', part: { type: 'step-start' } }));
 console.log(JSON.stringify({ type: 'text', part: { type: 'text', text: '\\\`\\\`\\\`json\\n' + ${JSON.stringify(answer)} + '\\n\\\`\\\`\\\`' } }));`);
+  // The user sets the agent; done-done never picks one. A test that needs another agent writes its own config.
+  mkdirSync(env.DONE_DONE_HOME, { recursive: true });
+  if (!existsSync(join(env.DONE_DONE_HOME, 'config.yaml'))) writeFileSync(join(env.DONE_DONE_HOME, 'config.yaml'), 'agent: claude\n');
   const calls = () => (existsSync(log) ? readFileSync(log, 'utf8').trim().split('\n').map((l) => JSON.parse(l)) : []);
   return { env: e, calls, bin: e.PATH };
 }
 
-test('the agent comes from config (a fallback list moves past missing agents), and doctor --probe asks it one schema question', () => {
+test('the agent comes from config, and doctor --probe asks it one schema question', () => {
   const { repo, env } = setup();
   const s = stubAgents(env);
   mkdirSync(env.DONE_DONE_HOME, { recursive: true });
@@ -2333,11 +2636,10 @@ test('the agent comes from config (a fallback list moves past missing agents), a
     const r = doctorIn(repo, s.env, 'doctor', ...args);
     return { ...r, d: r.out.startsWith('command') ? toon(r) : undefined, by: (n) => toon(r).checks.find((c) => c.check === n) };
   };
-  // codex is listed first and installed, but done-done cannot start it yet, so the list moves on to opencode at its configured model and doctor names codex.
-  writeFileSync(join(s.bin, 'codex'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
-  const oc = doctor('agent: [codex, opencode]\n', '--probe');
+  // opencode at its configured model.
+  const oc = doctor('agent: opencode\n', '--probe');
   assert.equal(oc.code, 0, oc.out);
-  assert.match(oc.by('agent').detail, /^opencode \(model opencode-go\/test-model; from config; skipped codex: done-done cannot start it yet\)/);
+  assert.match(oc.by('agent').detail, /^opencode \(model opencode-go\/test-model; from config\) at /);
   assert.match(oc.by('judge_choice').detail, /^answerer:opencode \(model opencode-go\/muse-spark-1\.3-contributor; judge\.route auto\) judges the author opencode \(model opencode-go\/test-model\): the author's agent at a different model/);
   assert.equal(oc.by('probe').status, 'ok');
   const [call] = s.calls();
@@ -2360,6 +2662,17 @@ test('the agent comes from config (a fallback list moves past missing agents), a
   assert.deepEqual(['--model', '--tools', '--setting-sources'].map((f) => c.argv[c.argv.indexOf(f) + 1]), ['claude-haiku-5-5', '', ''], 'no project or user settings load');
   assert.ok(c.argv.includes('-p') && c.argv.includes('--no-session-persistence') && JSON.parse(c.argv[c.argv.indexOf('--json-schema') + 1]).required[0] === 'ok');
   assert.match(c.stdin, /connectivity probe/);
+  assert.deepEqual(c.argv.slice(-2), ['--effort', 'low'], 'the cheap default effort goes to claude --effort');
+  // effort, extra flags and the call timeout come from the global config, and doctor names the file each came from.
+  const globalYml = join(env.DONE_DONE_HOME, 'config.yaml');
+  writeFileSync(globalYml, 'agent_config:\n  claude: { effort: high }\nagent_args_override:\n  claude: [--permission-mode, plan]\nagent_timeout: 2m\n');
+  const tuned = doctor('agent: claude\n', '--probe');
+  assert.equal(tuned.code, 0, tuned.out);
+  assert.deepEqual(s.calls()[2].argv.slice(-4), ['--effort', 'high', '--permission-mode', 'plan'], 'effort maps to the CLI flag, extra flags come after done-done\'s own');
+  const tunedRec = JSON.parse(readFileSync(tuned.by('probe').detail.match(/record (\S+)$/)[1], 'utf8'));
+  assert.deepEqual([tunedRec.effort, tunedRec.args, tunedRec.timeoutMs], ['high', ['--permission-mode', 'plan'], 120_000], 'the call record names the effort, flags and timeout');
+  assert.match(tuned.by('agent_settings').detail, /^agent claude \(\.done-done\.yaml\); model claude-haiku-5-5 \(default\); effort high \(.*config\.yaml\); args 2 set \(.*config\.yaml\); path claude on PATH \(default\); agent_timeout 2m \(.*config\.yaml\)$/);
+  writeFileSync(globalYml, 'agent_config:\n  opencode: { model: opencode-go/test-model }\n');
   // A failed answer fails the probe, which --probe makes required; without --probe nothing is asked.
   const bad = stubAgents(env, 'error');
   const failed = doctorIn(repo, bad.env, 'doctor', '--probe');
@@ -2377,13 +2690,13 @@ test('the agent comes from config (a fallback list moves past missing agents), a
   assert.equal(doctorIn(repo, bad.env, 'doctor').code, 0);
   assert.equal(bad.calls().length, 1);
   // An agent without an adapter yet, an explicit judge route, and bad values.
+  writeFileSync(join(s.bin, 'codex'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
   const cx = doctor('agent: codex\n', '--probe');
   assert.equal(cx.code, 2, cx.out);
   assert.match(cx.by('probe').detail, /cannot start codex yet/);
-  assert.equal(cx.by('probe').fix, 'Set agent: to claude, opencode, pi and gemini', 'a probe that never ran points at the agent fix, not a sign-in');
-  writeFileSync(join(s.bin, 'gemini'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
-  const pg = doctor('agent: [codex, gemini]\n');
-  assert.match(pg.by('agent').detail, /^gemini \(model flash-lite; from config; skipped codex: done-done cannot start it yet\)/, 'the list moves past codex to the startable gemini at its cheap default');
+  assert.equal(cx.by('probe').fix, 'done-done starts claude, opencode, pi and gemini: ask the user which agent to use and save it: done-done init --agent <agent> --model <model>', 'a probe that never ran points at the agent fix, not a sign-in');
+  // The user sets one agent: no auto, no fallback list.
+  for (const agent of ['auto', '[codex, gemini]']) assert.match(doctor(`agent: ${agent}\n`).by('config').detail, /agent must be one of claude, codex, opencode, pi, gemini, or acp:<target>/);
   // An explicit judge: another model of the author's agent is apart; its own model is a config error unless allow_same.
   const routeCfg = (extra) => writeFileSync(join(env.DONE_DONE_HOME, 'config.yaml'), `agent_config:\n  opencode: { model: opencode-go/test-model }\njudge:\n  route: answerer:opencode\n${extra}`);
   routeCfg('');
@@ -2404,19 +2717,32 @@ test('the agent comes from config (a fallback list moves past missing agents), a
   assert.match(doctor('').out, /judge\.route must be auto, claude-code \(for claude\), or answerer:<agent>/);
   writeFileSync(join(env.DONE_DONE_HOME, 'config.yaml'), 'judge:\n  model: x\n');
   assert.equal(doctor('').by('config').status, 'ok', 'a model under judge.route auto is ignored, not a config error');
-  assert.match(doctor('agent: cursor\n').out, /agent must be auto, or one or a list of claude, codex, opencode, pi, gemini/);
+  assert.match(doctor('agent: cursor\n').out, /agent must be one of claude, codex, opencode, pi, gemini/);
   assert.match(doctor('judge: auto\n').out, /judge must be a mapping/, 'judge: auto is not a spelling of the judge');
   assert.match(doctor('agent_config:\n  opencode: { model: x }\n').out, /agent_config may only be set in the global config/, 'the project file cannot pick a model');
   writeFileSync(join(env.DONE_DONE_HOME, 'config.yaml'), 'agent_config:\n  cursor: { model: x }\n');
-  assert.match(doctor('').out, /agent_config must be a map of <agent>: \{model: <string>\}/);
-  assert.equal(s.calls().length, 3, 'only --probe asks the agent');
+  assert.match(doctor('').out, /agent_config must be a map of <agent>: \{model: <string>, effort: <string>\}/);
+  for (const [global, err] of [
+    ['agent_config:\n  gemini: { effort: low }\n', /agent_config\.gemini\.effort: gemini has no reasoning-effort flag/],
+    ['agent_config:\n  claude: { effort: turbo }\n', /agent_config\.claude\.effort must be one of minimal, low, medium, high, xhigh, max/],
+    ['agent_config:\n  opencode: { model: muse }\n', /agent_config\.opencode\.model must be provider\/model/],
+    ['agent_timeout: 0s\n', /agent_timeout must be a duration such as 90s, 30m or 1h/],
+    ['agent_args_override:\n  claude: --verbose\n', /agent_args_override must be a map of <agent>: \[<flag>, \.\.\.\]/],
+  ]) {
+    writeFileSync(join(env.DONE_DONE_HOME, 'config.yaml'), global);
+    assert.match(doctor('').out, err);
+  }
+  writeFileSync(join(env.DONE_DONE_HOME, 'config.yaml'), '');
+  for (const key of ['agent_args_override: { claude: [] }', 'agent_path_override: { claude: claude }', 'acpx_path: acpx', 'agent_timeout: 5m'])
+    assert.match(doctor(`${key}\n`).out, new RegExp(`${key.split(':')[0]} may only be set in the global config`), 'only agent may be set per repo, as in no-mistakes');
+  assert.equal(s.calls().length, 4, 'only --probe asks the agent');
   // Without a repo config, the agent keys still come from the global config.
   writeFileSync(join(env.DONE_DONE_HOME, 'config.yaml'), 'agent: opencode\n');
   rmSync(join(repo, '.done-done.yaml'));
   const global = doctorIn(repo, s.env, 'doctor');
   assert.equal(global.code, 2, global.out);
   assert.match(toon(global).checks.find((x) => x.check === 'agent').detail, /^opencode \(model opencode-go\/muse-spark-1.3-contributor; from config\)/);
-  writeFileSync(join(env.DONE_DONE_HOME, 'config.yaml'), 'agent: [pi]\njudge:\n  modle: x\n');
+  writeFileSync(join(env.DONE_DONE_HOME, 'config.yaml'), 'agent: pi\njudge:\n  modle: x\n');
   const broken = toon(doctorIn(repo, s.env, 'doctor'));
   assert.equal(broken.checks.find((x) => x.check === 'agent').status, 'missing');
   assert.match(broken.checks.find((x) => x.check === 'agent').detail, /unknown key judge\.modle/, 'a broken global config is named, never replaced by built-in defaults');
@@ -2473,9 +2799,8 @@ process.exitCode = ${exit};
   const failed = doctor('agent: acp:gemini\n', '--probe');
   assert.equal(failed.code, 2, failed.out);
   assert.match(failed.by('probe').detail, /acp:gemini did not answer: acp:gemini exited 1: Authentication required/);
-  // acpx on PATH that does not start (a version-manager shim with no version set) is not installed: a list moves on, and alone it is missing with the install step.
+  // acpx on PATH that does not start (a version-manager shim with no version set) is not installed: missing with the install step.
   acpx(1, []);
-  assert.match(doctor('agent: [acp:gemini, claude]\n').by('agent').detail, /^claude \(model claude-haiku-5-5; from config\) at /);
   const shim = doctor('agent: acp:gemini\n', '--probe');
   assert.equal(shim.code, 2, shim.out);
   assert.match(shim.by('agent').detail, /^acp:gemini \(model flash-lite; from config\) needs acpx, the ACP bridge, which is not startable \(.*acpx does not run\)$/);
@@ -2485,7 +2810,7 @@ process.exitCode = ${exit};
   assert.match(doctor('agent: acp:gemini\n').by('agent').detail, /which is not startable \(not on PATH\)$/);
   assert.equal(calls().length, 3, 'acpx is started only by --probe, beyond --version');
   // A target is one plain word, never a flag.
-  assert.match(doctor('agent: acp:--help\n').out, /agent must be auto, or one or a list of claude, codex, opencode, pi, gemini, acp:<target>/);
+  assert.match(doctor('agent: acp:--help\n').out, /agent must be one of claude, codex, opencode, pi, gemini, or acp:<target>/);
 });
 
 test('history lists newest first and logs tails the step log', () => {
@@ -2817,11 +3142,13 @@ test('doctor --probe asks gemini with the prompt on stdin, and reports a signed-
   assert.match(probe.fix, /Check that gemini is signed in and can use model flash-lite/);
 });
 
-test('agent auto picks pi over gemini, and doctor warns that pi has no permission gate', () => {
+test('doctor warns that pi has no permission gate', () => {
   const { repo, env } = setup();
   const s = stubPiGemini(env);
+  mkdirSync(env.DONE_DONE_HOME, { recursive: true });
+  writeFileSync(join(env.DONE_DONE_HOME, 'config.yaml'), 'agent: pi\n');
   const d = toon(doctorIn(repo, s.env, 'doctor'));
-  assert.match(d.checks.find((x) => x.check === 'agent').detail, /^pi \(its own default model; set agent_config\.pi\.model to choose one; agent: auto\) at /);
+  assert.match(d.checks.find((x) => x.check === 'agent').detail, /^pi \(its own default model; set agent_config\.pi\.model to choose one; from config\) at /);
   const gate = d.checks.find((x) => x.check === 'tool_gate');
   assert.equal(gate.status, 'warning');
   assert.equal(gate.detail, 'pi has no permission gate: every pi tool runs without approval');
@@ -2841,7 +3168,7 @@ test('gemini edit steps run with auto_edit, never yolo, and read steps stay in p
   const { repo, env } = setup();
   const s = stubPiGemini(env);
   const { askAgent } = await import(pathToFileURL(join(dirname(fileURLToPath(import.meta.url)), '..', 'dist', 'agents.js')).href);
-  const call = { agent: 'gemini', model: 'flash-lite', prompt: 'p', schema: { type: 'object', properties: { ok: { type: 'boolean' } }, required: ['ok'] }, cwd: repo, timeoutMs: 60_000, record: join(s.env.PATH, 'rec.json') };
+  const call = { agent: 'gemini', model: 'flash-lite', path: join(s.env.PATH, 'gemini'), prompt: 'p', schema: { type: 'object', properties: { ok: { type: 'boolean' } }, required: ['ok'] }, cwd: repo, timeoutMs: 60_000, record: join(s.env.PATH, 'rec.json') };
   const old = process.env.PATH;
   process.env.PATH = s.env.PATH;
   try {
@@ -2863,7 +3190,7 @@ test('opencode read calls get a deny-all permission and no read allowance', asyn
   const old = process.env.PATH;
   process.env.PATH = s.env.PATH;
   try {
-    await askAgent({ agent: 'opencode', model: 'm', prompt: 'p', schema: { type: 'object', properties: { ok: { type: 'boolean' } }, required: ['ok'] }, cwd: repo, timeoutMs: 60_000, tools: 'read', record: join(s.env.PATH, 'rec.json') });
+    await askAgent({ agent: 'opencode', model: 'm', path: join(s.env.PATH, 'opencode'), prompt: 'p', schema: { type: 'object', properties: { ok: { type: 'boolean' } }, required: ['ok'] }, cwd: repo, timeoutMs: 60_000, tools: 'read', record: join(s.env.PATH, 'rec.json') });
   } finally {
     process.env.PATH = old;
   }
@@ -2909,7 +3236,7 @@ test('a repo step that gemini refuses as untrusted fails with the trust fix line
   const old = process.env.PATH;
   process.env.PATH = s.env.PATH;
   try {
-    const out = await askAgent({ agent: 'gemini', model: 'flash-lite', prompt: 'p', schema: { type: 'object', properties: { ok: { type: 'boolean' } }, required: ['ok'] }, cwd: repo, timeoutMs: 60_000, record: join(s.env.PATH, 'rec.json'), tools: 'edit' });
+    const out = await askAgent({ agent: 'gemini', model: 'flash-lite', path: join(s.env.PATH, 'gemini'), prompt: 'p', schema: { type: 'object', properties: { ok: { type: 'boolean' } }, required: ['ok'] }, cwd: repo, timeoutMs: 60_000, record: join(s.env.PATH, 'rec.json'), tools: 'edit' });
     assert.equal(out.ok, false);
     assert.match(out.error, /trust it in Gemini CLI first, then retry/);
   } finally {
@@ -2921,7 +3248,7 @@ test('an edit step whose answer is not JSON is never asked again, while a tool-l
   const { repo, env } = setup();
   const s = stubPiGemini(env, '{"ok":true}', 'bad');
   const { askAgent } = await import(pathToFileURL(join(dirname(fileURLToPath(import.meta.url)), '..', 'dist', 'agents.js')).href);
-  const call = { agent: 'pi', model: '', prompt: 'p', schema: { type: 'object', properties: { ok: { type: 'boolean' } }, required: ['ok'] }, cwd: repo, timeoutMs: 60_000, record: join(s.env.PATH, 'rec.json') };
+  const call = { agent: 'pi', model: '', path: join(s.env.PATH, 'pi'), prompt: 'p', schema: { type: 'object', properties: { ok: { type: 'boolean' } }, required: ['ok'] }, cwd: repo, timeoutMs: 60_000, record: join(s.env.PATH, 'rec.json') };
   const old = process.env.PATH;
   process.env.PATH = s.env.PATH;
   try {
@@ -3559,7 +3886,7 @@ test('maintain reports a dead link, a wrong file:line and drift from read-only r
   assert.deepEqual([noAgent.result, noAgent.git_status], ['blocked', 'same']);
   assert.match(noAgent.reason, /^source-wave: no agent/);
   assert.deepEqual(noAgent.findings.map(at).slice(3), ['citation features/home.md:3', 'citation features/home.md:4', 'citation features/home.md:4']);
-  writeFileSync(join(env.DONE_DONE_HOME, 'config.yaml'), 'agent: auto\n');
+  writeFileSync(join(env.DONE_DONE_HOME, 'config.yaml'), 'agent: claude\n');
   // A reader that writes into the repo makes the run blocked.
   writeFileSync(join(s.bin, 'claude'), `#!${process.execPath}\nrequire('node:fs').writeFileSync('stray.txt', '');\nprocess.stdout.write(JSON.stringify({ structured_output: ${answer} }));\n`, { mode: 0o755 });
   const changed = toon(dd('maintain', '--foreground'));

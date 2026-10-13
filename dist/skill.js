@@ -48,6 +48,9 @@ tree: commit the done-done setup (config, capture script) before you capture. \`
 A run waiting at its gate (\`awaiting_approval\`) is the user's call: show them its findings and captures, and run
 \`done-done respond\` only with their answer and reason. Never approve or skip on your own; \`overridden\` is not done either.
 
+done-done starts a coding agent the user chose. When it says no agent is set, ask the user which agent
+(and model) to use and save their answer with the command it prints; never choose one for them.
+
 ## Request
 
 $ARGUMENTS

@@ -18,6 +18,12 @@ done-done init
 
 `init` also scaffolds the verify skill at `skill` (default `.agents/skills/verify-<app>`) from the repo's own files: `SKILL.md`, plus `features/README.md` and one file per feature for up to five features (HTTP routes and CLI commands found in source); `features/README.md` says how many more were found and not written. Only missing files are written, so an existing skill is left byte-identical and a re-run is a no-op. Lines marked `TODO(live drive)` need one real drive before they can be trusted. A write failure or a symlink on the path skips the scaffold and reports why in `verify_skill`; the config is kept and `init` still exits 0. A `skill` path with a `..` segment is refused (exit 2) before anything is written.
 
+```sh
+done-done init --agent opencode --model opencode-go/muse-spark-1.3-contributor
+```
+
+`init --agent <agent> [--model <model>]` saves the coding agent done-done starts, and its model, into the global `~/.done-done/config.yaml` (`agent` and `agent_config.<agent>.model`), in place, keeping its comments and every other key; the result's `agent` says what was saved. Without `--agent`, when no agent is set, `init` asks in a terminal (a numbered list of agents, then of models) before it writes anything; elsewhere it writes the rest of the config, reports `agent: not set` with the line to ask the user and the save command, and exits 2. When a repo's `.done-done.yaml` sets a different agent, the result's `agent` says the saved agent is overridden by that one. An agent done-done cannot start, `--model` without `--agent`, or an opencode model that is not `provider/model` exits 2 before any write. done-done never picks an agent for you (see [Agents](#agents)).
+
 Record a journey's capture recipe in the repo so any checkout can re-run the proof:
 
 ```sh
@@ -27,36 +33,36 @@ done-done init --journey smoke -- 'echo added: milk > $DONE_DONE_EVIDENCE_ROOT/$
 `init --journey <name> -- <command>` writes `journeys.<name>.command` into `.done-done.yaml` (creating the file with the pinned `app` when missing) and reports `written` or `updated` with the journey name. `${RUN_ID}` in the command becomes the run id, exactly as in `run`. Commit the config: proof only counts from a clean tree.
 
 ```sh
-done-done init --agent claude
+done-done init --hook claude
 ```
 
-`--agent claude` also adds a Claude Code SessionStart hook to the repo's `.claude/settings.json` (project scope; your `~/.claude` is never touched), so each session starts with the bare `done-done` state as context. The hook runs `command -v done-done >/dev/null && done-done || true`: without done-done on PATH it prints nothing and exits 0, so it never breaks a session. An existing settings file keeps every other key and hook; re-running adds no duplicate. The result's `claude_hook` says `added to .claude/settings.json` or `unchanged`. Any other `--agent` value exits 2 naming the supported values, and a malformed `.claude/settings.json` exits 2 untouched. Commit `.claude/settings.json` to share the hook.
+`--hook claude` also adds a Claude Code SessionStart hook to the repo's `.claude/settings.json` (project scope; your `~/.claude` is never touched), so each session starts with the bare `done-done` state as context. The hook runs `command -v done-done >/dev/null && done-done || true`: without done-done on PATH it prints nothing and exits 0, so it never breaks a session. An existing settings file keeps every other key and hook; re-running adds no duplicate. The result's `claude_hook` says `added to .claude/settings.json` or `unchanged`. Any other `--hook` value exits 2 naming the supported values, and a malformed `.claude/settings.json` exits 2 untouched. Commit `.claude/settings.json` to share the hook.
 
 ```sh
-done-done init --agent codex
+done-done init --hook codex
 ```
 
-`--agent codex` also adds a Codex SessionStart hook to the repo's `.codex/hooks.json` (project scope; your `~/.codex` is never touched), so each session starts with the bare `done-done` state as context. Same contract as the Claude hook: it runs `command -v done-done >/dev/null && done-done || true`, keeps every other key and hook, adds no duplicate on re-run, and the result's `codex_hook` says `added to .codex/hooks.json` or `unchanged`. A malformed `.codex/hooks.json` exits 2 untouched. Commit `.codex/hooks.json` to share the hook.
+`--hook codex` also adds a Codex SessionStart hook to the repo's `.codex/hooks.json` (project scope; your `~/.codex` is never touched), so each session starts with the bare `done-done` state as context. Same contract as the Claude hook: it runs `command -v done-done >/dev/null && done-done || true`, keeps every other key and hook, adds no duplicate on re-run, and the result's `codex_hook` says `added to .codex/hooks.json` or `unchanged`. A malformed `.codex/hooks.json` exits 2 untouched. Commit `.codex/hooks.json` to share the hook.
 
 ```sh
-done-done init --agent opencode
+done-done init --hook opencode
 ```
 
-`--agent opencode` instead writes a session-start plugin to the repo's `.opencode/plugins/done-done.js` (project scope; your `~/.config/opencode` is never touched), so the bare `done-done` state is added to the first message of each session, not at session open (opencode's plugin hooks cannot add context when a session is created). The plugin remembers sessions in memory, so a resumed session gets the state again after opencode restarts. That `chat.message` hook runs `command -v done-done >/dev/null && done-done || true` and waits for it (up to 30 seconds) before appending the output to the message: without done-done on PATH it appends nothing and never throws, so it never breaks a session. Other files in `.opencode/plugins/` are untouched; re-running adds no duplicate. The result's `opencode_plugin` says `added to .opencode/plugins/done-done.js` or `unchanged`. Delete the file to opt out. Commit it to share the plugin.
+`--hook opencode` instead writes a session-start plugin to the repo's `.opencode/plugins/done-done.js` (project scope; your `~/.config/opencode` is never touched), so the bare `done-done` state is added to the first message of each session, not at session open (opencode's plugin hooks cannot add context when a session is created). The plugin remembers sessions in memory, so a resumed session gets the state again after opencode restarts. That `chat.message` hook runs `command -v done-done >/dev/null && done-done || true` and waits for it (up to 30 seconds) before appending the output to the message: without done-done on PATH it appends nothing and never throws, so it never breaks a session. Other files in `.opencode/plugins/` are untouched; re-running adds no duplicate. The result's `opencode_plugin` says `added to .opencode/plugins/done-done.js` or `unchanged`. Delete the file to opt out. Commit it to share the plugin.
 
 ```sh
-done-done init --agent gemini
+done-done init --hook gemini
 ```
 
-`--agent gemini` adds a Gemini CLI SessionStart hook to the repo's `.gemini/settings.json` (project scope; your `~/.gemini` is never touched). Gemini CLI shows a hook's plain output only to you, so this hook pipes the bare `done-done` state through `node` into the JSON `hookSpecificOutput.additionalContext` that Gemini CLI adds to the session as context; without done-done on PATH it prints nothing and exits 0. Same merge contract as the Claude hook, and the result's `gemini_hook` says `added to .gemini/settings.json` or `unchanged`. Gemini CLI reads project settings only in a trusted folder and warns once before it runs a new project hook. Commit `.gemini/settings.json` to share the hook.
+`--hook gemini` adds a Gemini CLI SessionStart hook to the repo's `.gemini/settings.json` (project scope; your `~/.gemini` is never touched). Gemini CLI shows a hook's plain output only to you, so this hook pipes the bare `done-done` state through `node` into the JSON `hookSpecificOutput.additionalContext` that Gemini CLI adds to the session as context; without done-done on PATH it prints nothing and exits 0. Same merge contract as the Claude hook, and the result's `gemini_hook` says `added to .gemini/settings.json` or `unchanged`. Gemini CLI reads project settings only in a trusted folder and warns once before it runs a new project hook. Commit `.gemini/settings.json` to share the hook.
 
 ```sh
-done-done init --agent pi
+done-done init --hook pi
 ```
 
-`--agent pi` writes an extension to the repo's `.pi/extensions/done-done.js` (project scope; your `~/.pi` is never touched). On the first prompt of each session its `before_agent_start` handler runs `command -v done-done >/dev/null && done-done || true` (up to 30 seconds) and adds the output as a message the model reads; without done-done on PATH it adds nothing and never throws. pi loads project extensions only after you trust the project. Same file contract as the opencode plugin: other files are untouched, a re-run adds no duplicate, an existing file with other content exits 2 untouched, and the result's `pi_extension` says `added to .pi/extensions/done-done.js` or `unchanged`. Commit it to share the extension.
+`--hook pi` writes an extension to the repo's `.pi/extensions/done-done.js` (project scope; your `~/.pi` is never touched). On the first prompt of each session its `before_agent_start` handler runs `command -v done-done >/dev/null && done-done || true` (up to 30 seconds) and adds the output as a message the model reads; without done-done on PATH it adds nothing and never throws. pi loads project extensions only after you trust the project. Same file contract as the opencode plugin: other files are untouched, a re-run adds no duplicate, an existing file with other content exits 2 untouched, and the result's `pi_extension` says `added to .pi/extensions/done-done.js` or `unchanged`. Commit it to share the extension.
 
-`--agent` works with `--journey` too: `init --journey smoke --agent claude -- <command>` records the journey and adds the hook.
+`--hook` works with `--journey` too: `init --journey smoke --hook claude -- <command>` records the journey and adds the hook.
 
 ### Check the setup
 
@@ -64,17 +70,17 @@ done-done init --agent pi
 done-done doctor
 ```
 
-`doctor` answers "is this repo worth driving" and changes nothing except the `--probe` call record (the agent itself may keep its own session files). It checks eight items, each reported `ok`, `warning` or `missing` with the exact fix command (plus a `tool_gate` `warning` row when the agent is pi; see [Agents](#agents)): `git` (inside a repository), `config` (a valid `.done-done.yaml`), `evidence_root` (writable), `verify_skill` (`.agents/skills/verify-<app>/SKILL.md`), `agent` (the coding agent done-done starts, its model and where it came from; `missing` when it is not installed or done-done cannot start it yet; see [Agents](#agents)), `judge` (the judge kit is present, and the route's own setup: for `claude-code` an executable `claude` binary and a sign-in folder, with login checked only when a capture is judged; for `answerer:<agent>` the agent on PATH; the model is never called), `ffprobe` (video evidence only) and `judge_choice` (the route and model that `--judge` runs and the author it judges, see [Judge relevance](#judge-relevance-opt-in): `ok` when the judge is another agent; `warning` when it is the author's agent at another model or in a fresh session (`model` or `session-only` independence), which the run still uses and which never fails `doctor`; `missing` when the config refuses it (the author's own agent and model, unless `judge.allow_same: true` in the global config) or no agent that can judge is installed). Only the first three are required: `doctor` exits 0 when they are all ok and 2 otherwise, so missing optionals never fail the run. In a fresh repo with nothing set up, `doctor` names each missing piece, starting with `done-done init`.
+`doctor` answers "is this repo worth driving" and changes nothing except the `--probe` call record (the agent itself may keep its own session files). It checks nine items, each reported `ok`, `warning` or `missing` with the exact fix command (plus a `tool_gate` `warning` row when the agent is pi; see [Agents](#agents)): `git` (inside a repository), `config` (a valid `.done-done.yaml`), `evidence_root` (writable), `verify_skill` (`.agents/skills/verify-<app>/SKILL.md`), `agent` (the coding agent the user set and its model; `missing` when none is set, with the command that saves the user's choice, or when it is not installed or done-done cannot start it yet; see [Agents](#agents)), `agent_settings` (each effective agent setting, `agent`, its model, effort, how many extra flags are set (never their values), binary and `agent_timeout`, and where it came from: the global config, `.done-done.yaml` or `default`), `judge` (the judge kit is present, and the route's own setup: for `claude-code` an executable `claude` binary (`agent_path_override.claude`, else PATH) and a sign-in folder, with login checked only when a capture is judged; for `answerer:<agent>` the agent on PATH; the model is never called), `ffprobe` (video evidence only) and `judge_choice` (the route and model that `--judge` runs and the author it judges, see [Judge relevance](#judge-relevance-opt-in): `ok` when the judge is another agent; `warning` when it is the author's agent at another model or in a fresh session (`model` or `session-only` independence), which the run still uses and which never fails `doctor`; `missing` when the config refuses it (the author's own agent and model, unless `judge.allow_same: true` in the global config) or no agent that can judge is installed). Only the first three are required: `doctor` exits 0 when they are all ok and 2 otherwise, so missing optionals never fail the run. In a fresh repo with nothing set up, `doctor` names each missing piece, starting with `done-done init`.
 
 ```sh
 done-done doctor --probe
 ```
 
-`--probe` also asks the agent one JSON-schema question (one call at its model) and adds a `probe` item that is then required: `ok` only when the agent answers with a valid object. The call record goes to `$DONE_DONE_HOME/agents/` (mode 0600); it keeps the agent, model, schema, tools, cwd, timeout, argv, prompt size in bytes, timing, exit code, answer or error, and the last 2000 characters of stderr, never the prompt text. A failed probe row shows one clean line: the agent's last line that names an error, or else its last meaningful line, with no colour codes or stack frames and at most 200 characters. The raw stderr stays in the record.
+`--probe` also asks the agent one JSON-schema question (one call at its model) and adds a `probe` item that is then required: `ok` only when the agent answers with a valid object. The call record goes to `$DONE_DONE_HOME/agents/` (mode 0600); it keeps the agent, model, effort, extra flags, binary, schema, tools, cwd, timeout, argv, prompt size in bytes, timing, exit code, answer or error, and the last 2000 characters of stderr, never the prompt text. A failed probe row shows one clean line: the agent's last line that names an error, or else its last meaningful line, with no colour codes or stack frames and at most 200 characters. The raw stderr stays in the record.
 
 #### Agents
 
-done-done works with the coding agent you have. `agent:` names it (`claude`, `codex`, `opencode`, `pi` or `gemini`), or a fallback list such as `[opencode, claude]`, which moves on when an agent is not installed or done-done cannot start it yet; doctor names each installed agent it skipped. `agent: auto` (the default) takes the first of claude, codex, opencode, pi, gemini on PATH that done-done can start (claude, opencode, pi and gemini today). The model is `agent_config.<agent>.model` (global config only), else the agent's cheap default (`claude-haiku-5-5` for claude, `opencode-go/muse-spark-1.3-contributor` for opencode, `flash-lite` for gemini). That table is the only place done-done names a default model. These defaults are the cost guard for those agents: done-done never defaults to a flagship model for them. pi and `acp:<target>` have no public cheap alias, so with no `agent_config.<agent>.model` (for `acp:<target>`, `agent_config.acp:<target>.model`) they run their own configured model, which can be a flagship; that setting caps their cost. codex cannot be started yet. `agent: acp:<target>` (for example `acp:gemini`) starts any Agent Client Protocol agent through [acpx](https://github.com/openclaw/acpx), which you install yourself (`npm install -g acpx`); `agent: auto` never picks one. doctor reports an `acp:` agent missing, with that install step, when acpx is not on PATH or does not start.
+done-done starts the coding agent you choose, and never picks one. `agent:` names exactly one (`claude`, `codex`, `opencode`, `pi`, `gemini` or `acp:<target>`; done-done can start all but codex today); there is no auto-detection and no fallback list, so an agent that is not installed or cannot start stops the command with the reason. While no agent is set, a command that starts it asks in a terminal (a numbered list of agents, then of models) and saves the answer to the global config; anywhere else (an agent calling done-done) it exits 2 with `no agent is set: ask the user which agent to use (claude, opencode, pi, gemini, acp:<target>); never pick one for them` and the command that saves the answer: `done-done init --agent <agent> --model <model>`. `doctor` reports an unset agent as missing with that same fix. The model is `agent_config.<agent>.model` (global config only), else the agent's cheap default (`claude-haiku-5-5` for claude, `opencode-go/muse-spark-1.3-contributor` for opencode, `flash-lite` for gemini; claude and opencode also default to `effort: low`). That table is the only place done-done names a default model, and `init` writes it into the global config. `agent_config.<agent>.effort` (`minimal`, `low`, `medium`, `high`, `xhigh` or `max`, or `''` for the CLI's own) goes to the CLI's own flag as written: `--effort` (claude), `-c model_reasoning_effort="<level>"` (codex), `--variant` (opencode) and `--thinking` (pi); gemini and `acp:<target>` have none, so an effort for them is a config error. `agent_args_override.<agent>` adds extra CLI flags after done-done's own (do not repeat a flag done-done passes), `agent_path_override.<agent>` starts that binary instead of the one on PATH, `acpx_path` names the acpx bridge, and `agent_timeout` (default `30m`) bounds each agent call: a maintain reader, the judge and the doctor probe. These defaults are the cost guard for those agents: done-done never defaults to a flagship model for them. pi and `acp:<target>` have no public cheap alias, so with no `agent_config.<agent>.model` (for `acp:<target>`, `agent_config.acp:<target>.model`) they run their own configured model, which can be a flagship; that setting caps their cost. codex cannot be started yet. `agent: acp:<target>` (for example `acp:gemini`) starts any Agent Client Protocol agent through [acpx](https://github.com/openclaw/acpx), which you install yourself (`npm install -g acpx`). doctor reports an `acp:` agent missing, with that install step, when acpx is not on PATH or does not start.
 
 Each call is a fresh, single-shot session that must answer one JSON object matching a schema. The prompt goes on stdin (claude, pi, gemini, acp) or into a 0600 prompt file (opencode), never in argv. done-done can start claude (`claude -p --output-format json --json-schema <schema> --model <model> --no-session-persistence`, all tools off with `--tools ''`; tool-less calls also pass `--setting-sources ''` and run from a scratch folder, so no project settings or hooks load; read-only calls allow only `--tools Read,Grep,Glob` and pass `--setting-sources ''` and `--strict-mcp-config`, so no user settings or MCP servers load), opencode (`opencode run "Follow the attached instructions." --format json -m <provider/model> -f <prompt file>`, with the schema in the 0600 prompt file and every tool denied through `OPENCODE_PERMISSION`), pi (`pi -p --mode json --no-session --no-tools`, tools off for every read or probe call, since pi has no read-only mode that refuses outside reads, and `--model <model>` only when one is set) and gemini (`gemini -p "Follow the instructions on stdin." -o json -m <model> --approval-mode plan|auto_edit`, where `plan` is read-only for the probe and read steps and `auto_edit` is used for edit steps; `--skip-trust` is added only to the tool-less probe in its scratch folder, so repo calls keep Gemini's workspace trust gate). `acp:<target>` runs `acpx --cwd <dir> --format json --json-strict --deny-all --non-interactive-permissions deny [--model <model>] <target> exec --file -`, with the prompt and schema on stdin; every tool is denied. pi has no permission gate for edit steps, so doctor adds a `tool_gate` warning row whenever pi is the agent: every pi tool runs without approval. codex comes next.
 
@@ -170,9 +176,9 @@ done-done receipt --judge --from pr-body.md
 - **One question per capture.** Each cited PNG or JPEG that is in a done-done run record goes to the model with the claim's `outcome:` line and nothing else: no repo, no paths, no other files. Text, log and video evidence are not judged, and the result says so.
 - **Where a capture goes.** Each capture goes to the judge's provider: the one `judge.route` names, or under `auto` the agent it picks, which may be a different provider than the author's. A named route such as `claude-code` keeps every capture with one provider; doctor's `judge_choice` row names the route.
 - **A fresh, tools-off call on your own plan, through BYOKit.** Each question is one single-shot call through [`@byokit/decide`](https://www.npmjs.com/package/@byokit/decide) on a route set by `judge.route`:
-  - `claude-code`: BYOKit's Claude Code backend runs your own `claude` binary against a sign-in folder kept only for done-done (`judge.claude_code.config_dir`).
+  - `claude-code`: BYOKit's Claude Code backend runs your own `claude` binary (`agent_path_override.claude`, else PATH) against a sign-in folder kept only for done-done (`judge.claude_code.config_dir`).
   - `answerer:<agent>`: BYOKit's answerer calls that coding agent's CLI through the same adapter as the [agent](#agents) itself, with every tool off and the capture attached (opencode today; for example `answerer:opencode` on `opencode-go/muse-spark-1.3-contributor`). It uses the agent's existing login.
-  - `auto` (the default): the first installed agent that can judge (claude, then opencode) that is not the author, at its cheap model; `judge.model` is ignored under auto. With only the author's agent installed, it judges at that agent's cheap model: labelled `model` when the cheap model differs from the author's model, and `session-only` (a fresh session) only when they are equal.
+  - `auto` (the default): the first installed agent that can judge (claude, then opencode) that is not the author, at its `agent_config` model; `judge.model` is ignored under auto. With only the author's agent installed, it judges at that agent's cheap model: labelled `model` when the cheap model differs from the author's model, and `session-only` (a fresh session) only when they are equal.
 
   done-done never reads, copies or stores a credential. The kit is an optional peer dependency, so a plain install stays small; the judge needs it and Node 22.18 or later. Without it, `--judge` exits 2 with the command to run the same check with the kit:
 
@@ -186,7 +192,7 @@ done-done receipt --judge --from pr-body.md
   mkdir -p ~/.done-done/claude && CLAUDE_CONFIG_DIR=~/.done-done/claude claude auth login
   ```
 
-- **Bounded.** Captures longer than 1280 px on their long side are downscaled first (8-bit PNG; a larger JPEG is reported unsure). One request per capture, at most 10 requests per check (later captures are unsure), a 120-second timeout, no retries.
+- **Bounded.** Captures longer than 1280 px on their long side are downscaled first to PNG (8-bit PNG or JPEG). One request per capture, at most 10 requests per check (later captures are unsure), `agent_timeout` per request, no retries.
 - **The judge is a different agent from the author when one is installed.** The author is the coding agent done-done starts (`agent:`), or `none` when no agent is installed. An `acp:<target>` author counts as the agent its target names (`acp:claude-code` is claude), and an author with no known model is never `model` apart. With only the author's agent installed, `auto` judges at its cheap model (labelled `model` when that differs from the author's model, `session-only` when it is the same, in a fresh session), and doctor warns in both fallback cases. The result names how far apart they are: `agent` (another agent), `model` (the same agent at another model) or `session-only` (the same agent and model, in a fresh session). A `judge.route` and `judge.model` that are the author's own agent and model are a config error (exit 2) unless `judge.allow_same: true` in the global config.
 - **Cached and recorded.** Verdicts are kept in `$DONE_DONE_HOME/runs/<app>/judge/`, keyed by the capture's sha256, the outcome text, the route and the model, so a re-run asks no model. Each answerer call writes its agent's 0600 call record (what ran and what came back; never the prompt text) to the run's `agents/` folder under `verify`, else to `$DONE_DONE_HOME/agents/`; the `claude-code` route starts no agent of ours, so it writes none.
 - **Only runs on a passing check.** When the deterministic checks already fail, no capture is judged, and a judge pass never turns a failed check into a pass.
@@ -199,7 +205,41 @@ done-done receipt --judge --from pr-body.md
 
 Under `verify`, a `fail` or `unsure` verdict does not end the run: it parks it at its [gate](#the-gate-and-respond).
 
-The result gains a `judge` block with the route, the model, the independence, the author and, for each judged file, its verdict, a short reason and whether it came from the cache. For the `claude-code` route, a missing or signed-out sign-in folder, a sign-in that is not a Claude subscription, a sign-in folder that is (or links to) your own `~/.claude`, a missing or non-executable `claude` binary, a missing `@byokit/decide` kit or a Node older than 22.18 is a config error (exit 2) whose `help` line is the command to fix it. The kit cannot tell a bad `judge.model` from a used-up plan, so both are `unsure` with a reason naming each. The judge's confidence is the model's own estimate, not a calibrated score.
+The result gains a `judge` block with the route, the model, the independence, the author and, for each judged file, its verdict, a short reason and whether it came from the cache. For the `claude-code` route, a missing or signed-out sign-in folder, a sign-in that is not a Claude subscription, a sign-in folder that is (or links to) your own `~/.claude`, a missing `claude` binary or an `agent_path_override.claude` that is not an executable file, a missing `@byokit/decide` kit or a Node older than 22.18 is a config error (exit 2) whose `help` line is the command to fix it. The kit cannot tell a bad `judge.model` from a used-up plan, so both are `unsure` with a reason naming each. The judge's confidence is the model's own estimate, not a calibrated score.
+
+### Design check
+
+The checks above prove a screen is real and shows the outcome. `design` asks whether it looks right: the same judge looks at each captured screen and fails it on a visual defect.
+
+```sh
+done-done design shots/home.png shots/home.dark.png shots/home.small.png shots/home.large-font.png
+done-done design shots/home.png --mock shots/home.png=design/home.png
+```
+
+- **One request per screen, the judge's route.** Each screen goes to the judge that `--judge` uses (`judge.route` and `judge.model`, or under `auto` the first installed agent that can judge and is not the author, at its cheap model from [Agents](#agents)), as one fresh, tools-off call through BYOKit with the screen and nothing else: no paths, no repo. The judge is never the author's own agent and model unless `judge.allow_same: true`. It needs no `judge.enabled`: running `design` is the opt-in. Each answerer call writes its 0600 call record to `$DONE_DONE_HOME/agents/` (`design-<stamp>-<n>.agent.json`), never the prompt.
+- **The defect kinds.** The judge answers one question per kind, and a screen fails on any kind it names:
+
+  | Kind | Fails when |
+  |---|---|
+  | `aspect` | an image, photo, avatar, logo or icon is stretched or squashed (an avatar, app icon or logo mark more than 1.3 times wider than tall, or taller than wide) |
+  | `clipped-text` | text is cut off at an edge or by its container, or cut mid-word without an ellipsis |
+  | `overlap` | elements cover each other, or content sits under the status bar or system bars |
+  | `off-screen` | an element is pushed past the left, right or top edge (content that scrolls below the bottom is fine) |
+  | `blank-strip` | a blank, black or solid band where the app should paint, such as a black bar down one side; also measured from the pixels, below |
+  | `layout` | elements misaligned, squeezed, badly wrapped or stacked wrongly, or text unreadable against its background |
+
+- **Measured strips.** A blank strip is also measured from the pixels of each PNG or JPEG screen, before and apart from the judge: a band along a whole edge, at least 2% of that side deep, in one plain colour with nothing in it, and clearly apart from the screen's main colour. It fails the screen as `blank-strip` with its edge, colour and depth (`left edge: a plain #151815 band 132 px deep (12% of the width), full height, with nothing in it`), even when the judge is unsure or does not answer. A nav rail or bar that holds icons or a title is content, not a strip, and a screen that is all one colour is the blank-frame check's. A band its `--mock` has too (same edge, about as deep as a share of that side, and in about the same colour) is approved design and is not reported; a band the mock lacks still fails. If the mock is given but cannot be measured (not a PNG or JPEG, or undecodable), a band on the screen makes it `unsure` with the reason `approved mock could not be measured; give a PNG or JPEG mock` (exit 3), never a pass. A fully transparent pixel is never measured as part of a band, so a transparent margin is not a strip on a light or dark screen. The measure misses a strip close to the screen's main colour (a black bar on a near-black screen); the judge's question still covers it.
+- **Mocks.** `--mock <screen>=<mock>` sends the screen and its approved mock in the same request, and the judge reports a difference from the mock as a defect of its kind (a moved, missing or resized element is `layout`); live data such as names, numbers and times is not a defect, and an element shaped as in the mock is not stretched. Repeat `--mock` per screen; a screen named only in `--mock` is still checked. Without a mock, the screen is judged alone.
+- **Variants.** `design` judges the screens it is given and captures nothing. Capture each variant your change touches (dark theme, small width, large font) as its own screen and pass them all; a name such as `home.dark.png` or `home.large-font.png` keeps them apart, and each variant takes its own `--mock`. Pass the raw capture: the judge reads everything in the image as the app, so a device frame or letterbox band fails as a `blank-strip`.
+- **From a verify flow.** Run it on the screens a journey writes, after the capture, so a failing screen fails the journey and the `verify` run with it: `journeys: { shots: { command: "node capture.mjs && done-done design $DONE_DONE_EVIDENCE_ROOT/*.png" } }`. Or run it as its own CI step on the captured screens.
+
+| Verdict | Result | Exit |
+|---|---|---|
+| every screen `pass` | pass | 0 |
+| a screen `fail`: the judge named a defect, a blank strip was measured, or the file is empty, truncated or a blank frame | fail | 1 |
+| no fail, but a screen `unsure`: the judge was less than 70% sure about a kind, did not answer, or could not be sent the screen (not a PNG or JPEG, or one that cannot be downscaled) | inconclusive | 3 |
+
+The result lists each screen (failing first, then unsure, then passing; `--full` for more than five) with its `verdict`, its `mock` when it had one, its `defects` (each a `kind` and `where`: the element and where it is on the screen) and a `reason` when it is unsure, plus the `judge` block (route, model, independence and author) and the counts. A missing screen or mock file, or a `--mock` without `=`, is a usage error (exit 2). The judge reads only what is visible, so a wide logo mark that is meant to be wide can fail without a mock; pass its mock to settle it.
 
 ### Record a receipt
 
@@ -234,13 +274,13 @@ done-done history [--limit <n>]                                     # this check
 
 #### Drive by agent
 
-With no journey named and none configured (or with `--feature`), the drive step has the author agent (`agent:` in config) drive one feature of the verify skill the way a user does. It reads the skill's `SKILL.md` and `features/<name>.md`, launches the app, drives that feature, saves PNG screenshots into the run's evidence folder (`$DONE_DONE_EVIDENCE_ROOT`) and stops what it started. `--feature <name>` picks the feature; without it, the only feature is used, or with several the agent picks the one the outcome is about and the run records it. The claim and the recipe paths go to the agent on stdin or in a prompt file, never in argv. The agent is told to follow the recipe and never add steps or data to make the outcome look true.
+With no journey named and none configured (or with `--feature`), the drive step has the author agent (the `agent:` you set; with none set, `verify` asks as described in [Agents](#agents)) drive one feature of the verify skill the way a user does. It reads the skill's `SKILL.md` and `features/<name>.md`, launches the app, drives that feature, saves PNG screenshots into the run's evidence folder (`$DONE_DONE_EVIDENCE_ROOT`) and stops what it started. `--feature <name>` picks the feature; without it, the only feature is used, or with several the agent picks the one the outcome is about and the run records it. The claim and the recipe paths go to the agent on stdin or in a prompt file, never in argv. The agent is told to follow the recipe and never add steps or data to make the outcome look true.
 
 - **Scope.** The drive runs under the agent's own approval policy, in the repo, with write access beyond it only to the run's evidence folder and its scratch folder (`<run>/tmp`, also `$TMPDIR`), where its CLI can limit that: claude with `--permission-mode acceptEdits --allowedTools Bash --add-dir`, opencode with `OPENCODE_PERMISSION` allowing only those folders outside the repo, gemini with `--approval-mode auto_edit --allowed-tools run_shell_command --include-directories`. The drive's shell is not sandboxed: claude's Bash and gemini's run_shell_command can run any command the user can, and done-done only checks tracked files afterwards. Pi has no permission gate, so doctor warns (`tool_gate`). An `acp:<target>` agent cannot drive (done-done runs ACP agents with every tool denied): `verify` exits 2. A drive that changes a tracked file in the repo fails, judged by the content of the tracked diff, so an edit to a file that was already modified before the drive counts too. The agent's output is capped at 64 MiB; past it the call is killed and the drive fails.
-- **Bounded.** The agent runs in its own process group with a 20-minute timeout; the group is killed when the drive ends or times out. If the runner dies mid-drive, the group is killed the next time `status`, `abort` or `rerun` reads that run, as for journeys.
+- **Bounded.** The agent runs in its own process group, bounded by `agent_timeout` (30m by default); the group is killed when the drive ends or times out. If the runner dies mid-drive, the group is killed the next time `status`, `abort` or `rerun` reads that run, as for journeys.
 - **Always judged.** The judge (never the author's agent and model, as in [Judge relevance](#judge-relevance-opt-in)) judges each capture. A drive that reports a blocker or saves nothing the check accepts fails; one where no capture could be judged parks at the gate.
 - **Recorded.** The call goes to `agents/drive.json` (no prompt text), and the agent's answer (feature, captures, blocker) to `logs/drive.log`.
-- **Usage errors (exit 2):** no verify skill, an unknown `--feature`, a journey and `--feature` together, or an agent that is missing or cannot be started.
+- **Usage errors (exit 2):** no verify skill, an unknown `--feature`, a journey and `--feature` together, no agent set outside a terminal, or an agent that cannot be started.
 
 #### The gate and respond
 
@@ -314,22 +354,29 @@ Evidence, run records (`<root>/.done-done/runs/`), receipts (`<root>/.done-done/
 
 There are two files. Unknown keys are an error in both.
 
-**Global:** `~/.done-done/config.yaml`. Override the location with `DONE_DONE_HOME`.
+**Global:** `~/.done-done/config.yaml`. Override the location with `DONE_DONE_HOME`. `done-done init` writes it, commented and at these defaults, when there is none, and never overwrites it. The agent keys have the same names, meanings and scopes as no-mistakes' global config.
 
 ```yaml
+# agent: opencode                     # claude, codex, opencode, pi, gemini or acp:<target>, set by you (init --agent) and unset until then; .done-done.yaml may override it
+agent_config:                         # model and effort per agent; global only
+  claude: { model: claude-haiku-5-5, effort: low }
+  opencode: { model: opencode-go/muse-spark-1.3-contributor, effort: low }
+  gemini: { model: flash-lite }       # gemini has no effort flag
+agent_args_override: {}               # extra CLI flags per native agent, e.g. claude: [--permission-mode, plan]
+agent_path_override: {}               # a binary per native agent instead of PATH, e.g. claude: /opt/claude/bin/claude
+acpx_path: acpx                       # the acpx bridge for acp:<target>: a name on PATH or an absolute path
+agent_timeout: 30m                    # one agent call: 90s, 30m or 1h
 evidence:
   local_root: ~/.done-done/evidence   # evidence root for repos that set none (<local_root>/<app>)
-agent: auto                           # also allowed in .done-done.yaml, which wins; see Agents
-agent_config:                         # per-agent model; global only, a project file may not set it
-  opencode: { model: opencode-go/muse-spark-1.3-contributor }
 judge:                                # used only when the judge is on
   route: auto                         # auto, claude-code or answerer:<agent> (answerer:opencode today)
-  model: ''                           # only with an explicit route; default: that agent's cheap model
+  model: ''                           # only with an explicit route; default: that agent's agent_config model (its cheap one if it is the author's agent)
   allow_same: false                   # true: accept a judge that is the author's own agent and model
   claude_code:                        # the claude-code route only
-    bin: /usr/local/bin/claude        # default: the first `claude` on PATH; an absolute path to an executable
     config_dir: ~/.done-done/claude   # the default; a sign-in folder for done-done only
 ```
+
+An `agent_config` entry merges with the defaults field by field, so `claude: { model: claude-sonnet-5-5 }` keeps `effort: low`; the other maps merge entry by entry. `done-done doctor` shows which file set each agent setting.
 
 **Project:** `<repo>/.done-done.yaml`.
 

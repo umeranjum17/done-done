@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync
 import { tmpdir } from 'node:os';
 import { dirname, isAbsolute, join } from 'node:path';
 import { stripVTControlCharacters } from 'node:util';
-import { AGENTS, ANSWERER_JUDGES, CHEAP_MODELS, UsageError } from './config.js';
+import { AGENTS, ANSWERER_JUDGES, CHEAP, EFFORT_FLAGS, parseDuration, UsageError } from './config.js';
 import { claudeLoggedIn, isExecutable, onPath } from './judge.js';
 // argv never carries the prompt: it goes on stdin, or (file: true) into a 0600 prompt file the argv points at.
 // done-done parses the answer, validates it against the schema, and asks a tool-less call again, at most ASK_ATTEMPTS calls.
@@ -176,18 +176,21 @@ const ADAPTERS = {
         },
     },
 };
-// The author agent: the first of the configured list (or of AGENTS for auto) that is on PATH and that
-// done-done can start; the list moves on when an agent is not installed or done-done cannot start it yet.
-// Its model is agent_config.<agent>.model, else the cheap default. skipped names the installed agents passed over.
+// The author agent: exactly the one the user set, never one done-done detects or falls back to. With none set,
+// done-done asks the user (in a terminal) or stops with the command that saves their answer.
 export function selectAgent(cfg) {
-    const list = cfg.agent === 'auto' ? AGENTS : cfg.agent;
-    const found = list.map((agent) => ({ agent, path: agentPath(agent) })).filter((a) => a.path);
-    const first = found.findIndex((a) => supported(a.agent));
-    const pick = first >= 0 ? found[first] : found[0] ?? { agent: list[0], path: '' };
-    const passed = first >= 0 ? found.slice(0, first) : found.slice(1);
-    return { ...pick, model: modelFor(cfg, pick.agent), from: cfg.agent === 'auto' ? 'auto' : 'config', skipped: passed.map((a) => a.agent) };
+    if (!cfg.agent)
+        throw noAgent();
+    return agentRun(cfg, cfg.agent);
 }
-export const modelFor = (cfg, agent) => cfg.agent_config[agent]?.model || CHEAP_MODELS[agent] || '';
+// The agents a user can pick, and the error that tells a calling agent to ask the user rather than pick one itself.
+export const agentChoices = () => [...AGENTS.filter(supported), 'acp:<target>'];
+export const noAgent = () => new UsageError(`no agent is set: ask the user which agent to use (${agentChoices().join(', ')}); never pick one for them`, `Save the user's answer: done-done init --agent <agent> --model <model>, e.g. done-done init --agent opencode --model ${CHEAP.opencode.model}`);
+export const modelFor = (cfg, agent) => cfg.agent_config[agent]?.model || CHEAP[agent]?.model || '';
+export const agentRun = (cfg, agent, model = modelFor(cfg, agent)) => ({
+    agent, model, effort: cfg.agent_config[agent]?.effort ?? '', args: cfg.agent_args_override[agent] ?? [], path: agentPath(agent, cfg), override: cfg.agent_path_override[agent] ?? '', timeoutMs: parseDuration(cfg.agent_timeout),
+});
+export const notStartable = (agent, override = '') => (override ? `agent_path_override.${agent} ${override} is not an executable file` : `${agent} is not on PATH`);
 // The known agent an agent names, for the judge-independence check: acp:claude-code is claude; a target that
 // names no known agent (acp:claudex, acp:foo) stays as named.
 export function knownAgentOf(agent) {
@@ -198,25 +201,28 @@ const adapterFor = (agent) => (agent.startsWith('acp:') ? ACP : Object.hasOwn(AD
 export function supported(agent) {
     return !!adapterFor(agent);
 }
-// The binary that starts an agent. An acp:<target> agent starts through acpx, which counts as installed only
-// when it runs (a version-manager shim with no version set is on PATH but starts nothing).
+// A binary from config: a bare name is looked up on PATH, an absolute path is used when it is an executable file.
+export const findBin = (bin) => (isAbsolute(bin) ? (isExecutable(bin) ? bin : '') : onPath(bin));
+// The binary that starts an agent: agent_path_override.<agent>, else its name on PATH. An acp:<target> agent starts
+// through acpx (acpx_path), which counts as installed only when it runs (a version-manager shim with no version set
+// is on PATH but starts nothing).
 const acpxRuns = new Map();
-export function agentPath(agent) {
+export function agentPath(agent, cfg) {
     if (!agent.startsWith('acp:'))
-        return onPath(agent);
-    const acpx = onPath('acpx');
+        return findBin(cfg?.agent_path_override[agent] || agent);
+    const acpx = findBin(cfg?.acpx_path || 'acpx');
     if (!acpx)
         return '';
     if (!acpxRuns.has(acpx))
         acpxRuns.set(acpx, spawnSync(acpx, ['--version'], { stdio: 'ignore', timeout: 5_000 }).status === 0);
     return acpxRuns.get(acpx) ? acpx : '';
 }
-export const claudeBin = (cfg) => cfg.judge.claude_code.bin || onPath('claude');
+export const claudeBin = (cfg) => agentPath('claude', cfg);
 // claude can judge only when the backend would accept its bin and sign-in folder and it is signed in to that folder.
 const claudeReady = (cfg) => {
     const bin = claudeBin(cfg);
     const dir = cfg.judge.claude_code.config_dir;
-    return !!bin && isAbsolute(bin) && isExecutable(bin) && isAbsolute(dir) && existsSync(dir) && claudeLoggedIn(bin, realpathSync(dir));
+    return !!bin && isAbsolute(dir) && existsSync(dir) && claudeLoggedIn(bin, realpathSync(dir));
 };
 const routeOf = (agent) => (agent === 'claude' ? 'claude-code' : `answerer:${agent}`);
 const canJudge = (agent) => agent === 'claude' || ANSWERER_JUDGES.includes(agent);
@@ -231,19 +237,21 @@ export function selectJudge(cfg, found) {
     };
     const route = cfg.judge.route;
     if (route === 'auto') {
-        // The first installed agent that can judge and is not the author, at its cheap model; else the author's agent.
-        const ready = AGENTS.filter((a) => canJudge(a) && (a === 'claude' ? claudeReady(cfg) : onPath(a)));
+        // The first installed agent that can judge and is not the author, at its agent_config model; else the author's
+        // own agent at its cheap model, to be apart by model.
+        const ready = AGENTS.filter((a) => canJudge(a) && (a === 'claude' ? claudeReady(cfg) : agentPath(a, cfg)));
         const other = ready.find((a) => a !== same);
         if (other)
-            return pick(other, CHEAP_MODELS[other], 'auto');
+            return pick(other, modelFor(cfg, other), 'auto');
         if (ready.includes(same))
-            return pick(same, CHEAP_MODELS[same], 'auto');
+            return pick(same, CHEAP[same].model, 'auto');
         throw new UsageError(`judge: no installed agent can judge (judge.route auto looks for ${JUDGES.join(', ')})`, 'Install one of them, or set judge.route in ~/.done-done/config.yaml');
     }
     const agent = route === 'claude-code' ? 'claude' : route.slice('answerer:'.length);
     if (route !== 'claude-code' && !ANSWERER_JUDGES.includes(agent))
         throw new UsageError(`judge: done-done cannot judge through ${agent} yet (done-done cannot send its CLI an image)`, `Set judge.route to claude-code or answerer:<one of ${ANSWERER_JUDGES.join(', ')}>`);
-    const model = cfg.judge.model || CHEAP_MODELS[agent] || '';
+    // The author's own agent defaults to its cheap model, to be apart by model, as under auto.
+    const model = cfg.judge.model || (agent === same ? CHEAP[agent]?.model : modelFor(cfg, agent)) || '';
     if (!model)
         throw new UsageError(`judge: no model for ${route}`, `Set judge.model in ~/.done-done/config.yaml`);
     const choice = pick(agent, model, 'config');
@@ -319,6 +327,7 @@ function start(bin, argv, c, cwd, input, env) {
 }
 export async function askAgent(c) {
     const adapter = adapterFor(c.agent);
+    const argv = (d) => (adapter ? [...adapter.argv(c, d), ...(c.effort ? EFFORT_FLAGS[c.agent]?.(c.effort) ?? [] : []), ...(c.args ?? [])] : []);
     const started = Date.now();
     let dir = '';
     let cwd = c.cwd;
@@ -331,9 +340,9 @@ export async function askAgent(c) {
         cwd = c.tools === 'none' ? dir : c.cwd;
         if (!adapter)
             throw new Error(`no adapter for ${c.agent} yet`);
-        const bin = agentPath(c.agent);
+        const bin = c.path;
         if (!bin)
-            throw new Error(c.agent.startsWith('acp:') ? `${c.agent} needs acpx, and acpx is not startable; ${ACPX_INSTALL}` : `${c.agent} is not on PATH`);
+            throw new Error(c.agent.startsWith('acp:') ? `${c.agent} needs acpx, and acpx is not startable; ${ACPX_INSTALL}` : notStartable(c.agent, c.override));
         let lastError = '';
         for (;;) {
             attempts++;
@@ -342,7 +351,7 @@ export async function askAgent(c) {
             const promptText = (attempts === 1 ? c.prompt : `${c.prompt}\n\nYour previous answer was not valid (${lastError}).`) + schemaTrailer;
             if (adapter.file)
                 writeFileSync(join(dir, 'prompt.md'), promptText, { mode: 0o600 });
-            res = await start(bin, adapter.argv(c, dir), c, cwd, adapter.file ? '' : promptText, { ...process.env, ...c.env, ...adapter.env?.(c) });
+            res = await start(bin, argv(dir), c, cwd, adapter.file ? '' : promptText, { ...process.env, ...c.env, ...adapter.env?.(c) });
             if (res.error)
                 throw res.error;
             if (res.status !== 0) {
@@ -390,7 +399,7 @@ export async function askAgent(c) {
     // The record holds what ran and what came back, never the prompt text.
     const { prompt, ...call } = c;
     try {
-        const record = { ...call, cwd, prompt_bytes: Buffer.byteLength(prompt), argv: adapter?.argv(c, '<tmp>') ?? [], ms: Date.now() - started, exit: res?.status ?? null, attempts, ...out, error: failure, stderr: String(res?.stderr ?? '').slice(-2000) };
+        const record = { ...call, cwd, prompt_bytes: Buffer.byteLength(prompt), argv: argv('<tmp>'), ms: Date.now() - started, exit: res?.status ?? null, attempts, ...out, error: failure, stderr: String(res?.stderr ?? '').slice(-2000) };
         mkdirSync(dirname(c.record), { recursive: true });
         writeFileSync(c.record, `${JSON.stringify(record, null, 2)}\n`, { mode: 0o600 });
         out = { ...out, record: c.record };

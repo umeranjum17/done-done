@@ -4795,8 +4795,7 @@ if (${needs}) { console.error('missing cell env'); process.exit(1); }
 mkdirSync(root, { recursive: true });
 ${then(t)}
 `);
-  t.sh('add', '-A');
-  t.sh('commit', '-qm', 'matrix journey');
+  t.sh('add', '-A'); t.sh('commit', '-qm', 'matrix journey');
   return t;
 };
 // Captures its cell's own shot (distinct bytes per cell), refusing without the full cell env.
@@ -4827,9 +4826,7 @@ test('a matrix skip that drops every cell or matches no cell is refused when the
   const all = MATRIXED.replace('  width: [390, 1280]\n', '').replace('  theme: [light, dark]', '  theme: [dark]').replace('journeys:', '  skip:\n    - theme: dark\n      reason: ships later\njourneys:');
   const unmatched = MATRIXED.replace('journeys:', '  skip:\n    - form: phone\n      reason: no form axis\njourneys:');
   for (const [yaml, why] of [[all, 'every cell is skipped, so there is nothing to capture'], [unmatched, 'skip form=phone matches no cell'], [MATRIXED.replace('[light, dark]', '[light, dark.hc]'), 'dark.hc']]) {
-    const r = setup(yaml).dd('run', 'cells');
-    assert.equal(r.code, 2, r.out);
-    assert.ok(r.out.includes(why), r.out);
+    const r = setup(yaml).dd('run', 'cells'); assert.equal(r.code, 2, r.out); assert.ok(r.out.includes(why), r.out);
   }
 });
 
@@ -4846,8 +4843,7 @@ test('without a matrix block a run carries no manifest and sets no cell env', ()
   const t = setup();
   writeFileSync(join(t.repo, 'plain.mjs'), `import { copyFileSync, mkdirSync } from 'node:fs';\nif (['DONE_DONE_THEME', 'DONE_DONE_WIDTH', 'DONE_DONE_FORM', 'DONE_DONE_CELL'].some((k) => process.env[k] !== undefined)) process.exit(1);\nconst root = process.env.DONE_DONE_EVIDENCE_ROOT;\nmkdirSync(root, { recursive: true });\ncopyFileSync(${JSON.stringify(join(t.dir, 'screen.png'))}, root + '/plain.png');\n`);
   appendFileSync(join(t.repo, '.done-done.yaml'), '  plain:\n    command: node plain.mjs\n');
-  t.sh('add', '-A');
-  t.sh('commit', '-qm', 'plain journey');
+  t.sh('add', '-A'); t.sh('commit', '-qm', 'plain journey');
   const r = t.dd('run', 'plain');
   assert.equal(r.code, 0, r.out);
   assert.equal(toon(r).matrix, undefined);

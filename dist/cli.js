@@ -506,7 +506,7 @@ function loadRecords(cfg) {
     return readdirSync(dir).filter((n) => n.endsWith('.json')).map((n) => JSON.parse(readFileSync(join(dir, n), 'utf8'))).filter((r) => r.ended_at);
 }
 // Run a check and return its result without printing it, so `check` and `receipt` share one path.
-// run: a verify run's folder (the judge's call records go to its agents/) and the hook that starts its judge step.
+// run: a verify run's folder (the judge's call records go to its agents/), its judge-step hook, and the checkout and config it checks.
 async function runCheck(argv, run) {
     const { values, positionals } = parseArgs({
         args: argv,
@@ -519,7 +519,7 @@ async function runCheck(argv, run) {
         throw new UsageError('--from takes no file arguments; the Checks block names them');
     if (values['claim-id']?.trim() === '')
         throw new UsageError('--claim-id needs a non-empty id');
-    const repo = repoRoot();
+    const repo = run?.repo ?? repoRoot();
     let projectText = null;
     if (values['trusted-ref']) {
         try {
@@ -532,7 +532,7 @@ async function runCheck(argv, run) {
             projectText = '';
         }
     }
-    const cfg = loadConfig(repo, projectText);
+    const cfg = run?.cfg ?? loadConfig(repo, projectText);
     const now = head(repo);
     const findings = [];
     let claim;
@@ -967,8 +967,8 @@ async function agentDrive(repo, cfg, feature) {
 // With a verify skill and no journey, the next step can be an agent drive.
 const driveHint = (repo, cfg) => existsSync(join(repo, cfg.skill, 'SKILL.md'))
     ? ['Have your coding agent drive a verify skill feature: done-done verify --outcome "<what a user can now do>" [--feature <name>]'] : [];
-function drivePrompt(run, cfg, evidence, scratch) {
-    const skill = join(run.repo, cfg.skill);
+function drivePrompt(run, at, cfg, evidence, scratch) {
+    const skill = join(at, cfg.skill);
     const recipe = run.feature ? `the feature recipe ${join(skill, 'features', `${run.feature}.md`)}` : `its feature map ${join(skill, 'features', 'README.md')}, then pick the one feature the outcome is about`;
     const inst = cfg.instance ? `\n\nThe app is already running at $DONE_DONE_BASE_URL (started by done-done on its own port with its own HOME; DONE_DONE_PORT is its port). Drive that instance: do not start your own server or hard-code a port.` : '';
     return `You drive the real ${run.app} app the way a user does, to capture proof of one outcome. Someone else judges your captures.
@@ -1065,145 +1065,161 @@ async function runSteps(dir) {
             throw new Error(`journeys.${run.journey}.timeout must be a duration such as 30m or 90s, not ${timeout}`);
         if (!reused)
             set(step, 'completed');
-        let rec;
-        if (done('drive') && run.record) {
-            begin('drive');
-            rec = JSON.parse(readFileSync(run.record, 'utf8'));
-            set(step, 'completed');
-        }
-        else if (run.journey === null) {
-            // The author agent drives the feature in its own process group, so a timeout, an abort or a dead runner stops it
-            // and the app it launched; a drive that changed tracked files would prove code that is not committed.
-            begin('drive');
-            const author = run.author;
-            rec = { ...openRun(run.repo, cfg, null, null, run.run_id), author };
-            const evidence = runDir(cfg, rec.run_id);
-            const tracked = () => sha256(execFileSync('git', ['diff', 'HEAD', '--binary'], { cwd: run.repo, maxBuffer: Infinity, stdio: ['ignore', 'pipe', 'pipe'] }));
-            const before = tracked();
-            const scratch = join(dir, 'tmp');
-            mkdirSync(scratch, { recursive: true });
-            // With an instance block the app is already running at $DONE_DONE_BASE_URL; the drive uses it, never a fixed port.
-            // The agent keeps its own HOME and XDG folders (its login lives there); only the app runs isolated.
-            let instPort = {};
-            if (cfg.instance) {
-                try {
-                    const inst = await startInstance(run.repo, cfg.instance, rec.run_id, scratch, process.env, join(dir, 'logs', 'instance.log'));
-                    run.runner.instance_pgid = inst.pgid;
-                    saveRun(dir, run);
-                    instPort = { DONE_DONE_PORT: inst.env.DONE_DONE_PORT, DONE_DONE_BASE_URL: inst.env.DONE_DONE_BASE_URL };
-                }
-                catch (e) {
-                    return finish('fail', `drive: instance: ${e.message}`);
-                }
+        // One drive, check and judge of the claim at `at`: the user's checkout, or (`fix` names the re-run) a fix worktree.
+        const pass = async (at, fix = '') => {
+            const id = fix ? `${run.run_id}-${fix}` : run.run_id;
+            const fail = (reason, result = 'fail') => ({ end: { result, reason: `drive: ${reason}` }, asks: [] });
+            let rec;
+            if (!fix && done('drive') && run.record) {
+                begin('drive');
+                rec = JSON.parse(readFileSync(run.record, 'utf8'));
+                set(step, 'completed');
             }
-            const a = await askAgent({
-                ...agentRun(cfg, author.agent, author.model), prompt: drivePrompt(run, cfg, evidence, scratch), schema: DRIVE_SCHEMA, cwd: run.repo, tools: 'edit',
-                record: join(dir, 'agents', 'drive.json'), dirs: [evidence, scratch], env: { DONE_DONE_RUN_ID: rec.run_id, DONE_DONE_DRIVE: rec.run_id, DONE_DONE_EVIDENCE_ROOT: evidence, TMPDIR: scratch, ...instPort },
-                onSpawn: spawned,
-            });
-            if (run.runner?.instance_pgid)
-                stopInstance(run.runner.instance_pgid);
-            const answer = a.answer;
-            const blocker = String(answer?.blocker ?? '').trim();
-            rec.exit = a.ok && !blocker ? 0 : 1;
-            const changed = tracked() !== before;
-            const sealed = closeRun(run.repo, cfg, rec);
-            run.record = join(recordsDir(cfg), `${rec.run_id}.json`);
-            const picked = typeof answer?.feature === 'string' ? answer.feature.replace(/^.*features\//, '').replace(/\.md$/, '') : '';
-            if (skillFeatures(run.repo, cfg).includes(picked))
-                run.feature ??= picked;
-            log('drive', { agent: author.agent, model: author.model, feature: run.feature ?? 'none', ...(a.ok ? { captures: answer?.captures, blocker } : { error: a.error }), record: a.record ?? a.recordError });
-            const why = !a.ok ? `${author.agent} did not finish the drive: ${a.error}`
-                : blocker ? `${author.agent} could not drive the feature: ${blocker}`
-                    : changed ? `${author.agent} changed tracked files in the repo during the drive (see git status), so its captures are not of the committed code`
-                        : sealed.code !== PASS ? sealed.reason : '';
-            set(step, why ? 'failed' : 'completed', { exit: rec.exit, outputs: evidenceOf(run.repo, cfg, rec) });
-            if (why)
-                return finish('fail', `drive: ${why}`);
-        }
-        else {
-            begin('drive');
-            rec = openRun(run.repo, cfg, run.journey, command.replaceAll('${RUN_ID}', run.run_id), run.run_id);
-            const fd = openSync(join(dir, 'logs', 'drive.log'), 'a');
-            // With an instance block the app starts first on its own port; the journey talks to $DONE_DONE_BASE_URL.
-            let instEnv = {};
-            if (cfg.instance) {
-                try {
-                    const scratch = join(dir, 'tmp');
-                    mkdirSync(scratch, { recursive: true });
-                    const inst = await startInstance(run.repo, cfg.instance, rec.run_id, scratch, process.env, join(dir, 'logs', 'instance.log'));
-                    run.runner.instance_pgid = inst.pgid;
-                    instEnv = inst.env;
+            else if (run.journey === null) {
+                // The author agent drives the feature in its own process group, so a timeout, an abort or a dead runner stops it
+                // and the app it launched; a drive that changed tracked files would prove code that is not committed.
+                begin('drive');
+                const author = run.author;
+                rec = { ...openRun(at, cfg, null, null, id), author };
+                const evidence = runDir(cfg, rec.run_id);
+                const tracked = () => sha256(execFileSync('git', ['diff', 'HEAD', '--binary'], { cwd: at, maxBuffer: Infinity, stdio: ['ignore', 'pipe', 'pipe'] }));
+                const before = tracked();
+                const scratch = join(dir, 'tmp');
+                mkdirSync(scratch, { recursive: true });
+                // With an instance block the app is already running at $DONE_DONE_BASE_URL; the drive uses it, never a fixed port.
+                // The agent keeps its own HOME and XDG folders (its login lives there); only the app runs isolated.
+                let instPort = {};
+                if (cfg.instance) {
+                    try {
+                        const inst = await startInstance(at, cfg.instance, rec.run_id, scratch, process.env, join(dir, 'logs', `${fix}instance.log`));
+                        run.runner.instance_pgid = inst.pgid;
+                        saveRun(dir, run);
+                        instPort = { DONE_DONE_PORT: inst.env.DONE_DONE_PORT, DONE_DONE_BASE_URL: inst.env.DONE_DONE_BASE_URL };
+                    }
+                    catch (e) {
+                        return fail(`instance: ${e.message}`);
+                    }
                 }
-                catch (e) {
-                    closeSync(fd);
-                    return finish('fail', `drive: instance: ${e.message}`);
-                }
+                const a = await askAgent({
+                    ...agentRun(cfg, author.agent, author.model), prompt: drivePrompt(run, at, cfg, evidence, scratch), schema: DRIVE_SCHEMA, cwd: at, tools: 'edit',
+                    record: join(dir, 'agents', `${fix}drive.json`), dirs: [evidence, scratch], env: { DONE_DONE_RUN_ID: rec.run_id, DONE_DONE_DRIVE: rec.run_id, DONE_DONE_EVIDENCE_ROOT: evidence, TMPDIR: scratch, ...instPort },
+                    onSpawn: spawned,
+                });
+                if (run.runner?.instance_pgid)
+                    stopInstance(run.runner.instance_pgid);
+                const answer = a.answer;
+                const blocker = String(answer?.blocker ?? '').trim();
+                rec.exit = a.ok && !blocker ? 0 : 1;
+                const changed = tracked() !== before;
+                const sealed = closeRun(at, cfg, rec);
+                if (!fix)
+                    run.record = join(recordsDir(cfg), `${rec.run_id}.json`);
+                const picked = typeof answer?.feature === 'string' ? answer.feature.replace(/^.*features\//, '').replace(/\.md$/, '') : '';
+                if (skillFeatures(at, cfg).includes(picked))
+                    run.feature ??= picked;
+                log('drive', { agent: author.agent, model: author.model, feature: run.feature ?? 'none', ...(a.ok ? { captures: answer?.captures, blocker } : { error: a.error }), record: a.record ?? a.recordError });
+                const why = !a.ok ? `${author.agent} did not finish the drive: ${a.error}`
+                    : blocker ? `${author.agent} could not drive the feature: ${blocker}`
+                        : changed ? `${author.agent} changed tracked files in the repo during the drive (see git status), so its captures are not of the committed code`
+                            : sealed.code !== PASS ? sealed.reason : '';
+                set(step, why ? 'failed' : 'completed', { exit: rec.exit, outputs: evidenceOf(run.repo, cfg, rec) });
+                if (why)
+                    return fail(why);
             }
-            // An async child keeps the heartbeat going while the journey runs. The journey gets its own process group, so a
-            // timeout or a dead runner can kill it and everything it started.
-            const child = spawn(rec.command, { cwd: run.repo, shell: true, detached: true, stdio: ['ignore', fd, fd], env: { ...process.env, DONE_DONE_RUN_ID: rec.run_id, DONE_DONE_EVIDENCE_ROOT: runDir(cfg, rec.run_id), ...instEnv } });
-            run.runner.journey_pgid = child.pid;
-            saveRun(dir, run);
-            let timedOut = false;
-            const timer = setTimeout(() => {
-                timedOut = true;
-                killGroup(child.pid);
-            }, limit);
-            rec.exit = await new Promise((done) => child.on('close', (code) => done(code ?? 1)));
-            clearTimeout(timer);
-            closeSync(fd);
-            if (run.runner?.instance_pgid)
-                stopInstance(run.runner.instance_pgid);
-            const sealed = closeRun(run.repo, cfg, rec);
-            run.record = join(recordsDir(cfg), `${rec.run_id}.json`);
-            set(step, sealed.code === PASS ? 'completed' : 'failed', { exit: rec.exit, outputs: evidenceOf(run.repo, cfg, rec) });
-            if (timedOut)
-                return finish('inconclusive', `drive: journey timed out after ${timeout}`);
-            if (sealed.code !== PASS)
-                return finish('fail', `drive: ${sealed.reason}`);
-        }
-        begin('check');
-        const files = rec.files.map((f) => join(cfg.evidence.root, f.path));
-        // The check's own findings end the check step; the judge, when on and the check did not fail, is its own step.
-        let checkFindings = 0;
-        const judging = (code, findings) => {
-            checkFindings = findings.length;
-            set(step, code === PASS ? 'completed' : 'failed', { exit: code, findings });
-            begin('judge');
+            else {
+                begin('drive');
+                rec = openRun(at, cfg, run.journey, command.replaceAll('${RUN_ID}', id), id);
+                const fd = openSync(join(dir, 'logs', `${fix}drive.log`), 'a');
+                // With an instance block the app starts first on its own port; the journey talks to $DONE_DONE_BASE_URL.
+                let instEnv = {};
+                if (cfg.instance) {
+                    try {
+                        const scratch = join(dir, 'tmp');
+                        mkdirSync(scratch, { recursive: true });
+                        const inst = await startInstance(at, cfg.instance, rec.run_id, scratch, process.env, join(dir, 'logs', `${fix}instance.log`));
+                        run.runner.instance_pgid = inst.pgid;
+                        instEnv = inst.env;
+                    }
+                    catch (e) {
+                        closeSync(fd);
+                        return fail(`instance: ${e.message}`);
+                    }
+                }
+                // An async child keeps the heartbeat going while the journey runs. The journey gets its own process group, so a
+                // timeout or a dead runner can kill it and everything it started.
+                const child = spawn(rec.command, { cwd: at, shell: true, detached: true, stdio: ['ignore', fd, fd], env: { ...process.env, DONE_DONE_RUN_ID: rec.run_id, DONE_DONE_EVIDENCE_ROOT: runDir(cfg, rec.run_id), ...instEnv } });
+                run.runner.journey_pgid = child.pid;
+                saveRun(dir, run);
+                let timedOut = false;
+                const timer = setTimeout(() => {
+                    timedOut = true;
+                    killGroup(child.pid);
+                }, limit);
+                rec.exit = await new Promise((done) => child.on('close', (code) => done(code ?? 1)));
+                clearTimeout(timer);
+                closeSync(fd);
+                if (run.runner?.instance_pgid)
+                    stopInstance(run.runner.instance_pgid);
+                const sealed = closeRun(at, cfg, rec);
+                if (!fix)
+                    run.record = join(recordsDir(cfg), `${rec.run_id}.json`);
+                set(step, sealed.code === PASS ? 'completed' : 'failed', { exit: rec.exit, outputs: evidenceOf(run.repo, cfg, rec) });
+                if (timedOut)
+                    return fail(`journey timed out after ${timeout}`, 'inconclusive');
+                if (sealed.code !== PASS)
+                    return fail(sealed.reason);
+            }
+            begin('check');
+            const files = rec.files.map((f) => join(cfg.evidence.root, f.path));
+            // The check's own findings end the check step; the judge, when on and the check did not fail, is its own step.
+            let checkFindings = 0;
+            const judging = (code, findings) => {
+                checkFindings = findings.length;
+                set(step, code === PASS ? 'completed' : 'failed', { exit: code, findings });
+                begin('judge');
+            };
+            // A fix worktree is detached, so it checks for the claim id of the user's branch.
+            const claimId = run.claim_id ?? (fix ? git(run.repo, 'branch', '--show-current') : null);
+            const checked = await runCheck(['--outcome', run.claim, ...files, ...(claimId ? ['--claim-id', claimId] : [])], { dir, judge: !!run.judge, judging, author: run.author, repo: at, cfg });
+            const logged = { ...checked.result, findings: checked.findings };
+            delete logged.findings_omitted;
+            log('check', logged);
+            const judgeRan = step.name === 'judge';
+            const judgeFindings = judgeRan ? checked.findings.slice(checkFindings) : [];
+            if (judgeRan) {
+                log('judge', checked.judge);
+                set(step, judgeFindings.length ? 'failed' : 'completed', { exit: judgeFindings.length ? checked.code : PASS, findings: judgeFindings });
+            }
+            else
+                set(step, checked.code === PASS ? 'completed' : 'failed', { exit: checked.code, findings: checked.findings });
+            // The gate: when the check itself is clean but the judge did not pass a capture (or judged none of an agent's), the run
+            // waits for the caller (respond), who can move it on but never make it a pass. The runner ends here.
+            const clean = judgeRan ? checkFindings === 0 : checked.code === PASS;
+            const notJudged = judgeRan && run.journey === null ? (checked.judge?.not_judged ?? []) : [];
+            const asks = !clean ? [] : judgeRan ? [...judgeFindings, ...notJudged.map((name) => ({ level: 'inconclusive', why: `${name}: the judge did not read this capture, and an agent drive passes only with a judge pass on every capture` }))]
+                : run.journey !== null ? []
+                    : run.judge ? [{ level: 'inconclusive', why: 'the judge judged no capture (only PNG and JPEG captures are judged), and an agent drive passes only with a judge pass' }]
+                        : [{ level: 'inconclusive', why: 'the judge is off (--no-judge), and an agent drive passes only with a judge pass' }];
+            if (asks.length)
+                return { checked, asks };
+            if (checked.code !== PASS)
+                return { checked, end: { result: checked.code === FAIL ? 'fail' : 'inconclusive', reason: `${judgeFindings.length ? 'judge' : 'check'}: ${(judgeFindings[0] ?? checked.findings[0])?.why ?? 'did not pass'}` }, asks: [] };
+            return { checked, asks: [] };
         };
-        const checked = await runCheck(['--outcome', run.claim, ...files, ...(run.claim_id ? ['--claim-id', run.claim_id] : [])], { dir, judge: !!run.judge, judging, author: run.author });
-        const logged = { ...checked.result, findings: checked.findings };
-        delete logged.findings_omitted;
-        log('check', logged);
-        const judgeRan = step.name === 'judge';
-        const judgeFindings = judgeRan ? checked.findings.slice(checkFindings) : [];
-        if (judgeRan) {
-            log('judge', checked.judge);
-            set(step, judgeFindings.length ? 'failed' : 'completed', { exit: judgeFindings.length ? checked.code : PASS, findings: judgeFindings });
-        }
-        else
-            set(step, checked.code === PASS ? 'completed' : 'failed', { exit: checked.code, findings: checked.findings });
-        // The gate: when the check itself is clean but the judge did not pass a capture (or judged none of an agent's), the run
-        // waits for the caller (respond), who can move it on but never make it a pass. The runner ends here.
-        const clean = judgeRan ? checkFindings === 0 : checked.code === PASS;
-        const notJudged = judgeRan && run.journey === null ? (checked.judge?.not_judged ?? []) : [];
-        const asks = !clean ? [] : judgeRan ? [...judgeFindings, ...notJudged.map((name) => ({ level: 'inconclusive', why: `${name}: the judge did not read this capture, and an agent drive passes only with a judge pass on every capture` }))]
-            : run.journey !== null ? []
-                : run.judge ? [{ level: 'inconclusive', why: 'the judge judged no capture (only PNG and JPEG captures are judged), and an agent drive passes only with a judge pass' }]
-                    : [{ level: 'inconclusive', why: 'the judge is off (--no-judge), and an agent drive passes only with a judge pass' }];
-        if (asks.length) {
+        const p = await pass(run.repo);
+        if (p.asks.length) {
             begin('gate');
-            const findings = asks.map((f, i) => ({ id: `gate-${i + 1}`, severity: f.level === 'fail' ? 'error' : 'warning', what: f.why, action: 'ask-user' }));
+            const findings = p.asks.map((f, i) => ({ id: `gate-${i + 1}`, severity: f.level === 'fail' ? 'error' : 'warning', what: f.why, action: 'ask-user' }));
+            const checked = p.checked;
             run.gate = { findings, cited: checked.cited, head: { commit: checked.head.commit, tree: checked.head.tree }, ...(checked.judgeBlock && { judge: checked.judgeBlock }) };
             run.status = 'awaiting_approval';
             set(step, 'awaiting_approval', { findings });
             return;
         }
-        if (checked.code !== PASS)
-            return finish(checked.code === FAIL ? 'fail' : 'inconclusive', `${judgeFindings.length ? 'judge' : 'check'}: ${(judgeFindings[0] ?? checked.findings[0])?.why ?? 'did not pass'}`);
+        if (p.end)
+            return finish(p.end.result, p.end.reason);
         begin('receipt');
-        const receipt = recordReceipt(run.repo, cfg, checked);
+        const receipt = recordReceipt(run.repo, cfg, p.checked);
         log('receipt', receipt.result);
         run.receipt = receipt.result.receipt;
         set(step, receipt.code === PASS ? 'completed' : 'failed', { exit: receipt.code });

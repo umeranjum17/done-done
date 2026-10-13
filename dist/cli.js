@@ -1196,7 +1196,7 @@ async function runSteps(dir) {
                 if (timedOut)
                     return fail(`journey timed out after ${timeout}`, [], 'inconclusive');
                 if (sealed.code !== PASS)
-                    return fail(sealed.reason, /^the run command exited/.test(sealed.reason) ? [{ kind: 'drive', file: run.journey, what: `the journey ${sealed.reason}; the end of its output:\n${readFileSync(logFile, 'utf8').slice(-2000)}` }] : []);
+                    return fail(sealed.reason, tries && /^the run command exited/.test(sealed.reason) ? [{ kind: 'drive', file: run.journey, what: `the journey ${sealed.reason}; the end of its output:\n${readFileSync(logFile, 'utf8').slice(-2000)}` }] : []);
             }
             begin('check');
             const files = rec.files.map((f) => join(cfg.evidence.root, f.path));

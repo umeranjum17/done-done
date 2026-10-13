@@ -1199,7 +1199,7 @@ async function runSteps(dir: string): Promise<void> {
     if (!fix) run.record = join(recordsDir(cfg), `${rec.run_id}.json`);
     set(step!, sealed.code === PASS ? 'completed' : 'failed', { exit: rec.exit, outputs: evidenceOf(run.repo, cfg, rec) });
     if (timedOut) return fail(`journey timed out after ${timeout}`, [], 'inconclusive');
-    if (sealed.code !== PASS) return fail(sealed.reason, /^the run command exited/.test(sealed.reason) ? [{ kind: 'drive', file: run.journey!, what: `the journey ${sealed.reason}; the end of its output:\n${readFileSync(logFile, 'utf8').slice(-2000)}` }] : []);
+    if (sealed.code !== PASS) return fail(sealed.reason, tries && /^the run command exited/.test(sealed.reason) ? [{ kind: 'drive', file: run.journey!, what: `the journey ${sealed.reason}; the end of its output:\n${readFileSync(logFile, 'utf8').slice(-2000)}` }] : []);
     }
 
     begin('check');

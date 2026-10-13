@@ -271,6 +271,7 @@ export function selectJudge(cfg: Config, found: { agent: string; model: string; 
   if (Object.hasOwn(KEY_ROUTES, route)) {
     if (!cfg.judge.model) throw new UsageError(`judge: judge.route ${route} needs judge.model, a model your key can use that reads images`, 'Set judge.model in ~/.done-done/config.yaml');
     choice = pick(route, cfg.judge.model, 'config', route);
+    if (author.model && cfg.judge.model === author.model) choice.independence = 'session-only';
   } else {
     const agent = route === 'claude-code' ? 'claude' : route.slice('answerer:'.length);
     if (route !== 'claude-code' && !ANSWERER_JUDGES.includes(agent)) throw new UsageError(`judge: done-done cannot judge through ${agent} yet (done-done cannot send its CLI an image with every tool off)`, `Set judge.route to claude-code or answerer:<one of ${ANSWERER_JUDGES.join(', ')}>`);

@@ -1992,6 +1992,10 @@ globalThis.fetch = async (url, init) => {
   writeFileSync(join(t.env.DONE_DONE_HOME, 'config.yaml'), 'agent: claude\njudge:\n  route: openai:key\n');
   const noModel = toon(doctorIn(t.repo, doctorEnv, 'doctor')).checks.find((c) => c.check === 'judge_choice');
   assert.deepEqual([noModel.status, noModel.detail], ['missing', 'judge: judge.route openai:key needs judge.model, a model your key can use that reads images']);
+  writeFileSync(join(env.PATH, 'codex'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+  writeFileSync(join(t.env.DONE_DONE_HOME, 'config.yaml'), 'agent: codex\nagent_config:\n  codex:\n    model: vision-test-1\njudge:\n  route: openai:key\n  model: vision-test-1\n');
+  const sameModel = toon(doctorIn(t.repo, { ...env, OPENAI_API_KEY: key }, 'doctor')).checks.find((c) => c.check === 'judge_choice');
+  assert.deepEqual([sameModel.status, sameModel.detail, sameModel.fix], ['missing', "judge: judge.route openai:key at model vision-test-1 is the author's own agent and model (codex), and the judge is never the agent that did the work", 'Set judge.route or judge.model to another agent or model, or set judge.allow_same: true in ~/.done-done/config.yaml to accept a fresh session of the same one']);
 });
 
 test('auto judge skips a claude judge with no sign-in folder, so doctor and verify judge through opencode', () => {

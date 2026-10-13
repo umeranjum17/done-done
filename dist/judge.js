@@ -25,7 +25,7 @@ const QUESTION = {
 // The answer the answerer asks its agent for: the kit's reply shape for each choice question.
 const answerSchema = (questions) => ({
     type: 'object',
-    properties: Object.fromEntries(Object.entries(questions).map(([k, q]) => [k, { type: 'object', properties: { probabilities: { type: 'object', properties: Object.fromEntries(Object.keys(q.kind === 'choice' ? q.options : {}).map((o) => [o, { type: 'number' }])) }, rationale: { type: 'string' }, personReason: { type: 'string' } }, required: ['probabilities'] }])),
+    properties: Object.fromEntries(Object.entries(questions).map(([k, q]) => [k, { type: 'object', properties: { probabilities: { type: 'object', properties: Object.fromEntries(Object.keys(q.kind === 'choice' ? q.options : {}).map((o) => [o, { type: 'number', minimum: 0, maximum: 1 }])), required: Object.keys(q.kind === 'choice' ? q.options : {}) }, rationale: { type: 'string' }, personReason: { type: 'string' } }, required: ['probabilities'] }])),
     required: Object.keys(questions),
 });
 export function isExecutable(path) {
@@ -103,6 +103,12 @@ export async function backend(cfg, choice, record = () => '', questions = { rele
             throw new UsageError(`judge: ${notStartable(choice.agent, override)}`, `Install ${choice.agent}, or ask the user for another judge and save it: done-done init --judge <agent> --judge-model <model>`);
         const { answerer, resolve } = await kit();
         let lastError = '';
+        // An answer the kit cannot read (all-zero probabilities, an option left out) would abstain on every question as if
+        // the judge were unsure, so it is asked again like any malformed answer.
+        const check = (answer) => {
+            const bad = Object.entries(questions).filter(([k, q]) => /^(malformed|no answer)/.test(resolve(q, answer[k]).reason ?? '')).map(([k]) => k);
+            return bad.length ? `no probabilities for ${bad.join(', ')} that are each 0 to 1 and sum to 1: ${JSON.stringify(answer).slice(0, 200)}` : '';
+        };
         // The kit hides a failed call's message from the verdict, so the real cause is kept here for the result.
         const ask = answerer({
             name: choice.route,
@@ -112,7 +118,7 @@ export async function backend(cfg, choice, record = () => '', questions = { rele
                 lastError = '';
                 const attached = images.map((img) => ({ name: `${img.id}.${img.mime.split('/')[1]}`, bytes: Buffer.from(img.dataUrl.slice(img.dataUrl.indexOf(',') + 1), 'base64') }));
                 // A tool-less call runs in its own scratch folder, so the CLI sees the attached capture and nothing else.
-                const a = await askAgent({ ...run, prompt, schema: answerSchema(questions), cwd: tmpdir(), tools: 'none', attempts, record: record(), images: attached });
+                const a = await askAgent({ ...run, prompt, schema: answerSchema(questions), check, cwd: tmpdir(), tools: 'none', attempts, record: record(), images: attached });
                 lastError = a.ok ? '' : a.error ?? 'no answer';
                 if (!a.ok)
                     throw new Error(lastError);

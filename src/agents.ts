@@ -26,6 +26,7 @@ export type AgentCall = {
   record: string; // where the call record is written
   images?: { name: string; bytes: Buffer }[]; // attached to the prompt for the answerer judge, written into the call's scratch folder
   attempts?: number; // asks allowed for a bad tool-less answer, default ASK_ATTEMPTS
+  check?: (answer: Record<string, unknown>) => string; // what is wrong with an answer the schema check passed, '' when nothing
   dirs?: string[]; // folders outside cwd an edit step may write (the run's evidence folder)
   env?: Record<string, string>; // extra environment for the agent
   onSpawn?: (pgid: number) => void; // an edit step runs in its own process group; this gets its id
@@ -380,6 +381,8 @@ export async function askAgent(c: AgentCall): Promise<AgentAnswer> {
         if (!answer || typeof answer !== 'object' || Array.isArray(answer)) throw new Error(`the answer is not a JSON object: ${JSON.stringify(answer)}`);
         const missing = (c.schema.required ?? []).filter((k) => !(k in answer));
         if (missing.length) throw new Error(`the answer does not match the schema (missing ${missing.join(', ')}): ${JSON.stringify(answer).slice(0, 200)}`);
+        const wrong = c.check?.(answer as Record<string, unknown>);
+        if (wrong) throw new Error(wrong);
         out = { ok: true, answer: answer as Record<string, unknown> };
         break;
       } catch (e) {

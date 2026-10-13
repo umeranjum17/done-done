@@ -2369,6 +2369,41 @@ test('design fails a screen on each defect the judge names, alone or next to its
   assert.match(toon(design(answer(), 'gone.png')).error, /gone\.png: cannot read \(ENOENT\)/);
 });
 
+// A cheap model sometimes answers every kind with all-zero probabilities: that is a malformed answer to ask again, not
+// a judge unsure of all six kinds, so the same screen gets the same verdict on every run.
+test('design asks again when the judge answers with probabilities it cannot read, and never calls that unsure', () => {
+  const t = setup();
+  mkdirSync(t.env.DONE_DONE_HOME, { recursive: true });
+  writeFileSync(join(t.env.DONE_DONE_HOME, 'config.yaml'), 'agent: claude\njudge:\n  route: answerer:opencode\n');
+  const kinds = ['aspect', 'clipped-text', 'overlap', 'off-screen', 'blank-strip', 'layout'];
+  const answer = (p) => JSON.stringify(Object.fromEntries(kinds.map((k) => [k, { probabilities: p, rationale: '' }])));
+  // The stub opencode gives its answers in turn, the last one from then on.
+  const design = (...replies) => {
+    const s = stubAgents(t.env);
+    symlinkSync(process.execPath, join(s.bin, 'node'));
+    writeFileSync(join(s.bin, 'replies.json'), JSON.stringify(replies));
+    const oc = join(s.bin, 'opencode');
+    writeFileSync(oc, readFileSync(oc, 'utf8').replace(/^console\.log\('mise[\s\S]*$/m, `const replies = JSON.parse(readFileSync(${JSON.stringify(join(s.bin, 'replies.json'))}, 'utf8'));
+console.log(JSON.stringify({ type: 'text', part: { type: 'text', text: replies[Math.min(readFileSync(${JSON.stringify(join(s.bin, 'calls.jsonl'))}, 'utf8').trim().split('\\n').length, replies.length) - 1] } }));`));
+    const r = spawnSync(process.execPath, [CLI, 'design', 'screen.png'], { cwd: t.dir, env: s.env, encoding: 'utf8' });
+    return { code: r.status, out: r.stdout + r.stderr, calls: s.calls() };
+  };
+  const zero = answer({ defect: 0, none: 0 });
+  const again = design(zero, answer({ defect: 0.02, none: 0.98 }));
+  assert.equal(again.code, 0, again.out);
+  assert.equal(toon(again).screens[0].verdict, 'pass');
+  assert.equal(again.calls.length, 2, 'the all-zero answer is asked once more');
+  assert.match(again.calls[1].file, /Your previous answer was not valid \(no probabilities for aspect, clipped-text, overlap, off-screen, blank-strip, layout that are each 0 to 1 and sum to 1/);
+  const never = design(zero);
+  assert.equal(never.code, 3, never.out);
+  assert.equal(never.calls.length, 2);
+  assert.match(toon(never).screens[0].reason, /^the judge did not answer: the agent did not answer with valid JSON after 2 tries: no probabilities for aspect, /);
+  // One kind left without an option is malformed too, and only that kind is named.
+  const partial = JSON.parse(answer({ defect: 0.02, none: 0.98 }));
+  partial.layout.probabilities = { defect: 0.02 };
+  assert.match(toon(design(JSON.stringify(partial))).screens[0].reason, /valid JSON after 2 tries: no probabilities for layout that/);
+});
+
 test('design measures a blank strip along an edge, but not a nav rail with icons or a uniform frame', () => {
   const t = setup();
   mkdirSync(t.env.DONE_DONE_HOME, { recursive: true });

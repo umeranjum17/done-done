@@ -374,6 +374,9 @@ export async function askAgent(c) {
                 const missing = (c.schema.required ?? []).filter((k) => !(k in answer));
                 if (missing.length)
                     throw new Error(`the answer does not match the schema (missing ${missing.join(', ')}): ${JSON.stringify(answer).slice(0, 200)}`);
+                const wrong = c.check?.(answer);
+                if (wrong)
+                    throw new Error(wrong);
                 out = { ok: true, answer: answer };
                 break;
             }

@@ -9,7 +9,7 @@ import { createInterface } from 'node:readline/promises';
 import { parseArgs } from 'node:util';
 import { encode } from '@toon-format/toon';
 import { Document, parseDocument } from 'yaml';
-import { ACPX_INSTALL, agentChoices, agentRun, askAgent, editOnlyReason, findBin, JUDGES, modelFor, noAgent, noJudge, notStartable, routeOf, selectAgent, selectJudge } from './agents.js';
+import { ACPX_INSTALL, agentChoices, agentPath, agentRun, askAgent, editOnlyReason, findBin, JUDGES, modelFor, noAgent, noJudge, notStartable, routeOf, selectAgent, selectJudge } from './agents.js';
 import { AGENTS, CHEAP, globalConfigText, home, isAgent, loadConfig, parseDuration, UsageError } from './config.js';
 import { backend, judge, judgeable, onPath, quote } from './judge.js';
 import { maintainSteps, refuseSameSession } from './maintain.js';
@@ -59,7 +59,7 @@ const DOCTOR_TEXT = `doctor changes nothing except the --probe call record (the 
   set, with the command that saves the user's choice), agent_settings (agent, model, effort,
   args, path and agent_timeout, each with the file it came from: the global config, .done-done.yaml or default), judge (the judge route is ready: for claude-code an
   executable claude binary, a sign-in folder and the judge kit, for answerer:<agent> that agent's CLI and the kit, for openai:key
-  OPENAI_API_KEY and the kit; the model is never called; missing when none is set, with the command that saves the user's choice),
+  OPENAI_API_KEY and the kit; doctor does not call the model; missing when none is set, with the command that saves the user's choice),
   judge_choice (the judge, and how far it is from the author: another agent, another model, or session-only), ffprobe (video evidence only).
   --probe also asks the agent one JSON-schema question (one call at the agent's model: its cheap default where it has one, else its own; set agent_config.<agent>.model to choose; its record goes to
   $DONE_DONE_HOME/agents/) and then requires a valid answer.
@@ -214,7 +214,7 @@ const COMMANDS = {
     },
 };
 const rows = (pairs, width = Math.max(...pairs.map(([a]) => a.length)) + 3) => pairs.map(([a, b]) => `  ${a}${' '.repeat(Math.max(3, width - a.length))}${b}`).join('\n');
-const GLOBAL_TEXT = `global flags: --json (JSON instead of TOON), --full (do not truncate lists), --help (this command's usage)
+const GLOBAL_TEXT = `global flags: --json (JSON instead of TOON), --full (do not truncate lists), --help (this command's usage), --version (done-done's version)
 exit codes: 0 pass, 1 fail (also a run overridden at its gate), 2 usage or config error, 3 inconclusive, 4 the run is still running or a verify run waits at its gate (verify, maintain, rerun, status, respond)`;
 const USAGE_TEXT = `install: npm install -g --prefix ~/.local --allow-git=all github:umeranjum17/done-done-axi (installs done-done-axi and done-done), or run npx -y --allow-git=all github:umeranjum17/done-done-axi <command>
 usage:
@@ -463,7 +463,7 @@ function claimFromChecks(body, title, repo, cfg, out) {
 // A PR body also names its head branch, which is the claim a CI checkout (a detached HEAD) is checking.
 function readSource(from) {
     if (from === '-')
-        return { body: readFileSync(0, 'utf8'), title: '' };
+        return { body: readFileSync(0, 'utf8') };
     if (/^https?:\/\//.test(from)) {
         const r = spawnSync('gh', ['pr', 'view', from, '--json', 'body,title,headRefName'], { encoding: 'utf8' });
         if (r.error || r.status !== 0)
@@ -472,7 +472,7 @@ function readSource(from) {
         return { body: pr.body, title: pr.title, branch: pr.headRefName };
     }
     try {
-        return { body: readFileSync(from, 'utf8'), title: '' };
+        return { body: readFileSync(from, 'utf8') };
     }
     catch (e) {
         throw new UsageError(`cannot read ${from}: ${e.message}`);
@@ -524,7 +524,9 @@ async function runCheck(argv, run) {
     else {
         const src = readSource(values.from);
         prBranch = src.branch;
-        claim = claimFromChecks(src.body, src.title, repo, cfg, findings);
+        // A local file or stdin has no PR title: its own first heading, else the HEAD commit subject, is the title.
+        const title = src.title ?? src.body.match(/^#\s+(.+)$/m)?.[1] ?? git(repo, 'log', '-1', '--format=%s');
+        claim = claimFromChecks(src.body, title, repo, cfg, findings);
     }
     if (claim?.notProven) {
         const allowed = cfg.checks.not_proven === 'allow' && cfg.trusted;
@@ -690,10 +692,7 @@ function verifyReceipt(repo, cfg, headArg) {
     }
     const short = commit.slice(0, 12);
     const path = join(receiptsDir(cfg), `${commit}.json`);
-    const fail = (reason) => {
-        emit({ command: 'receipt', result: 'fail', head: commit, reason, help: ['Record a passing check for this head: done-done receipt --from <file|->'] });
-        return FAIL;
-    };
+    const fail = (reason) => ({ code: FAIL, result: { command: 'receipt', result: 'fail', head: commit, reason, help: ['Record a passing check for this head: done-done receipt --from <file|->'] } });
     if (!existsSync(path))
         return fail(`no receipt for ${short} in ${receiptsDir(cfg)}`);
     let rec;
@@ -720,8 +719,7 @@ function verifyReceipt(repo, cfg, headArg) {
     if (overridden) {
         if (rec.schema !== 2 || !o || typeof o !== 'object' || !['approve', 'skip'].includes(o.action) || typeof o.by !== 'string' || typeof o.reason !== 'string' || !o.reason)
             return fail(`receipt for ${short} has a malformed override`);
-        emit({ command: 'receipt', result: 'overridden', head: commit, claim: rec.claim, override: o, judge: j, help: [`This head is not proven: the judge did not pass it, and ${o.by} chose ${o.action} (${o.reason})`, 'Capture proof the judge passes, then: done-done verify --outcome "<what a user can now do>"'] });
-        return FAIL;
+        return { code: FAIL, result: { command: 'receipt', result: 'overridden', head: commit, claim: rec.claim, override: o, judge: j, help: [`This head is not proven: the judge did not pass it, and ${o.by} chose ${o.action} (${o.reason})`, 'Capture proof the judge passes, then: done-done verify --outcome "<what a user can now do>"'] } };
     }
     if (rec.head !== commit)
         return fail(`receipt records head ${String(rec.head).slice(0, 12)}, not ${short}`);
@@ -748,8 +746,7 @@ function verifyReceipt(repo, cfg, headArg) {
     }
     if (bad.length)
         return fail(`cited evidence no longer matches the receipt: ${bad.join('; ')}`);
-    emit({ command: 'receipt', result: 'pass', head: commit, tree: rec.tree, claim: rec.claim, files: rec.files.length, at: rec.at, schema: rec.schema, ...(rec.schema === 2 && { judge: j }), help: ['This receipt is valid for this head.'] });
-    return PASS;
+    return { code: PASS, result: { command: 'receipt', result: 'pass', head: commit, tree: rec.tree, claim: rec.claim, files: rec.files.length, at: rec.at, schema: rec.schema, ...(rec.schema === 2 && { judge: j }), help: ['This receipt is valid for this head.'] } };
 }
 async function cmdReceipt(argv) {
     const vi = argv.indexOf('--verify');
@@ -766,7 +763,7 @@ async function cmdReceipt(argv) {
     if (verifyHead) {
         if (rest.length)
             throw new UsageError('receipt --verify takes no other arguments');
-        return verifyReceipt(repo, cfg, verifyHead);
+        return emitted(verifyReceipt(repo, cfg, verifyHead));
     }
     if (!rest.length)
         throw new UsageError('receipt needs a claim (--outcome "<claim>" <files...> or --from <file|->) or --verify <head>');
@@ -1275,11 +1272,14 @@ async function waitRun(dir, pid) {
         await new Promise((r) => setTimeout(r, 200));
 }
 // The judge a command will start: the user's agent and judge (asked for when unset), refused when it is the author.
-async function preflightJudge(cfg) {
-    await withChoice('agent', cfg);
+// design starts no agent, so it asks only for the judge and keeps it apart from the agent only when one is set.
+async function preflightJudge(cfg, needsAgent = true) {
+    if (needsAgent)
+        await withChoice('agent', cfg);
     await withChoice('judge', cfg);
-    return selectJudge(cfg, selectAgent(cfg));
+    return selectJudge(cfg, cfg.agent ? selectAgent(cfg) : NO_AUTHOR);
 }
+const NO_AUTHOR = { agent: '', model: '' };
 async function cmdVerify(argv) {
     const { values, positionals } = parseArgs({
         args: argv,
@@ -1581,6 +1581,11 @@ function cmdRespond(argv) {
         throw e;
     }
 }
+// This checkout's verify and maintain runs, newest first: what history lists and bare done-done counts.
+function runsOf(repo, cfg) {
+    const root = runsRoot(cfg.app);
+    return existsSync(root) ? readdirSync(root).filter((x) => existsSync(join(root, x, 'run.json'))).map((x) => loadRun(join(root, x))).filter((r) => r.repo === repo).sort((a, b) => b.created.localeCompare(a.created)) : [];
+}
 function cmdHistory(argv) {
     const { values } = parseArgs({ args: argv, options: { limit: { type: 'string' } } });
     if (values.limit !== undefined && (!/^\d+$/.test(values.limit) || Number(values.limit) <= 0))
@@ -1588,9 +1593,7 @@ function cmdHistory(argv) {
     const n = values.limit === undefined ? Infinity : Number(values.limit);
     const repo = repoRoot();
     const cfg = loadConfig(repo);
-    const root = runsRoot(cfg.app);
-    const mine = existsSync(root) ? readdirSync(root).filter((x) => existsSync(join(root, x, 'run.json'))).map((x) => loadRun(join(root, x))).filter((r) => r.repo === repo).sort((a, b) => b.created.localeCompare(a.created)) : [];
-    const matched = mine.slice(0, n);
+    const matched = runsOf(repo, cfg).slice(0, n);
     const rows = cap(matched.map((r) => ({ run_id: r.run_id, kind: r.kind, status: shownStatus(r), ...(r.result && { result: r.result }), ...(r.kind === 'verify' && { claim: r.claim, journey: r.journey }), created: r.created })));
     emit({ command: 'history', runs: matched.length, history: rows.items, ...(rows.omitted && { history_omitted: rows.omitted }), help: rows.items.length ? [`Read the newest run: done-done status --run ${rows.items[0].run_id}`] : ['Start one: done-done verify --outcome "<what a user can now do>"'] });
     return PASS;
@@ -1984,6 +1987,22 @@ function saveChoice(kind, { agent, model }) {
     renameSync(`${file}.tmp`, file);
     return `${kind === 'agent' ? agent : routeOf(agent)}${model ? ` (model ${model})` : ''} saved to ${file}`;
 }
+// Why a typed model name is not one the agent lists (opencode models, pi --list-models), or '' when it is listed or the
+// agent has no list to check against (a list that fails is named, and the model is kept as typed).
+function unknownModel(agent, model, cfg) {
+    const list = agent === 'opencode' ? ['models'] : agent === 'pi' ? ['--list-models'] : null;
+    const bin = list && agentPath(agent, cfg);
+    if (!list || !bin)
+        return '';
+    const r = spawnSync(bin, list, { encoding: 'utf8', timeout: 30_000 });
+    if (r.status !== 0) {
+        process.stderr.write(`${agent} ${list[0]} failed (${(r.error?.message || r.stderr || `exit ${r.status}`).trim().split('\n').at(-1)}), so ${model} is saved unchecked\n`);
+        return '';
+    }
+    // opencode prints provider/model per line; pi prints a table whose first two columns are provider and model.
+    const names = r.stdout.split('\n').flatMap((l) => { const [a, b] = l.trim().split(/\s+/); return agent === 'pi' && b ? [`${a}/${b}`, b] : [a]; });
+    return names.includes(model) ? '' : `${model} is not a model ${agent} lists (${agent} ${list[0]})`;
+}
 const interactive = () => !!process.stdin.isTTY && !!process.stderr.isTTY;
 const missing = (kind) => (kind === 'agent' ? noAgent() : noJudge());
 // In a terminal the user picks the agent (or the judge) and its model from a list; done-done never picks for them.
@@ -2000,14 +2019,19 @@ async function pick(kind, cfg) {
         for (;;) {
             let agent = '';
             while (!agent) {
-                const n = Number(await ask(`${kind} [1-${menu.length}]: `));
-                if (!Number.isInteger(n) || n < 1 || n > menu.length)
+                const said = await ask(`${kind} [1-${menu.length}]: `);
+                const n = Number(said);
+                if (!Number.isInteger(n) || n < 1 || n > menu.length) {
+                    process.stderr.write(`${said || 'nothing'} is not on the list; type a number from 1 to ${menu.length}\n`);
                     continue;
+                }
                 agent = menu[n - 1];
                 if (agent !== ACP_TARGET)
                     continue;
                 const target = await ask('acp target, e.g. claude-code: ');
                 agent = isAgent(`acp:${target}`) ? `acp:${target}` : '';
+                if (!agent)
+                    process.stderr.write(`${target || 'nothing'} is not an acp target name; pick again\n`);
             }
             const cheap = CHEAP[agent]?.model;
             const who = kind === 'agent' ? agent : `the ${agent} judge`;
@@ -2022,11 +2046,17 @@ async function pick(kind, cfg) {
                 const n = typed ? '2' : await ask('model [1-2]: ');
                 if (n === '1')
                     model = cheap ?? '';
-                else if (n === '2') {
-                    const typedModel = await ask('model: ');
-                    if (typedModel && (agent !== 'opencode' || typedModel.includes('/')))
-                        model = typedModel;
-                }
+                else if (n === '2')
+                    while (model === undefined) {
+                        const typedModel = await ask('model: ');
+                        const why = !typedModel ? 'no model typed' : agent === 'opencode' && !typedModel.includes('/') ? `${typedModel} is not provider/model` : unknownModel(agent, typedModel, cfg);
+                        if (why)
+                            process.stderr.write(`${why}; type it again\n`);
+                        else
+                            model = typedModel;
+                    }
+                else
+                    process.stderr.write(`${n || 'nothing'} is not 1 or 2\n`);
             }
             if (kind === 'agent')
                 return { agent, model };
@@ -2397,18 +2427,16 @@ async function cmdDoctor(argv) {
     // The judge the user set (judge.route), kept apart from the agent.
     let choice;
     let choiceError;
-    if (cfg && agent)
+    if (cfg)
         try {
-            choice = selectJudge(cfg, agent);
+            choice = selectJudge(cfg, agent ?? NO_AUTHOR);
         }
         catch (e) {
             choiceError = e;
         }
-    // With no agent set the judge is unknown too: it is kept apart from that agent.
-    const noAuthorRow = (check) => (cfg && agentCfg && !agent ? unknownRow(check, 'unknown until the agent is set, since the judge is kept apart from it', noAgent().help) : unknownRow(check));
     const choiceRow = (check) => ({ check, status: 'missing', detail: choiceError.message, fix: choiceError.help ?? 'Fix the judge config, then re-run: done-done doctor' });
-    if (!cfg || !agent) {
-        checks.push(noAuthorRow('judge'));
+    if (!cfg) {
+        checks.push(unknownRow('judge'));
     }
     else if (!choice) {
         checks.push(choiceRow('judge'));
@@ -2416,7 +2444,7 @@ async function cmdDoctor(argv) {
     else {
         try {
             const { detail } = await backend(cfg, choice);
-            checks.push({ check: 'judge', status: 'ok', detail: `${choice.route} (model ${choice.model}): ${detail}; the model is never called`, fix: '' });
+            checks.push({ check: 'judge', status: 'ok', detail: `${choice.route} (model ${choice.model}): ${detail}; doctor does not call the model`, fix: '' });
         }
         catch (e) {
             checks.push({ check: 'judge', status: 'missing', detail: e.message, fix: e.help ?? 'Re-run done-done doctor after fixing the error above' });
@@ -2429,7 +2457,8 @@ async function cmdDoctor(argv) {
     // How far the judge is from the author, as selectJudge picks it: another agent is ok; the author's agent at another
     // model or in a fresh session runs too, so it is a warning that never fails doctor.
     if (!cfg || !agent) {
-        checks.push(noAuthorRow('judge_choice'));
+        // With no agent set, how far the judge is from it is unknown; the agent row already names that fix.
+        checks.push(unknownRow('judge_choice', cfg && agentCfg ? 'unknown until the agent is set, since the judge is kept apart from it' : undefined));
     }
     else if (!choice) {
         checks.push(choiceRow('judge_choice'));
@@ -2512,7 +2541,7 @@ async function cmdDesign(argv) {
         repo = process.cwd();
     }
     const cfg = loadConfig(repo);
-    const choice = await preflightJudge(cfg);
+    const choice = await preflightJudge(cfg, false);
     const judged = await design(cfg, choice, screens, join(home(), 'agents'));
     const count = (v) => judged.filter((j) => j.verdict === v).length;
     const code = count('fail') ? FAIL : count('unsure') ? INCONCLUSIVE : PASS;
@@ -2522,7 +2551,7 @@ async function cmdDesign(argv) {
     emit({
         command: 'design',
         result: code === PASS ? 'pass' : code === FAIL ? 'fail' : 'inconclusive',
-        judge: { route: choice.route, model: choice.model, independence: choice.independence, author: `${choice.author.agent} (model ${choice.author.model || 'none'})` },
+        judge: { route: choice.route, model: choice.model, independence: choice.independence, author: choice.author.agent ? `${choice.author.agent} (model ${choice.author.model || 'none'})` : 'no agent set' },
         counts: { pass: count('pass'), fail: count('fail'), unsure: count('unsure') },
         screens: rows.items,
         ...(rows.omitted && { screens_omitted: rows.omitted }),
@@ -2552,12 +2581,16 @@ function cmdBare() {
         app: cfg.app,
         evidence_root: shown(repo, cfg.evidence.root),
         journeys,
-        runs: loadRecords(cfg).length,
+        runs: runsOf(repo, cfg).length,
     };
     const check = '`done-done check --outcome "<what you proved>" <files it recorded>`';
-    result.help = journeys.length
-        ? [`Capture proof with \`done-done run ${journeys[0]}\`, then check it with ${check}`]
-        : [...driveHint(repo, cfg), `Add a journey to .done-done.yaml (${journeyExample}), commit, then \`done-done run smoke\` and ${check}`];
+    const receipt = verifyReceipt(repo, cfg, 'HEAD');
+    result.receipt = receipt.code === PASS ? `valid for HEAD ${String(receipt.result.head).slice(0, 12)}` : receipt.result.reason ?? receipt.result.result;
+    result.help = receipt.code === PASS
+        ? [`HEAD has a valid receipt for "${receipt.result.claim}"; prove the next commit with done-done verify --outcome "<what a user can now do>"`]
+        : journeys.length
+            ? [`Capture proof with \`done-done run ${journeys[0]}\`, then check it with ${check}`]
+            : [...driveHint(repo, cfg), `Add a journey to .done-done.yaml (${journeyExample}), commit, then \`done-done run smoke\` and ${check}`];
     emit(result);
     return PASS;
 }
@@ -2614,6 +2647,10 @@ async function main(argv) {
             return cmdHistory(rest);
         if (cmd === '__runner') {
             await runSteps(rest[0]);
+            return PASS;
+        }
+        if (cmd === '--version' || cmd === '-v' || cmd === 'version') {
+            console.log(JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version);
             return PASS;
         }
         if (cmd === '--help' || cmd === '-h' || cmd === 'help') {

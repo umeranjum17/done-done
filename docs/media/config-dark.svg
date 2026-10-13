@@ -12,6 +12,6 @@ text{font:16px ui-monospace,SFMono-Regular,'SF Mono',Menlo,Consolas,'Liberation 
 <clipPath id="body"><rect x="1" y="41" width="503" height="124"/></clipPath>
 <g clip-path="url(#body)"><text xml:space="preserve" x="22" y="72" textLength="268.8" lengthAdjust="spacing"><tspan class="c">~/notes $ </tspan><tspan class="b">done-done run sync</tspan></text>
 <text xml:space="preserve" x="22" y="96" textLength="422.4" lengthAdjust="spacing"><tspan class="f b">error: </tspan>"~/notes/.done-done.yaml: unknown key</text>
-<text xml:space="preserve" x="22" y="120" textLength="124.8" lengthAdjust="spacing">    evidance"</text>
+<text xml:space="preserve" x="22" y="120" textLength="115.2" lengthAdjust="spacing">    journys"</text>
 <text xml:space="preserve" x="22" y="144" textLength="57.6" lengthAdjust="spacing"><tspan class="d">exit 2</tspan></text></g>
 </svg>

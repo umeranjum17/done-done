@@ -1,29 +1,30 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="505" height="454" viewBox="0 0 505 454" role="img" aria-label="Record a run">
+<svg xmlns="http://www.w3.org/2000/svg" width="505" height="478" viewBox="0 0 505 478" role="img" aria-label="Record a run">
 <title>Record a run</title>
 <style>
 text{font:16px ui-monospace,SFMono-Regular,'SF Mono',Menlo,Consolas,'Liberation Mono',monospace;fill:#e6edf3;white-space:pre}
 .d{fill:#8b949e}.c{fill:#d2a8ff}.p{fill:#3fb950}.f{fill:#ff7b72}.b{font-weight:600}
 .t{font-size:14px;font-weight:600;fill:#8b949e}
 </style>
-<rect x="0.5" y="0.5" width="504" height="453" rx="10" fill="#161b22" stroke="#30363d"/>
+<rect x="0.5" y="0.5" width="504" height="477" rx="10" fill="#161b22" stroke="#30363d"/>
 <path d="M0.5 40V10.5a10 10 0 0 1 10-10h484a10 10 0 0 1 10 10V40z" fill="#21262d" stroke="#30363d"/>
 <circle cx="20" cy="20" r="6" fill="#ff5f57"/><circle cx="40" cy="20" r="6" fill="#febc2e"/><circle cx="60" cy="20" r="6" fill="#28c840"/>
 <text class="t" x="252.5" y="25" text-anchor="middle">Record a run</text>
-<clipPath id="body"><rect x="1" y="41" width="503" height="412"/></clipPath>
+<clipPath id="body"><rect x="1" y="41" width="503" height="436"/></clipPath>
 <g clip-path="url(#body)"><text xml:space="preserve" x="22" y="72" textLength="268.8" lengthAdjust="spacing"><tspan class="c">~/notes $ </tspan><tspan class="b">done-done run sync</tspan></text>
-<text xml:space="preserve" x="22" y="96" textLength="451.2" lengthAdjust="spacing">  synced a note on two devices, saved after.png</text>
-<text xml:space="preserve" x="22" y="120" textLength="115.2" lengthAdjust="spacing"><tspan class="d">command: </tspan>run</text>
-<text xml:space="preserve" x="22" y="144" textLength="115.2" lengthAdjust="spacing"><tspan class="d">result: </tspan><tspan class="p b">pass</tspan></text>
-<text xml:space="preserve" x="22" y="168" textLength="316.8" lengthAdjust="spacing"><tspan class="d">run_id: </tspan>20261012T061715Z-779d1df4</text>
-<text xml:space="preserve" x="22" y="192" textLength="460.8" lengthAdjust="spacing"><tspan class="d">commit: </tspan>779d1df46e8bfd426ecd79e128da1a06b7a60ce2</text>
-<text xml:space="preserve" x="22" y="216" textLength="115.2" lengthAdjust="spacing"><tspan class="d">dirty: </tspan>false</text>
-<text xml:space="preserve" x="22" y="240" textLength="76.8" lengthAdjust="spacing"><tspan class="d">files: </tspan>1</text>
-<text xml:space="preserve" x="22" y="264" textLength="297.6" lengthAdjust="spacing"><tspan class="d">record: </tspan>.proof/.done-done/runs/</text>
-<text xml:space="preserve" x="22" y="288" textLength="326.4" lengthAdjust="spacing">    20261012T061715Z-779d1df4.json</text>
-<text xml:space="preserve" x="22" y="312" textLength="441.6" lengthAdjust="spacing"><tspan class="d">evidence[1]: </tspan>.proof/20261012T061715Z-779d1df4/</text>
-<text xml:space="preserve" x="22" y="336" textLength="124.8" lengthAdjust="spacing">    after.png</text>
-<text xml:space="preserve" x="22" y="360" textLength="412.8" lengthAdjust="spacing"><tspan class="d">help[1]: </tspan>"Check this proof: done-done check</text>
-<text xml:space="preserve" x="22" y="384" textLength="412.8" lengthAdjust="spacing">    --outcome \"&lt;what you proved&gt;\" .proof/</text>
-<text xml:space="preserve" x="22" y="408" textLength="384.0" lengthAdjust="spacing">    20261012T061715Z-779d1df4/after.png"</text>
-<text xml:space="preserve" x="22" y="432" textLength="57.6" lengthAdjust="spacing"><tspan class="d">exit 0</tspan></text></g>
+<text xml:space="preserve" x="22" y="96" textLength="115.2" lengthAdjust="spacing"><tspan class="d">command: </tspan>run</text>
+<text xml:space="preserve" x="22" y="120" textLength="115.2" lengthAdjust="spacing"><tspan class="d">result: </tspan><tspan class="p b">pass</tspan></text>
+<text xml:space="preserve" x="22" y="144" textLength="384.0" lengthAdjust="spacing"><tspan class="d">run_id: </tspan>20261013T161405Z-1cb99c01-0f4d05</text>
+<text xml:space="preserve" x="22" y="168" textLength="460.8" lengthAdjust="spacing"><tspan class="d">commit: </tspan>1cb99c0116e4e573148cc37a6135bb75f5cbba00</text>
+<text xml:space="preserve" x="22" y="192" textLength="115.2" lengthAdjust="spacing"><tspan class="d">dirty: </tspan>false</text>
+<text xml:space="preserve" x="22" y="216" textLength="76.8" lengthAdjust="spacing"><tspan class="d">files: </tspan>1</text>
+<text xml:space="preserve" x="22" y="240" textLength="451.2" lengthAdjust="spacing"><tspan class="d">record: </tspan>~/.done-done/evidence/notes/.done-done/</text>
+<text xml:space="preserve" x="22" y="264" textLength="441.6" lengthAdjust="spacing">    runs/20261013T161405Z-1cb99c01-0f4d05.json</text>
+<text xml:space="preserve" x="22" y="288" textLength="393.6" lengthAdjust="spacing"><tspan class="d">evidence[1]: </tspan>~/.done-done/evidence/notes/</text>
+<text xml:space="preserve" x="22" y="312" textLength="441.6" lengthAdjust="spacing">    20261013T161405Z-1cb99c01-0f4d05/after.png</text>
+<text xml:space="preserve" x="22" y="336" textLength="412.8" lengthAdjust="spacing"><tspan class="d">help[1]: </tspan>"Check this proof: done-done check</text>
+<text xml:space="preserve" x="22" y="360" textLength="364.8" lengthAdjust="spacing">    --outcome \"&lt;what you proved&gt;\" ~/</text>
+<text xml:space="preserve" x="22" y="384" textLength="288.0" lengthAdjust="spacing">    .done-done/evidence/notes/</text>
+<text xml:space="preserve" x="22" y="408" textLength="451.2" lengthAdjust="spacing">    20261013T161405Z-1cb99c01-0f4d05/after.png"</text>
+<text xml:space="preserve" x="22" y="432" textLength="451.2" lengthAdjust="spacing">  synced a note on two devices, saved after.png</text>
+<text xml:space="preserve" x="22" y="456" textLength="57.6" lengthAdjust="spacing"><tspan class="d">exit 0</tspan></text></g>
 </svg>

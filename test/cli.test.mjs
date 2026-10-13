@@ -258,6 +258,11 @@ test('Checks block: form rules, not-proven and trusted config', () => {
   mkdirSync(join(repo, '.agents', 'skills', 'verify-notes'), { recursive: true });
   write(`## Checks\noutcome: x\nrepro: n/a\nproof: \`done-done run shots\`\nevidence: ${files[0]}\n`);
   assert.match(dd('check', '--from', '../pr.md').out, /does not name the project's verify skill verify-notes/);
+  // A local file has no PR title: its first heading, else the HEAD commit subject, is the title, so a fix still needs a repro.
+  sh('commit', '-q', '--allow-empty', '-m', 'fix: home crash');
+  assert.match(dd('check', '--from', '../pr.md').out, /a fix needs a repro, not n\/a/);
+  write(`# docs: home\n\n## Checks\noutcome: x\nrepro: n/a\nproof: \`done-done run shots\`\nevidence: ${files[0]}\n`);
+  assert.doesNotMatch(dd('check', '--from', '../pr.md').out, /a fix needs a repro/);
 });
 
 test('config is strict and scoped', () => {
@@ -492,6 +497,15 @@ function bareRepo(dirName = 'repo') {
   return { dir, repo, env, sh, dd };
 }
 
+// The gate judges each capture (check --judge) with the judge the user set: a stub opencode judge with these odds.
+function gateJudge(env, probabilities) {
+  mkdirSync(env.DONE_DONE_HOME, { recursive: true });
+  writeFileSync(join(env.DONE_DONE_HOME, 'config.yaml'), 'agent: claude\njudge:\n  route: answerer:opencode\n');
+  const s = stubAgents(env, JSON.stringify({ relevance: { probabilities, rationale: 'The list shows the notes.', personReason: 'The list shows the notes.' } }));
+  symlinkSync(process.execPath, join(s.bin, 'node'));
+  return { ...s, env: { ...s.env, PATH: `${s.env.PATH}:/usr/bin:/bin` } };
+}
+
 test('the Firstmate merge gate passes fresh proof with a receipt, and refuses a missing receipt, stale proof or another PR head', () => {
   const { dir, repo, env, sh, dd, head, shots } = setup();
   // The default branch's rules are stricter than the branch's: a "feat" title needs a repro there.
@@ -508,9 +522,10 @@ test('the Firstmate merge gate passes fresh proof with a receipt, and refuses a 
   // A stand-in `gh` that answers `gh pr view <url>` with the PR's head commit or its title and body.
   writeFileSync(join(bin, 'gh'), `#!/bin/sh\ncase "$*" in *headRefOid*) cat ${JSON.stringify(join(dir, 'pr-head'))} ;; *) cat ${JSON.stringify(join(dir, 'pr.json'))} ;; esac\n`, { mode: 0o755 });
   const fm = join(dir, 'fm');
+  const judged = gateJudge(env, CORRECT);
   const gate = (pr) => {
     const r = spawnSync(join(dirname(CLI), '..', 'integrations', 'firstmate', 'merge-gate'), ['t1', repo, head(), pr], {
-      encoding: 'utf8', env: { ...env, FM_HOME: fm, PATH: `${bin}:${env.PATH}` },
+      encoding: 'utf8', env: { ...judged.env, FM_HOME: fm, PATH: `${bin}:${judged.env.PATH}` },
     });
     return { code: r.status, out: r.stdout + r.stderr };
   };
@@ -525,6 +540,7 @@ test('the Firstmate merge gate passes fresh proof with a receipt, and refuses a 
   const pass = gate('-');
   assert.equal(pass.code, 0, pass.out);
   assert.match(pass.out, /This receipt is valid for this head/);
+  assert.ok(judged.calls().length && judged.calls().every((c) => c.agent === 'opencode'), 'the gate judges each capture');
   const pr = (title, prHead) => {
     writeFileSync(join(dir, 'pr.json'), JSON.stringify({ title, body: checks }));
     writeFileSync(join(dir, 'pr-head'), `${prHead}\n`);
@@ -559,9 +575,10 @@ for (const remote of [true, false]) test(`the Firstmate merge gate reads a local
   mkdirSync(bin);
   writeFileSync(join(bin, 'done-done'), `#!/bin/sh\nexec ${JSON.stringify(process.execPath)} ${JSON.stringify(CLI)} "$@"\n`, { mode: 0o755 });
   const fm = join(dir, 'fm');
+  const judged = gateJudge(env, CORRECT);
   const gate = () => {
     const r = spawnSync(join(dirname(CLI), '..', 'integrations', 'firstmate', 'merge-gate'), ['t2', repo, head(), '-'], {
-      encoding: 'utf8', env: { ...env, FM_HOME: fm, PATH: `${bin}:${env.PATH}` },
+      encoding: 'utf8', env: { ...judged.env, FM_HOME: fm, PATH: `${bin}:${judged.env.PATH}` },
     });
     return { code: r.status, out: r.stdout + r.stderr };
   };
@@ -578,7 +595,7 @@ for (const remote of [true, false]) test(`the Firstmate merge gate reads a local
   assert.match(stale.out, /evidence is for commit/, 'the default branch\'s ignore_paths do not cover src/, so the change makes the proof stale');
 });
 
-test('the Firstmate merge gate treats - as no worktree and refuses a missing worktree', () => {
+test('the Firstmate merge gate refuses - (no worktree recorded) from any folder, a missing worktree and a capture the judge fails', () => {
   const { dir, repo, env, sh, dd, head, shots } = setup();
   sh('update-ref', 'refs/remotes/origin/main', 'HEAD');
   sh('symbolic-ref', 'refs/remotes/origin/HEAD', 'refs/remotes/origin/main');
@@ -586,9 +603,10 @@ test('the Firstmate merge gate treats - as no worktree and refuses a missing wor
   mkdirSync(bin);
   writeFileSync(join(bin, 'done-done'), `#!/bin/sh\nexec ${JSON.stringify(process.execPath)} ${JSON.stringify(CLI)} "$@"\n`, { mode: 0o755 });
   const fm = join(dir, 'fm');
+  const judged = gateJudge(env, { correct: 0.04, wrong: 0.93, unclear: 0.03 });
   const gate = (worktree, cwd) => {
     const r = spawnSync(join(dirname(CLI), '..', 'integrations', 'firstmate', 'merge-gate'), ['t3', worktree, head(), '-'], {
-      encoding: 'utf8', env: { ...env, FM_HOME: fm, PATH: `${bin}:${env.PATH}` }, cwd,
+      encoding: 'utf8', env: { ...judged.env, FM_HOME: fm, PATH: `${bin}:${judged.env.PATH}` }, cwd,
     });
     return { code: r.status, out: r.stdout + r.stderr };
   };
@@ -597,9 +615,15 @@ test('the Firstmate merge gate treats - as no worktree and refuses a missing wor
   mkdirSync(join(fm, 'data', 't3'), { recursive: true });
   writeFileSync(join(fm, 'data', 't3', 'checks.md'), checks);
   assert.equal(dd('receipt', '--from', join(fm, 'data', 't3', 'checks.md')).code, 0);
-  const pass = gate('-', repo);
-  assert.equal(pass.code, 0, pass.out);
-  assert.match(pass.out, /This receipt is valid for this head/);
+  const none = gate('-', repo);
+  assert.equal(none.code, 2, none.out);
+  assert.match(none.out, /task t3 recorded no worktree, so there is no repo to check/, 'even run from the task\'s own repo, - is never checked');
+  assert.equal(judged.calls().length, 0);
+  const wrong = gate(repo, dir);
+  assert.equal(wrong.code, 1, wrong.out);
+  assert.match(wrong.out, /result: fail/);
+  assert.doesNotMatch(wrong.out, /command: receipt/, 'a judge fail refuses before the receipt is read');
+  assert.ok(judged.calls().length, 'the judge saw the captures');
   const missing = gate(join(dir, 'no-such-worktree'), repo);
   assert.equal(missing.code, 2, missing.out);
   assert.match(missing.out, /cannot enter worktree/);
@@ -1347,6 +1371,8 @@ test('every command has its own --help, and a usage error names the command and 
   const { dd } = setup();
   const top = dd('--help');
   assert.equal(top.code, 0, top.out);
+  const version = dd('--version');
+  assert.deepEqual([version.code, version.out], [0, `${JSON.parse(readFileSync(join(dirname(CLI), '..', 'package.json'), 'utf8')).version}\n`]);
   for (const cmd of ['init', 'run', 'check', 'receipt', 'verify', 'status']) {
     const h = dd(cmd, '--help');
     assert.equal(h.code, 0, h.out);
@@ -1589,15 +1615,23 @@ test('a failing check points at the exact command that produces the proof', () =
   assert.match(toon(r).help[0], /done-done run shots/);
 });
 
-test('bare done-done orients with the config state and the next step', () => {
-  const { dd } = setup();
+test('bare done-done orients with the config state and the next step, and names a valid receipt for HEAD', () => {
+  const { dd, shots } = setup();
   const r = dd();
   assert.equal(r.code, 0, r.out);
   const b = toon(r);
   assert.equal(b.command, 'done-done');
   assert.equal(b.config, 'present');
   assert.deepEqual(b.journeys, ['shots']);
+  assert.match(b.receipt, /^no receipt for /);
   assert.match(b.help[0], /done-done run shots/);
+  const { files } = shots();
+  assert.equal(dd('verify', 'shots', '--outcome', 'home renders', '--foreground').code, 0);
+  assert.equal(dd('receipt', '--outcome', 'home renders', ...files).code, 0);
+  const after = toon(dd());
+  assert.match(after.receipt, /^valid for HEAD [0-9a-f]{12}$/);
+  assert.equal(after.help[0], 'HEAD has a valid receipt for "home renders"; prove the next commit with done-done verify --outcome "<what a user can now do>"');
+  assert.equal(after.runs, toon(dd('history')).runs, 'bare counts the runs history lists');
 });
 
 test('bare done-done in a repo with no config points at init', () => {
@@ -2176,7 +2210,7 @@ globalThis.fetch = async (url, init) => {
   const doctorEnv = { ...env, OPENAI_API_KEY: '' };
   const judgeRow = toon(doctorIn(t.repo, doctorEnv, 'doctor')).checks.find((c) => c.check === 'judge');
   assert.deepEqual([judgeRow.status, judgeRow.detail, judgeRow.fix], ['missing', 'judge: openai:key needs your own API key in OPENAI_API_KEY, which is not set', 'Export OPENAI_API_KEY with your key, then re-run this command']);
-  assert.match(toon(doctorIn(t.repo, { ...env, OPENAI_API_KEY: key }, 'doctor')).checks.find((c) => c.check === 'judge').detail, /^openai:key \(model vision-test-1\): OPENAI_API_KEY is set and the judge kit is present; the model is never called$/);
+  assert.match(toon(doctorIn(t.repo, { ...env, OPENAI_API_KEY: key }, 'doctor')).checks.find((c) => c.check === 'judge').detail, /^openai:key \(model vision-test-1\): OPENAI_API_KEY is set and the judge kit is present; doctor does not call the model$/);
   writeFileSync(join(t.env.DONE_DONE_HOME, 'config.yaml'), 'agent: claude\njudge:\n  route: openai:key\n');
   const noModel = toon(doctorIn(t.repo, doctorEnv, 'doctor')).checks.find((c) => c.check === 'judge_choice');
   assert.deepEqual([noModel.status, noModel.detail], ['missing', 'judge: judge.route openai:key needs judge.model, a model your key can use that reads images']);
@@ -2315,6 +2349,24 @@ test('with no judge set, verify in a terminal asks from a list, saves the pick a
   assert.ok(s.calls().length === 2 && s.calls().every((c) => c.agent === 'opencode'), 'the picked judge judged each capture');
 });
 
+// The pick list says why it asks again, and a typed model must be one the agent lists (pi --list-models).
+test('init in a terminal says why it asks again and refuses a model the agent does not list', { skip: !existsSync('/usr/bin/script') && 'no script(1)' }, () => {
+  const t = setup();
+  const bin = join(t.dir, 'bin');
+  mkdirSync(bin);
+  writeFileSync(join(bin, 'pi'), `#!/bin/sh\nprintf 'provider     model                       context\\nopencode-go  muse-spark-1.3-contributor  1.0M\\n'\n`, { mode: 0o755 });
+  const cmd = [process.execPath, CLI, 'init'].join(' ');
+  const answers = ['x', '9', '4', '2', 'muse', 'opencode-go/muse-spark-1.3-contributor', 'x', '1', '1'].map((a) => `sleep 1; echo ${a};`).join(' ');
+  const r = spawnSync('/bin/sh', ['-c', `(${answers} sleep 2) | /usr/bin/script -qec "${cmd}" /dev/null`], { cwd: t.repo, env: { ...t.env, PATH: `${bin}:${t.env.PATH}:/usr/bin:/bin` }, encoding: 'utf8', timeout: 60_000 });
+  assert.equal(r.status, 0, r.stdout);
+  assert.match(r.stdout, /x is not on the list; type a number from 1 to 6/);
+  assert.match(r.stdout, /9 is not on the list; type a number from 1 to 6/);
+  assert.match(r.stdout, /muse is not a model pi lists \(pi --list-models\); type it again/);
+  assert.match(r.stdout, /x is not on the list; type a number from 1 to 4/, 'the judge list says why too');
+  const g = parse(readFileSync(join(t.env.DONE_DONE_HOME, 'config.yaml'), 'utf8'));
+  assert.deepEqual([g.agent, g.agent_config.pi.model, g.judge.route], ['pi', 'opencode-go/muse-spark-1.3-contributor', 'claude-code']);
+});
+
 test('agent_path_override takes a name on PATH or an absolute path, and refuses a relative path', () => {
   const t = setup();
   mkdirSync(t.env.DONE_DONE_HOME, { recursive: true });
@@ -2376,6 +2428,11 @@ test('design fails a screen on each defect the judge names, alone or next to its
   assert.equal(empty.calls.length, 0, 'a blank frame fails without a request');
   assert.equal(design(answer(), '--mock', 'screen.png').code, 2);
   assert.match(toon(design(answer(), 'gone.png')).error, /gone\.png: cannot read \(ENOENT\)/);
+  // design starts no agent, so it needs only the judge: with no agent set it judges, and names no author.
+  writeFileSync(join(t.env.DONE_DONE_HOME, 'config.yaml'), 'judge:\n  route: answerer:opencode\n');
+  const judgeOnly = design(answer(), 'screen.png');
+  assert.equal(judgeOnly.code, 0, judgeOnly.out);
+  assert.equal(toon(judgeOnly).judge.author, 'no agent set');
 });
 
 // A cheap model sometimes answers every kind with all-zero probabilities: that is a malformed answer to ask again, not
@@ -2655,7 +2712,10 @@ test('with no agent set, done-done never picks one: doctor, maintain and verify 
   assert.equal(ag.detail, 'no agent is set: ask the user which agent to use (claude, codex, opencode, pi, gemini, acp:<target>); never pick one for them');
   assert.match(ag.fix, /^Save the user's answer: done-done init --agent <agent> --model <model>, e\.g\. done-done init --agent opencode --model opencode-go\/muse-spark-1\.3-contributor$/);
   assert.ok(!toon(d).checks.some((c) => c.check === 'agent_settings'));
-  for (const c of toon(d).checks.filter((c) => c.check.startsWith('judge'))) assert.deepEqual([c.status, c.detail, c.fix], ['missing', 'unknown until the agent is set, since the judge is kept apart from it', ag.fix]);
+  // The judge row checks the judge alone; only its distance from the agent waits for the agent, and no row repeats the agent fix.
+  const by = (n) => toon(d).checks.find((c) => c.check === n);
+  assert.deepEqual([by('judge').status, by('judge').fix], ['missing', "Save the user's answer: done-done init --judge <agent> --judge-model <model>, e.g. done-done init --judge opencode --judge-model opencode-go/muse-spark-1.3-contributor"]);
+  assert.deepEqual([by('judge_choice').status, by('judge_choice').detail, by('judge_choice').fix], ['missing', 'unknown until the agent is set, since the judge is kept apart from it', '']);
   const runs = join(env.DONE_DONE_HOME, 'runs', 'notes');
   for (const args of [['maintain', '--foreground'], ['verify', 'shots', '--outcome', 'home renders', '--judge', '--foreground']]) {
     const r = doctorIn(repo, path, ...args);
@@ -2823,7 +2883,7 @@ test('doctor finds agent, judge and ffprobe binaries from PATH; missing optional
   assert.match(f.checks[4].detail, /^claude \(model claude-haiku-5-5; from config\) at .*claude/);
   assert.equal(f.checks[7].status, 'ok', 'the judge the user set is another agent');
   assert.match(f.checks[7].detail, /^answerer:opencode \(model opencode-go\/muse-spark-1\.3-contributor; from config\) judges the author claude \(model claude-haiku-5-5\): a different agent from the author$/);
-  assert.match(f.checks[5].detail, /^answerer:opencode .*: opencode at .* and the judge kit are present; it judges with every tool off; the model is never called/, 'the judge CLI is never run');
+  assert.match(f.checks[5].detail, /^answerer:opencode .*: opencode at .* and the judge kit are present; it judges with every tool off; doctor does not call the model/, 'the judge CLI is never run');
   assert.match(f.checks[6].detail, /found at .*ffprobe/);
   agent('codex');
   const codexOnly = toon(doctorIn(repo, pathEnv(env, ['codex']), 'doctor'));

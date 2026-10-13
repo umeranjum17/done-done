@@ -23,21 +23,20 @@ const env = {
 mkdirSync(join(repo, 'src'), { recursive: true });
 mkdirSync(join(home, 'bin'));
 writeFileSync(join(home, 'bin', 'done-done'), `#!/bin/sh\nexec "${process.execPath}" "${CLI}" "$@"\n`, { mode: 0o755 });
-writeFileSync(join(repo, '.gitignore'), '.proof/\n');
 writeFileSync(join(repo, 'src', 'sync.js'), 'export const sync = () => "ok";\n');
-const yaml = 'app: notes\nevidence:\n  root: .proof\njourneys:\n  sync:\n    command: node capture.mjs ${RUN_ID}\n';
+const yaml = 'app: notes\njourneys:\n  sync:\n    command: node capture.mjs\n';
 writeFileSync(join(repo, '.done-done.yaml'), yaml);
 // The demo "capture": draws a small, different screenshot each run, like a real capture would.
 writeFileSync(join(repo, 'capture.mjs'), `import { mkdirSync, writeFileSync } from 'node:fs';
 import { crc32, deflateSync } from 'node:zlib';
-const id = process.argv[2], seed = [...(id ?? "")].reduce((a, c) => a + c.charCodeAt(0), 0);
+const out = process.env.DONE_DONE_EVIDENCE_ROOT, id = process.env.DONE_DONE_RUN_ID, seed = [...(id ?? "")].reduce((a, c) => a + c.charCodeAt(0), 0);
 const chunk = (t, d) => { const l = Buffer.alloc(4), c = Buffer.alloc(4); l.writeUInt32BE(d.length); c.writeUInt32BE(crc32(Buffer.concat([Buffer.from(t), d]))); return Buffer.concat([l, Buffer.from(t), d, c]); };
 export const png = (w, h, px) => { const hd = Buffer.alloc(13); hd.writeUInt32BE(w, 0); hd.writeUInt32BE(h, 4); hd[8] = 8; hd[9] = 2;
   const raw = Buffer.alloc(h * (w * 3 + 1)); for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) raw.set(px(x, y), y * (w * 3 + 1) + 1 + x * 3);
   return Buffer.concat([Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]), chunk('IHDR', hd), chunk('IDAT', deflateSync(raw)), chunk('IEND', Buffer.alloc(0))]); };
-if (id) {
-  mkdirSync('.proof/' + id, { recursive: true });
-  writeFileSync('.proof/' + id + '/after.png', png(320, 200, (x, y) => [(x + seed) % 256, (y * 2) % 256, 180]));
+if (out) {
+  mkdirSync(out, { recursive: true });
+  writeFileSync(out + '/after.png', png(320, 200, (x, y) => [(x + seed) % 256, (y * 2) % 256, 180]));
   console.log('  synced a note on two devices, saved after.png');
 }
 `);
@@ -54,7 +53,9 @@ const checks = (evidence) => `## Checks\noutcome: notes sync between two devices
 const run = term('done-done run sync');
 const id = run.out.match(/^run_id: (\S+)/m)?.[1];
 if (run.code !== 0 || !id) throw new Error(`done-done run sync failed (exit ${run.code}):\n${run.out}`);
-writeFileSync(join(repo, 'pr-body.md'), checks(`.proof/${id}/after.png`));
+// Evidence lives outside the repo, in the run's own folder under ~/.done-done/evidence.
+const after = join(env.DONE_DONE_HOME, 'evidence', 'notes', id, 'after.png');
+writeFileSync(join(repo, 'pr-body.md'), checks(after));
 const body = term('cat pr-body.md');
 const pass = term('done-done check --from pr-body.md');
 writeFileSync(join(repo, 'src', 'sync.js'), 'export const sync = () => "fast";\n');
@@ -64,10 +65,10 @@ const stale = term('done-done check --from pr-body.md');
 writeFileSync(join(repo, 'empty.png'), '');
 writeFileSync(join(repo, 'blank.png'), execFileSync(process.execPath, ['--input-type=module', '-e',
   `import { png } from './capture.mjs'; process.stdout.write(png(320, 200, () => [250, 250, 250]));`], { cwd: repo }));
-writeFileSync(join(repo, 'pr-body.md'), checks(`.proof/${id}/after.png, empty.png, blank.png`));
+writeFileSync(join(repo, 'pr-body.md'), checks(`${after}, empty.png, blank.png`));
 const reasons = term('done-done check --from pr-body.md');
 
-writeFileSync(join(repo, '.done-done.yaml'), yaml.replace('evidence:', 'evidance:'));
+writeFileSync(join(repo, '.done-done.yaml'), yaml.replace('journeys:', 'journys:'));
 const config = term('done-done run sync');
 for (const [name, r, want] of [['run', run, 0], ['pass', pass, 0], ['stale', stale, 1], ['reasons', reasons, 1], ['config', config, 2]])
   if (r.code !== want) throw new Error(`${name}: expected exit ${want}, got ${r.code}\n${r.out}`);

@@ -9,7 +9,7 @@ import { createInterface } from 'node:readline/promises';
 import { parseArgs } from 'node:util';
 import { encode } from '@toon-format/toon';
 import { Document, parseDocument } from 'yaml';
-import { ACPX_INSTALL, agentChoices, agentRun, askAgent, findBin, JUDGES, knownAgentOf, modelFor, noAgent, noJudge, notStartable, routeOf, selectAgent, selectJudge, type AgentAnswer, type JudgeChoice } from './agents.js';
+import { ACPX_INSTALL, agentChoices, agentRun, askAgent, editOnlyReason, findBin, JUDGES, knownAgentOf, modelFor, noAgent, noJudge, notStartable, routeOf, selectAgent, selectJudge, type AgentAnswer, type JudgeChoice } from './agents.js';
 import { AGENTS, CHEAP, type Config, globalConfigText, home, isAgent, loadConfig, parseDuration, UsageError } from './config.js';
 import { backend, type Capture, judge, judgeable, type Judged, onPath, quote } from './judge.js';
 import { type Finding as MaintainFinding, maintainSteps, type MaintainResult } from './maintain.js';
@@ -2348,7 +2348,9 @@ async function cmdDoctor(argv: string[]): Promise<number> {
     });
   }
   if (values.probe && !agent) checks.push(unknownRow('probe'));
-  if (values.probe && agent) {
+  const toolless = agent?.path ? editOnlyReason(agent.agent) : '';
+  if (values.probe && agent && toolless) checks.push({ check: 'probe', status: 'warning', detail: `${toolless}; ${agent.agent} is not probed, its edit steps run through verify`, fix: '' });
+  else if (values.probe && agent) {
     const record = join(home(), 'agents', `probe-${new Date().toISOString().replace(/[:.]/g, '-')}-${agent.agent}.json`);
     const probe: AgentAnswer & { fix?: string } = !agent.path ? { ok: false, error: notFound, fix: installFix }
       : await askAgent({ ...agent, prompt: 'This is a connectivity probe from done-done doctor. Use no tools. Answer with ok set to true.', schema: PROBE_SCHEMA, cwd: repo ?? process.cwd(), tools: 'none', record });

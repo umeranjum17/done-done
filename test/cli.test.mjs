@@ -3326,8 +3326,7 @@ process.stdout.write(JSON.stringify({ response: ${JSON.stringify(fenced)}, stats
 const { appendFileSync, readFileSync } = require('node:fs');
 const argv = process.argv.slice(2);
 const stdin = readFileSync(0, 'utf8');
-const attached = argv.flatMap((a, i) => (argv[i - 1] === '-i' ? [readFileSync(a).subarray(1, 4).toString()] : []));
-appendFileSync(${JSON.stringify(log)}, JSON.stringify({ agent: 'codex', argv, stdin, attached, cwd: process.cwd() }) + '\\n');
+appendFileSync(${JSON.stringify(log)}, JSON.stringify({ agent: 'codex', argv, stdin, cwd: process.cwd() }) + '\\n');
 const say = (e) => console.log(JSON.stringify(e));
 say({ type: 'thread.started', thread_id: 't1' });
 say({ type: 'turn.started' });
@@ -3418,16 +3417,18 @@ test('doctor --probe asks gemini with the prompt on stdin, and reports a signed-
   assert.match(probe.fix, /Check that gemini is signed in and can use model flash-lite/);
 });
 
-test('doctor --probe refuses codex, which cannot run tool-less, and starts no codex call', () => {
+test('doctor --probe shows codex as a warning, not a failure: codex cannot run tool-less, so it asks nothing', () => {
   const { repo, env } = setup();
   mkdirSync(env.DONE_DONE_HOME, { recursive: true });
   writeFileSync(join(env.DONE_DONE_HOME, 'config.yaml'), 'agent: codex\nagent_config:\n  codex: { model: gpt-test, effort: low }\n');
   const s = stubPiGemini(env);
   const r = doctorIn(repo, s.env, 'doctor', '--probe');
-  assert.equal(r.code, 2, r.out);
+  assert.equal(r.code, 0, r.out);
   const d = toon(r);
   assert.match(d.checks.find((x) => x.check === 'agent').detail, /^codex \(model gpt-test; from config\) at /);
-  assert.match(d.checks.find((x) => x.check === 'probe').detail, /^codex did not answer: codex cannot run tool-less: with your config\.toml it keeps its MCP tools/);
+  const probe = d.checks.find((x) => x.check === 'probe');
+  assert.equal(probe.status, 'warning');
+  assert.match(probe.detail, /^codex cannot run tool-less: with your config\.toml it keeps its MCP tools/);
   assert.deepEqual(s.calls(), [], 'no tool-less call reaches codex');
 });
 

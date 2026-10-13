@@ -170,7 +170,7 @@ const ADAPTERS = {
     // canary file outside the folder, and --disable does not turn off its multi-agent tools.
     codex: {
         editOnly: 'codex cannot run tool-less: with your config.toml it keeps its MCP tools, which read files outside the folder',
-        argv: (c, dir) => ['exec', ...(c.images ?? []).flatMap((i) => ['-i', join(dir, i.name)]), '--json', '--ephemeral', ...(c.model ? ['-m', c.model] : []),
+        argv: (c) => ['exec', '--json', '--ephemeral', ...(c.model ? ['-m', c.model] : []),
             '--sandbox', 'workspace-write', '-c', 'sandbox_workspace_write.network_access=true', ...(c.dirs ?? []).flatMap((d) => ['--add-dir', d])],
         answer: (out, c) => {
             let text = '';

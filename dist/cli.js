@@ -12,6 +12,7 @@ import { Document, parseDocument } from 'yaml';
 import { ACPX_INSTALL, agentChoices, agentPath, agentRun, askAgent, editOnlyReason, findBin, JUDGES, modelFor, noAgent, noJudge, notStartable, routeOf, selectAgent, selectJudge } from './agents.js';
 import { AGENTS, CHEAP, globalConfigText, home, isAgent, loadConfig, parseDuration, UsageError } from './config.js';
 import { backend, judge, judgeable, onPath, quote } from './judge.js';
+import { startInstance, stopInstance } from './instance.js';
 import { maintainSteps, refuseSameSession } from './maintain.js';
 import { design, KINDS } from './design.js';
 import { checkMedia } from './media.js';
@@ -373,7 +374,7 @@ function closeRun(repo, cfg, rec) {
     }
     return { code: reason ? FAIL : PASS, result, reason };
 }
-function cmdRun(argv) {
+async function cmdRun(argv) {
     const dash = argv.indexOf('--');
     const { values, positionals } = parseArgs({
         args: dash < 0 ? argv : argv.slice(0, dash),
@@ -420,12 +421,27 @@ function cmdRun(argv) {
         throw new UsageError('run needs a journey, a command after --, or --open');
     const expanded = command.replaceAll('${RUN_ID}', rec.run_id);
     rec.command = expanded;
+    // With an instance block the app starts first on its own port, so the recipe uses
+    // $DONE_DONE_BASE_URL instead of a hard-coded port; without one this is today's behaviour.
+    let inst;
+    if (cfg.instance) {
+        try {
+            inst = await startInstance(repo, cfg.instance, rec.run_id, join(cfg.evidence.root, '.done-done', 'tmp', rec.run_id), process.env);
+        }
+        catch (e) {
+            rec.exit = 1;
+            const closed = closeRun(repo, cfg, rec);
+            return emitted({ code: closed.code, result: { ...closed.result, reason: `instance: ${e.message}` } });
+        }
+    }
     // The journey's own stdout goes to our stderr, never our stdout: stdout carries only done-done's
     // result document (TOON or --json), so a noisy journey cannot break `run --json | JSON.parse`.
     const r = spawnSync(expanded, {
         cwd: repo, shell: true, stdio: ['inherit', process.stderr, 'inherit'],
-        env: { ...process.env, DONE_DONE_RUN_ID: rec.run_id, DONE_DONE_EVIDENCE_ROOT: runDir(cfg, rec.run_id) },
+        env: { ...process.env, DONE_DONE_RUN_ID: rec.run_id, DONE_DONE_EVIDENCE_ROOT: runDir(cfg, rec.run_id), ...inst?.env },
     });
+    if (inst)
+        stopInstance(inst.pgid);
     rec.exit = r.status ?? 1;
     return emitted(closeRun(repo, cfg, rec));
 }
@@ -949,12 +965,13 @@ const driveHint = (repo, cfg) => existsSync(join(repo, cfg.skill, 'SKILL.md'))
 function drivePrompt(run, cfg, evidence, scratch) {
     const skill = join(run.repo, cfg.skill);
     const recipe = run.feature ? `the feature recipe ${join(skill, 'features', `${run.feature}.md`)}` : `its feature map ${join(skill, 'features', 'README.md')}, then pick the one feature the outcome is about`;
+    const inst = cfg.instance ? `\n\nThe app is already running at $DONE_DONE_BASE_URL (started by done-done on its own port with its own HOME; DONE_DONE_PORT is its port). Drive that instance: do not start your own server or hard-code a port.` : '';
     return `You drive the real ${run.app} app the way a user does, to capture proof of one outcome. Someone else judges your captures.
 
 Outcome to prove: ${run.claim}
-
+${inst}
 1. Read the verify skill ${join(skill, 'SKILL.md')} (how to launch, check, drive, capture and clean up this app) and ${recipe}.
-2. Launch the app as the skill says, then drive that feature through the real user path, step by step as its recipe says.
+2. ${cfg.instance ? 'Drive that running instance' : 'Launch the app as the skill says, then drive'} that feature through the real user path, step by step as its recipe says.
    Never add steps or data to make the outcome look true: capture what that path shows, even when it contradicts the outcome.
 3. Save PNG screenshots of what a user sees, the action and the resulting state, into ${evidence} (also in $DONE_DONE_EVIDENCE_ROOT). Save nothing else there, and never edit a capture.
 4. Stop everything you started.
@@ -1060,11 +1077,26 @@ async function runSteps(dir) {
             const before = tracked();
             const scratch = join(dir, 'tmp');
             mkdirSync(scratch, { recursive: true });
+            // With an instance block the app is already running at $DONE_DONE_BASE_URL; the drive uses it, never a fixed port.
+            let instEnv = {};
+            if (cfg.instance) {
+                try {
+                    const inst = await startInstance(run.repo, cfg.instance, rec.run_id, scratch, process.env, join(dir, 'logs', 'instance.log'));
+                    run.runner.instance_pgid = inst.pgid;
+                    saveRun(dir, run);
+                    instEnv = inst.env;
+                }
+                catch (e) {
+                    return finish('fail', `drive: instance: ${e.message}`);
+                }
+            }
             const a = await askAgent({
                 ...agentRun(cfg, author.agent, author.model), prompt: drivePrompt(run, cfg, evidence, scratch), schema: DRIVE_SCHEMA, cwd: run.repo, tools: 'edit',
-                record: join(dir, 'agents', 'drive.json'), dirs: [evidence, scratch], env: { DONE_DONE_RUN_ID: rec.run_id, DONE_DONE_DRIVE: rec.run_id, DONE_DONE_EVIDENCE_ROOT: evidence, TMPDIR: scratch },
+                record: join(dir, 'agents', 'drive.json'), dirs: [evidence, scratch], env: { DONE_DONE_RUN_ID: rec.run_id, DONE_DONE_DRIVE: rec.run_id, DONE_DONE_EVIDENCE_ROOT: evidence, TMPDIR: scratch, ...instEnv },
                 onSpawn: spawned,
             });
+            if (run.runner?.instance_pgid)
+                stopInstance(run.runner.instance_pgid);
             const answer = a.answer;
             const blocker = String(answer?.blocker ?? '').trim();
             rec.exit = a.ok && !blocker ? 0 : 1;
@@ -1087,9 +1119,24 @@ async function runSteps(dir) {
             begin('drive');
             rec = openRun(run.repo, cfg, run.journey, command.replaceAll('${RUN_ID}', run.run_id), run.run_id);
             const fd = openSync(join(dir, 'logs', 'drive.log'), 'a');
+            // With an instance block the app starts first on its own port; the journey talks to $DONE_DONE_BASE_URL.
+            let instEnv = {};
+            if (cfg.instance) {
+                try {
+                    const scratch = join(dir, 'tmp');
+                    mkdirSync(scratch, { recursive: true });
+                    const inst = await startInstance(run.repo, cfg.instance, rec.run_id, scratch, process.env, join(dir, 'logs', 'instance.log'));
+                    run.runner.instance_pgid = inst.pgid;
+                    instEnv = inst.env;
+                }
+                catch (e) {
+                    closeSync(fd);
+                    return finish('fail', `drive: instance: ${e.message}`);
+                }
+            }
             // An async child keeps the heartbeat going while the journey runs. The journey gets its own process group, so a
             // timeout or a dead runner can kill it and everything it started.
-            const child = spawn(rec.command, { cwd: run.repo, shell: true, detached: true, stdio: ['ignore', fd, fd], env: { ...process.env, DONE_DONE_RUN_ID: rec.run_id, DONE_DONE_EVIDENCE_ROOT: runDir(cfg, rec.run_id) } });
+            const child = spawn(rec.command, { cwd: run.repo, shell: true, detached: true, stdio: ['ignore', fd, fd], env: { ...process.env, DONE_DONE_RUN_ID: rec.run_id, DONE_DONE_EVIDENCE_ROOT: runDir(cfg, rec.run_id), ...instEnv } });
             run.runner.journey_pgid = child.pid;
             saveRun(dir, run);
             let timedOut = false;
@@ -1100,6 +1147,8 @@ async function runSteps(dir) {
             rec.exit = await new Promise((done) => child.on('close', (code) => done(code ?? 1)));
             clearTimeout(timer);
             closeSync(fd);
+            if (run.runner?.instance_pgid)
+                stopInstance(run.runner.instance_pgid);
             const sealed = closeRun(run.repo, cfg, rec);
             run.record = join(recordsDir(cfg), `${rec.run_id}.json`);
             set(step, sealed.code === PASS ? 'completed' : 'failed', { exit: rec.exit, outputs: evidenceOf(run.repo, cfg, rec) });
@@ -1192,6 +1241,8 @@ const shownStatus = (run) => ((run.status === 'pending' || run.status === 'runni
 const reapJourney = (dir, run) => {
     if (run.runner?.journey_pgid && createOnce(join(dir, 'journey.killed')))
         killGroup(run.runner.journey_pgid);
+    if (run.runner?.instance_pgid && createOnce(join(dir, 'instance.killed')))
+        killGroup(run.runner.instance_pgid);
 };
 // One run as status shows it. A run still marked running whose runner is gone is shown as failed at its step.
 // `gone`: the caller saw its runner child exit, which also covers a runner that died before it wrote its pid.
@@ -1441,7 +1492,7 @@ async function cmdRerun(argv) {
     const open = shownStatus(src);
     if (open === 'pending' || open === 'running')
         throw new UsageError(`run ${srcId} is still ${open}, so it cannot be rerun while its runner lives`, `Read it: done-done status --run ${srcId}; stop it first: done-done abort --run ${srcId}`);
-    const group = src.runner?.journey_pgid;
+    const group = src.runner?.journey_pgid ?? src.runner?.instance_pgid;
     if (['pending', 'running'].includes(src.status) && group && alive(-group))
         throw new UsageError(`the journey of run ${srcId} is still running, so it cannot be rerun yet`, `Read it: done-done status --run ${srcId}`);
     // A source run with no journey is driven again by the author agent config names now; schema 2 runs before PR 4 always had a journey.
@@ -1746,6 +1797,7 @@ Scaffolded by \`done-done init\` from this repo's own files (surface: ${d.surfac
 ${d.launch}
 
 Ready when ${d.ready}. Tear down what you started; never kill by process name.
+When the repo's .done-done.yaml has an instance block, done-done already runs the app at $DONE_DONE_BASE_URL (its own port and HOME): drive that URL, never a hard-coded port.
 
 ## Doctor
 
@@ -2638,7 +2690,7 @@ async function main(argv) {
         if (cmd === 'doctor')
             return await cmdDoctor(rest);
         if (cmd === 'run')
-            return cmdRun(rest);
+            return await cmdRun(rest);
         if (cmd === 'check')
             return await cmdCheck(rest);
         if (cmd === 'receipt')

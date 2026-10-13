@@ -410,7 +410,7 @@ function closeRun(repo: string, cfg: Config, rec: RunRecord): { code: number; re
   return { code: reason ? FAIL : PASS, result, reason };
 }
 
-async function cmdRun(argv: string[]): Promise<number> {
+function cmdRun(argv: string[]): number {
   const dash = argv.indexOf('--');
   const { values, positionals } = parseArgs({
     args: dash < 0 ? argv : argv.slice(0, dash),
@@ -1293,7 +1293,7 @@ function showRun(dir: string, cfg: Config, command: string, gone = false): numbe
   if (run.response) result.response = run.response;
   if (ev.items.length) result.evidence = ev.items;
   if (ev.omitted) result.evidence_omitted = ev.omitted;
-  if (hasMatrix(cfg.matrix)) result.matrix = matrixManifest(cfg.matrix!, rec ? evidenceOf(run.repo, cfg, rec) : []);
+  if (rec?.matrix) result.matrix = rec.matrix;
   if (run.receipt) result.receipt = run.receipt;
   if (run.fix) result.fix = run.fix;
   if (run.git_status) result.git_status = run.git_status;
@@ -2603,7 +2603,7 @@ async function main(argv: string[]): Promise<number> {
     if (process.env.DONE_DONE_DRIVE && DRIVE_REFUSED.includes(cmd)) throw new UsageError(`${cmd} refuses to run inside an agent drive (DONE_DONE_DRIVE is set), so the agent does not answer its own gate, write a receipt or start a run by accident; this guards against accidents and is not a sandbox`, 'Stop the drive and report what you captured; done-done answers the run and writes the receipt');
     if (cmd === 'init') return await cmdInit(rest);
     if (cmd === 'doctor') return await cmdDoctor(rest);
-    if (cmd === 'run') return await cmdRun(rest);
+    if (cmd === 'run') return cmdRun(rest);
     if (cmd === 'check') return await cmdCheck(rest);
     if (cmd === 'receipt') return await cmdReceipt(rest);
     if (cmd === 'verify') return await cmdVerify(rest);

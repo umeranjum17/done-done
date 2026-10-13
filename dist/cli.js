@@ -379,7 +379,7 @@ function closeRun(repo, cfg, rec) {
     }
     return { code: reason ? FAIL : PASS, result, reason };
 }
-async function cmdRun(argv) {
+function cmdRun(argv) {
     const dash = argv.indexOf('--');
     const { values, positionals } = parseArgs({
         args: dash < 0 ? argv : argv.slice(0, dash),
@@ -1299,8 +1299,8 @@ function showRun(dir, cfg, command, gone = false) {
         result.evidence = ev.items;
     if (ev.omitted)
         result.evidence_omitted = ev.omitted;
-    if (hasMatrix(cfg.matrix))
-        result.matrix = matrixManifest(cfg.matrix, rec ? evidenceOf(run.repo, cfg, rec) : []);
+    if (rec?.matrix)
+        result.matrix = rec.matrix;
     if (run.receipt)
         result.receipt = run.receipt;
     if (run.fix)
@@ -2704,7 +2704,7 @@ async function main(argv) {
         if (cmd === 'doctor')
             return await cmdDoctor(rest);
         if (cmd === 'run')
-            return await cmdRun(rest);
+            return cmdRun(rest);
         if (cmd === 'check')
             return await cmdCheck(rest);
         if (cmd === 'receipt')

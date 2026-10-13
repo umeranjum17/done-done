@@ -30,7 +30,7 @@ async function waitUrl(url, timeoutMs) {
     const end = Date.now() + timeoutMs;
     for (;;) {
         try {
-            const r = await fetch(url, { redirect: 'manual' });
+            const r = await fetch(url, { redirect: 'manual', signal: AbortSignal.timeout(Math.max(1, end - Date.now())) });
             if (r.status >= 200 && r.status < 300)
                 return true;
         }
@@ -48,10 +48,7 @@ function tryCommand(command, env, cwd, timeoutMs) {
         // Its own group, so the kill also stops what the shell started.
         const child = spawn(command, { cwd, shell: true, detached: true, stdio: 'ignore', env });
         const timer = setTimeout(() => {
-            try {
-                process.kill(-child.pid, 'SIGKILL');
-            }
-            catch { /* already exited */ }
+            stopInstance(child.pid);
             resolve(false);
         }, timeoutMs);
         child.on('error', () => {
@@ -92,12 +89,6 @@ export async function startInstance(repo, inst, runId, scratch, baseEnv, logFile
     if (fd !== undefined)
         closeSync(fd);
     const pgid = child.pid;
-    const kill = () => {
-        try {
-            process.kill(-pgid, 'SIGKILL');
-        }
-        catch { /* already exited */ }
-    };
     child.unref?.();
     const timeoutMs = parseDuration(inst.ready_timeout);
     const byUrl = inst.ready.url !== undefined;
@@ -105,7 +96,7 @@ export async function startInstance(repo, inst, runId, scratch, baseEnv, logFile
         ? await waitUrl(expand(inst.ready.url, extra), timeoutMs)
         : await waitCommand(inst.ready.command.replaceAll('${RUN_ID}', runId), env, repo, timeoutMs);
     if (!ready) {
-        kill();
+        stopInstance(pgid);
         const what = byUrl ? `GET ${inst.ready.url} never returned 2xx` : 'readiness command never exited 0';
         throw new Error(`instance not ready within ${inst.ready_timeout}: ${what} (port ${port} owned by this run; the instance was killed)`);
     }

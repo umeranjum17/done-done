@@ -1730,7 +1730,7 @@ function detectApp(repo) {
             : api ? 'plain HTTP (curl)'
                 : 'TODO(live drive)';
     const observe = web
-        ? 'screenshots of the resulting state the outcome is about, plus the console log'
+        ? 'screenshots of the resulting state the outcome is about'
         : cliish
             ? 'terminal transcripts, exit codes and side effects (files written, rows inserted)'
             : api

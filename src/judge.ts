@@ -17,7 +17,7 @@ export type Judged = { path: string; sha256: string; verdict: 'pass' | 'fail' | 
 
 const MAX_SIDE = 1280; // long edge sent to the model, in pixels
 const MAX_CALLS = 10; // model requests per check; later captures are unsure
-const VERSION = 2; // bump when QUESTION or the cache key changes, so older cached verdicts are not reused
+export const VERSION = 2; // bump when QUESTION or the cache key changes, so older cached verdicts are not reused
 const OPTIONS: Record<string, string> = {
   correct: 'The screenshot shows the screen and state the outcome describes.',
   wrong: 'The screenshot shows a different screen, an error, a crash, a dialog or overlay (such as a keyboard) hiding the content, or a state that contradicts the outcome.',
@@ -95,7 +95,7 @@ export type Judge = { ask: Backend['ask']; resolve: typeof import('@byokit/decid
 // record: where the answerer writes its agent call record (the claude-code route starts no agent of ours);
 // questions: what each request asks, so the answerer can ask its agent for that answer shape; attempts: asks per request
 // when the answer is malformed.
-export async function backend(cfg: Config, choice: JudgeChoice, record = () => '', questions: Record<string, Question> = { relevance: QUESTION }, attempts = 1): Promise<Judge & { detail: string }> {
+export async function backend(cfg: Config, choice: JudgeChoice, record: (request: number) => string = () => '', questions: Record<string, Question> = { relevance: QUESTION }, attempts = 1): Promise<Judge & { detail: string }> {
   if (Object.hasOwn(KEY_ROUTES, choice.route)) {
     const name = KEY_ROUTES[choice.route];
     // The kit never reads the environment: done-done reads the key here and hands it only to the kit.
@@ -114,15 +114,17 @@ export async function backend(cfg: Config, choice: JudgeChoice, record = () => '
     const { answerer, resolve } = await kit();
     let lastError = '';
     // The kit hides a failed call's message from the verdict, so the real cause is kept here for the result.
+    let requests = 0;
     const ask: Backend['ask'] = answerer({
       name: choice.route,
       leaves: true,
       supportsImages: true,
       ask: async (prompt, _signal, images) => {
         lastError = '';
+        requests++;
         const attached = images.map((img) => ({ name: `${img.id}.${img.mime.split('/')[1]}`, bytes: Buffer.from(img.dataUrl.slice(img.dataUrl.indexOf(',') + 1), 'base64') }));
         // A tool-less call runs in its own scratch folder, so the CLI sees the attached capture and nothing else.
-        const a = await askAgent({ ...run, prompt, schema: answerSchema(questions), cwd: tmpdir(), tools: 'none', attempts, record: record(), images: attached });
+        const a = await askAgent({ ...run, prompt, schema: answerSchema(questions), cwd: tmpdir(), tools: 'none', attempts, record: record(requests), images: attached });
         lastError = a.ok ? '' : a.error ?? 'no answer';
         if (!a.ok) throw new Error(lastError);
         return JSON.stringify(a.answer);
@@ -157,10 +159,17 @@ export function prepare(c: Capture): { mime: string; bytes: Buffer } | string {
 }
 
 // One request about the named images: each question's answer after the floors, or why the judge did not answer.
+// An answer the kit cannot read (all-zero probabilities, an option left out) would abstain on every question as if the
+// judge were unsure, so it is asked once more, and one that still cannot be read is never kept.
 // A signed-out or non-subscription claude-code sign-in is a usage error, since no later request can do better.
 export async function askJudge(cfg: Config, be: Judge, choice: JudgeChoice, state: unknown, questions: Record<string, Question>, images: Record<string, { mime: string; bytes: Buffer }>): Promise<Record<string, ReturnType<Judge['resolve']>> | string> {
   try {
-    const raw = await be.ask(state, questions, AbortSignal.timeout(parseDuration(cfg.agent_timeout)!), Object.entries(images).map(([id, i]) => ({ id, mime: i.mime, dataUrl: `data:${i.mime};base64,${i.bytes.toString('base64')}` })));
+    const ask = () => be.ask(state, questions, AbortSignal.timeout(parseDuration(cfg.agent_timeout)!), Object.entries(images).map(([id, i]) => ({ id, mime: i.mime, dataUrl: `data:${i.mime};base64,${i.bytes.toString('base64')}` })));
+    const unreadable = (raw: Record<string, unknown>) => Object.entries(questions).filter(([k, q]) => /^(malformed|no answer)/.test(be.resolve(q, raw[k] as Parameters<Judge['resolve']>[1]).reason ?? '')).map(([k]) => k);
+    let raw = await ask();
+    if (unreadable(raw).length) raw = await ask();
+    const bad = unreadable(raw);
+    if (bad.length) return `the judge did not answer: no probabilities for ${bad.join(', ')} that are each 0 to 1 and sum to 1`;
     return Object.fromEntries(Object.entries(questions).map(([k, q]) => [k, be.resolve(q, raw[k])]));
   } catch (e) {
     const code = (e as { code?: string }).code;
@@ -175,8 +184,26 @@ export async function askJudge(cfg: Config, be: Judge, choice: JudgeChoice, stat
 
 export const judgeable = (c: Capture) => c.media.type === 'png' || c.media.type === 'jpeg';
 
+// A judge's cached answer in the run store, one file per input key: an unreadable entry is a miss, and an unwritable
+// cache costs a repeat request, never a verdict.
+export function readCache(dir: string, key: string) {
+  try {
+    return JSON.parse(readFileSync(join(dir, `${key}.json`), 'utf8'));
+  } catch {
+    return undefined;
+  }
+}
+export function writeCache(dir: string, key: string, value: unknown) {
+  const file = join(dir, `${key}.json`);
+  try {
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(`${file}.tmp`, `${JSON.stringify(value)}\n`, { mode: 0o600 });
+    renameSync(`${file}.tmp`, file);
+  } catch {}
+}
+
 // Verdicts are cached in the run store, per app, so a re-run or a later run of the same capture and claim asks no model.
-// The answerer's agent call leaves a record in `records` (judge-<stamp>-<n>.agent.json), never the prompt.
+// The answerer's agent call leaves a record in `records` (judge-<stamp>-<n>-<request>.agent.json), never the prompt.
 export async function judge(cfg: Config, choose: () => JudgeChoice, outcome: string, captures: Capture[], records: string): Promise<{ judged: Judged[]; notJudged: string[]; choice?: JudgeChoice }> {
   const dir = join(home(), 'runs', cfg.app, 'judge');
   const stamp = new Date().toISOString().replace(/[:.]/g, '-');
@@ -194,14 +221,11 @@ export async function judge(cfg: Config, choose: () => JudgeChoice, outcome: str
     choice ??= choose();
     const { route, model } = choice;
     const key = createHash('sha256').update(JSON.stringify([VERSION, c.sha256, outcome, route, model])).digest('hex');
-    const file = join(dir, `${key}.json`);
-    try {
-      const hit = JSON.parse(readFileSync(file, 'utf8'));
-      if (['pass', 'fail', 'unsure'].includes(hit.verdict) && typeof hit.reason === 'string') {
-        judged.push({ path: c.name, sha256: c.sha256, verdict: hit.verdict, reason: hit.reason, cached: true });
-        continue;
-      }
-    } catch {}
+    const hit = readCache(dir, key);
+    if (['pass', 'fail', 'unsure'].includes(hit?.verdict) && typeof hit.reason === 'string') {
+      judged.push({ path: c.name, sha256: c.sha256, verdict: hit.verdict, reason: hit.reason, cached: true });
+      continue;
+    }
     const image = prepare(c);
     if (typeof image === 'string') {
       judged.push({ path: c.name, sha256: c.sha256, verdict: 'unsure', reason: image, cached: false });
@@ -212,7 +236,7 @@ export async function judge(cfg: Config, choose: () => JudgeChoice, outcome: str
       continue;
     }
     call = join(records, `judge-${stamp}-${calls}`);
-    be ??= await backend(cfg, choice, () => `${call}.agent.json`);
+    be ??= await backend(cfg, choice, (request) => `${call}-${request}.agent.json`);
     const answers = await askJudge(cfg, be, choice, { outcome }, { relevance: QUESTION }, { capture: image });
     if (typeof answers === 'string') {
       judged.push({ path: c.name, sha256: c.sha256, verdict: 'unsure', reason: answers, cached: false });
@@ -222,11 +246,7 @@ export async function judge(cfg: Config, choose: () => JudgeChoice, outcome: str
     const reason = a.personReason || a.rationale || OPTIONS[String(a.answer)] || '';
     const row: Judged = a.abstained ? { path: c.name, sha256: c.sha256, verdict: 'unsure', reason: `not confident enough (${a.reason})`, cached: false }
       : { path: c.name, sha256: c.sha256, verdict: a.answer === 'correct' ? 'pass' : a.answer === 'wrong' ? 'fail' : 'unsure', reason, cached: false };
-    try {
-      mkdirSync(dir, { recursive: true });
-      writeFileSync(`${file}.tmp`, `${JSON.stringify({ verdict: row.verdict, reason: row.reason, route, model })}\n`, { mode: 0o600 });
-      renameSync(`${file}.tmp`, file);
-    } catch {} // an unwritable cache costs a repeat request, not this verdict
+    writeCache(dir, key, { verdict: row.verdict, reason: row.reason, route, model });
     judged.push(row);
   }
   return { judged, notJudged, choice };

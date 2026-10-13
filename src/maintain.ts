@@ -1,23 +1,35 @@
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { accessSync, closeSync, constants, existsSync, lstatSync, openSync, readdirSync, readFileSync, readlinkSync, readSync, realpathSync, statSync } from 'node:fs';
+import { accessSync, closeSync, constants, existsSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, readlinkSync, readSync, realpathSync, statSync } from 'node:fs';
 import { dirname, extname, isAbsolute, join, relative, resolve, sep } from 'node:path';
-import { askAgent, editOnlyReason, notStartable, selectAgent } from './agents.js';
-import type { Config } from './config.js';
+import type { Question } from '@byokit/decide';
+import { askAgent, editOnlyReason, type JudgeChoice, notStartable, selectAgent, selectJudge } from './agents.js';
+import { type Config, UsageError } from './config.js';
+import { askJudge, backend } from './judge.js';
 
 // `done-done maintain`, part 1 and read only: locate the verify skill, check its feature index in plain code, send one
 // fresh read-only reader per feature file through the configured agent, then reconcile: plain code checks every cited
 // file:line, and one tool-less call merges the recipes and names recently changed source that no feature covers.
 // Nothing here writes into the repo, and the run compares HEAD and git status before and after to prove it.
+// Part 2, only with auto_fix.maintain above 0: the judge sorts each drift finding (the skill is out of date, or the
+// product may be wrong and the user decides), the user's agent fixes the skill in a done-done worktree, plain code checks
+// that only the skill folder changed, and maintain runs again there, up to auto_fix.maintain times. A clean re-run ends
+// changed with one commit on a done-done/maintain-<run-id> branch; the user's branch and checkout are never touched.
 
-export type Finding = { id: string; kind: string; file: string; line?: number; what: string };
-export type MaintainResult = 'clean' | 'drift' | 'blocked';
+// action ask-user: the user must decide, so nothing fixes it.
+export type Finding = { id: string; kind: string; file: string; line?: number; what: string; action?: 'ask-user' };
+type Source = { file: string; line: number };
+export type MaintainResult = 'clean' | 'drift' | 'blocked' | 'changed';
 type Harness<S> = {
   begin: (name: string) => S;
   set: (step: S, status: 'completed' | 'failed', extra?: { outputs?: string[] }) => void;
   log: (name: string, value: Record<string, unknown>) => void;
   finish: (result: MaintainResult, reason?: string) => void;
+  spawned: (pgid: number) => void; // the fixer's process group, so an abort ends it too
 };
+// sources: the file:line a reader cited for each drift finding, by finding id, for the triage judge.
+type Pass = { result: MaintainResult; reason?: string; sources?: Map<string, Source> };
+type MaintainRun = { run_id: string; repo: string; findings?: Finding[]; git_status?: string; unverified?: string[]; fix?: { branch: string; commit: string; files: string[]; attempts: number } };
 
 // Plan 1.5 shared rules: a per-run call cap and a per-call timeout (agent_timeout) stop runaway cost.
 const MAX_CALLS = 30;
@@ -156,13 +168,23 @@ const RECONCILE_SCHEMA = {
 // Model answers are input from outside: keep only the items with the shape the schema asked for.
 const isCite = (x: any) => typeof x.file === 'string' && Number.isInteger(x.line);
 
-export async function maintainSteps<S>(run: { repo: string; findings?: Finding[]; git_status?: string; unverified?: string[] }, dir: string, cfg: Config, h: Harness<S>): Promise<void> {
+export async function maintainSteps<S>(run: MaintainRun, dir: string, cfg: Config, h: Harness<S>): Promise<void> {
+  const first = await pass(run, dir, cfg, h);
+  const tries = cfg.auto_fix.maintain ?? 0;
+  const end = first.result === 'drift' && tries ? await fix(run, dir, cfg, h, tries, first.sources!) : first;
+  h.finish(end.result, end.reason);
+}
+
+// One read-only maintain pass over the skill in `run.repo`; prefix names its agent call records apart from other passes.
+async function pass<S>(run: Pick<MaintainRun, 'repo' | 'findings' | 'git_status' | 'unverified'>, dir: string, cfg: Config, h: Pick<Harness<S>, 'begin' | 'set' | 'log'>, prefix = ''): Promise<Pass> {
   const repo = run.repo;
   const before = repoState(repo);
   const findings: Finding[] = (run.findings = []);
   // One finding per kind, file, line and text: a symlink found by two checks is reported once.
   const add = (f: Omit<Finding, 'id'>) => {
-    if (!findings.some((x) => x.kind === f.kind && x.file === f.file && x.line === f.line && x.what === f.what)) findings.push({ id: `F${findings.length + 1}`, ...f });
+    let found = findings.find((x) => x.kind === f.kind && x.file === f.file && x.line === f.line && x.what === f.what);
+    if (!found) findings.push((found = { id: `F${findings.length + 1}`, ...f }));
+    return found.id;
   };
   const rel = (p: string) => relative(repo, p);
   // A skill path that cannot be read is blocking coverage, not a crash.
@@ -186,15 +208,15 @@ export async function maintainSteps<S>(run: { repo: string; findings?: Finding[]
   const skill = join(repo, cfg.skill);
   if (!existsSync(join(skill, 'SKILL.md'))) {
     h.set(step, 'failed');
-    return h.finish('blocked', `locate: no verify skill at ${cfg.skill}/SKILL.md`);
+    return { result: 'blocked', reason: `locate: no verify skill at ${cfg.skill}/SKILL.md` };
   }
   if (realpathSync(skill) !== resolve(realpathSync(repo), cfg.skill)) {
     h.set(step, 'failed');
-    return h.finish('blocked', `locate: ${cfg.skill} is reached through a symlink; maintain does not read through it`);
+    return { result: 'blocked', reason: `locate: ${cfg.skill} is reached through a symlink; maintain does not read through it` };
   }
   if (!realInside(repo, skill)) {
     h.set(step, 'failed');
-    return h.finish('blocked', `locate: ${cfg.skill} is outside the repository; maintain does not read outside it`);
+    return { result: 'blocked', reason: `locate: ${cfg.skill} is outside the repository; maintain does not read outside it` };
   }
   h.set(step, 'completed', { outputs: [cfg.skill] });
 
@@ -271,7 +293,10 @@ export async function maintainSteps<S>(run: { repo: string; findings?: Finding[]
           left.add(p);
           continue;
         }
-        const kept = body.length > FEATURE_CHARS ? `${body.slice(0, FEATURE_CHARS)}\n[truncated after ${FEATURE_CHARS} characters]` : body;
+        // Numbered lines, so a reader with no tools cites the line it read rather than a guess; the caps count this text.
+        const numbered = body.split('\n').map((l, i) => `${i + 1}: ${l}`).join('\n');
+        const cut = numbered.length > FEATURE_CHARS ? `\n[truncated after ${FEATURE_CHARS} characters]` : '';
+        const kept = `${numbered.slice(0, FEATURE_CHARS)}${cut}`;
         if (total + kept.length > CITED_CHARS) {
           capped = true;
           left.add(p);
@@ -299,7 +324,7 @@ export async function maintainSteps<S>(run: { repo: string; findings?: Finding[]
   if (toollessBlock) add({ kind: 'coverage', file: rel(featDir), what: toollessBlock });
   const agentBlock = !agent.path ? `source-wave: no agent done-done can start (${notStartable(agent.agent, agent.override)}); run done-done doctor` : toollessBlock;
   let calls = 0;
-  const record = (name: string) => join(dir, 'agents', `${++calls}-${name}.json`);
+  const record = (name: string) => join(dir, 'agents', `${prefix}${++calls}-${name}.json`);
   const read = agentBlock ? [] : features.slice(0, MAX_CALLS - 1);
   if (!agentBlock && read.length < features.length) add({ kind: 'coverage', file: rel(featDir), what: `${features.length - read.length} feature files not read: the run's call cap is ${MAX_CALLS}` });
   const regular = read.flatMap((name) => {
@@ -316,7 +341,7 @@ export async function maintainSteps<S>(run: { repo: string; findings?: Finding[]
     const file = join(featDir, name);
     if (text.length > FEATURE_CHARS) add({ kind: 'truncated', file: rel(file), what: `the reader saw only the first ${FEATURE_CHARS} characters of this feature file` });
     const prompt = `You are a read-only source reader for done-done maintain. Do not edit, create or delete any file, and do not run the app or any command.
-${toolless ? 'You have no tools: the source that the feature file cites is below, and it is all you can read.' : 'The repository is your working directory.'} Below is one feature file from the verification skill at ${cfg.skill} (app ${cfg.app}).
+${toolless ? 'You have no tools: the source that the feature file cites is below, each line after its line number, and it is all you can read.' : 'The repository is your working directory.'} Below is one feature file from the verification skill at ${cfg.skill} (app ${cfg.app}).
 ${toolless ? 'Use the cited source, not the skill, and explain' : "Read the product's source code, not the skill, and explain"} how this user-facing feature works today.
 - drift: each statement in the feature file that the source contradicts or no longer supports, each {claim: the feature file's words, why: what the source does instead, file, line: the source location that shows it}. Empty when the file is right.
 - recipe: one short recipe to verify the feature live, the way a user reaches it.
@@ -340,6 +365,7 @@ ${text.slice(0, FEATURE_CHARS)}${toolless ? citedSource(rel(file), text.slice(0,
       }
     });
   const unverified: string[] = (run.unverified = []);
+  const sources = new Map<string, Source>();
   const shaped = <T>(v: unknown, ok: (x: any) => boolean, where: string): T[] => {
     if (!Array.isArray(v)) {
       unverified.push(`${where} is not a list, so none of it is checked`);
@@ -355,7 +381,7 @@ ${text.slice(0, FEATURE_CHARS)}${toolless ? citedSource(rel(file), text.slice(0,
     for (const d of shaped<{ claim: string; why: string; file: string; line: number }>(r.drift, (x) => isCite(x) && typeof x.claim === 'string' && typeof x.why === 'string', `${r.feature} drift`)) {
       const why = citeWhy(repo, tracked, d.file, d.line);
       if (why) unverified.push(`${r.feature}: drift "${d.claim}" cites ${d.file}:${d.line}: ${why}`);
-      else add({ kind: 'drift', file: r.feature, what: `"${d.claim}": ${d.why} (source ${d.file}:${d.line})` });
+      else sources.set(add({ kind: 'drift', file: r.feature, what: `"${d.claim}": ${d.why} (source ${d.file}:${d.line})` }), { file: d.file, line: d.line });
     }
   }
   const skillDir = rel(skill);
@@ -390,8 +416,169 @@ Recently changed files (git log since ${CHURN_SINCE}, most recent first${churnAl
   h.set(step, 'completed');
 
   const stop = findings.find((f) => BLOCKING.has(f.kind));
-  if (stop) return h.finish('blocked', `${stop.kind}: ${stop.file}: ${stop.what}`);
-  if (agentBlock) return h.finish('blocked', agentBlock);
+  if (stop) return { result: 'blocked', reason: `${stop.kind}: ${stop.file}: ${stop.what}` };
+  if (agentBlock) return { result: 'blocked', reason: agentBlock };
   const counted = findings.filter((f) => !NOTICE.has(f.kind));
-  h.finish(counted.length ? 'drift' : 'clean', counted.length ? `${counted.length} findings` : undefined);
+  return counted.length ? { result: 'drift', reason: `${counted.length} findings`, sources } : { result: 'clean' };
+}
+
+// Triage: the judge (the user's, never the author or the fixer) decides for each drift finding whether the skill is out of
+// date or the product may be wrong. Plain-code findings (links, index, citations) and unmapped surfaces are skill gaps.
+const TRIAGE: Record<string, string> = {
+  skill: 'The skill is out of date: it should be rewritten to match what the source does now.',
+  product: 'The source looks broken or regressed against what the skill describes (a crash, a lost step, a typo, a half-done change), so the product may need a fix and a person must decide.',
+  unclear: 'The text cannot settle which side is wrong.',
+};
+const TRIAGE_ATTEMPTS = 3;
+const EXCERPT_LINES = 20;
+const FIX_SCHEMA = { type: 'object', properties: { summary: { type: 'string' }, blocker: { type: 'string' } }, required: ['summary', 'blocker'] };
+
+// The lines around a cited source line (a repo path or a bare file name, as a reader cites it), numbered, for the judge.
+// A bare name can match several files: the excerpt is from the first one that has the cited line, as citeWhy accepts.
+const excerpt = (repo: string, tracked: string[], s: Source | undefined) => {
+  const file = s && citedFiles(repo, tracked, s.file).find((p) => !citeProblem(repo, p, s.line));
+  const text = file && citedText(repo, file);
+  if (!s || !text) return '';
+  return text.split('\n').slice(Math.max(0, s.line - 1 - EXCERPT_LINES), s.line + EXCERPT_LINES).map((l, i) => `${Math.max(1, s.line - EXCERPT_LINES) + i}: ${l}`).join('\n');
+};
+
+// The drift findings the judge does not call skill drift, each marked ask-user; or why the judge did not answer.
+async function triage(cfg: Config, choice: JudgeChoice, repo: string, findings: Finding[], sources: Map<string, Source>, record: string): Promise<Finding[] | string> {
+  const drift = findings.filter((f) => f.kind === 'drift');
+  if (!drift.length) return [];
+  const questions: Record<string, Question> = Object.fromEntries(drift.map((f) => [f.id, { kind: 'choice', instructions: `Finding ${f.id} in the state is a statement in a verification skill (the steps a coding agent follows to drive and prove the real app) that the product's source no longer supports. Which side should change? The source is the truth for the skill unless the source looks broken.`, options: TRIAGE, floor: 0.8, personReason: true }]));
+  const tracked = git(repo, 'ls-files', '-z').split('\0').filter(Boolean);
+  const state = { app: cfg.app, findings: Object.fromEntries(drift.map((f) => [f.id, { feature_file: f.file, finding: f.what, feature_text: tryText(join(repo, f.file)).slice(0, FEATURE_CHARS), source: excerpt(repo, tracked, sources.get(f.id)) }])) };
+  const answers = await askJudge(cfg, await backend(cfg, choice, () => record, questions, TRIAGE_ATTEMPTS), choice, state, questions, {});
+  if (typeof answers === 'string') return answers;
+  return drift.flatMap((f) => {
+    const a = answers[f.id];
+    if (!a.abstained && a.answer === 'skill') return [];
+    const why = a.abstained ? `the judge was not sure (${a.reason})` : a.personReason || a.rationale || TRIAGE[String(a.answer)];
+    return [{ ...f, action: 'ask-user' as const, what: `${f.what}; judge: ${why}` }];
+  });
+}
+const tryText = (p: string) => {
+  try {
+    return readFileSync(p, 'utf8');
+  } catch {
+    return '';
+  }
+};
+
+// The judge on the fix path is never the fixer's own agent and model, even when judge.allow_same accepts it for verify.
+export function refuseSameSession(choice: JudgeChoice): JudgeChoice {
+  if (choice.independence === 'session-only')
+    throw new UsageError(`judge: the judge ${choice.agent} (model ${choice.model}) is the fixer's own agent and model, and the judge is never the agent that did the work; judge.allow_same does not apply to maintain fixes`, 'Ask the user for another judge agent or model and save it: done-done init --judge <agent> --judge-model <model>');
+  return choice;
+}
+
+// Every path the fixer changed in the worktree since `base`: tracked edits (and commits), new files, ignored ones too.
+const changedSince = (wt: string, base: string) => [...new Set([...git(wt, 'diff', '--name-only', '--no-renames', '-z', base).split('\0'), ...git(wt, 'ls-files', '--others', '-z').split('\0')])].filter(Boolean);
+
+async function fix<S>(run: MaintainRun, dir: string, cfg: Config, h: Harness<S>, tries: number, sources: Map<string, Source>): Promise<Pass> {
+  const repo = run.repo;
+  const skill = relative(repo, join(repo, cfg.skill));
+  const inSkill = (p: string) => p.startsWith(`${skill}/`);
+  if (git(repo, 'status', '--porcelain', '--untracked-files=all', '--', skill)) return { result: 'blocked', reason: `fix: ${skill} has uncommitted changes, and maintain fixes the committed skill; commit them, then run again` };
+  const dirty = git(repo, 'diff', '--name-only', '--no-renames', '-z', 'HEAD').split('\0').filter(Boolean);
+  if (dirty.length) {
+    const names = dirty.slice(0, LEFT_NAMED).join(', ');
+    const more = dirty.length > LEFT_NAMED ? `, +${dirty.length - LEFT_NAMED} more` : '';
+    run.findings = [...(run.findings ?? []), { id: `F${(run.findings?.length ?? 0) + 1}`, kind: 'dirty', file: '.', what: `uncommitted changes to tracked files (${names}${more}): the drift was found in them, and a fix at HEAD would not match them; commit them, or set auto_fix: { maintain: 0 }, then run again` }];
+    return { result: 'blocked', reason: `dirty: uncommitted changes to tracked files (${names}${more}); commit them, or set auto_fix: { maintain: 0 }, then run again` };
+  }
+  const agent = selectAgent(cfg);
+  const choice = refuseSameSession(selectJudge(cfg, agent));
+  const checkout = repoState(repo);
+  const wt = join(dir, 'fix');
+  const scratch = join(dir, 'tmp');
+  const rounds: Record<string, unknown>[] = [];
+  const judged: Record<string, unknown>[] = [];
+  let open = (run.findings ?? []).filter((f) => !NOTICE.has(f.kind));
+  // ponytail: a runner killed mid-fix leaves the worktree registered; `git worktree prune` clears it once the run folder is gone.
+  git(repo, 'worktree', 'add', '-q', '--detach', wt, 'HEAD');
+  try {
+    const base = git(wt, 'rev-parse', 'HEAD').trim();
+    for (let k = 1; k <= tries; k++) {
+      let step = h.begin('triage');
+      const asks = await triage(cfg, choice, wt, open, sources, join(dir, 'agents', `triage-${k}.json`));
+      judged.push({ attempt: k, ask_user: asks });
+      h.log('triage', { judge: { route: choice.route, model: choice.model, independence: choice.independence }, rounds: judged });
+      h.set(step, typeof asks === 'string' ? 'failed' : 'completed');
+      if (typeof asks === 'string') return { result: 'blocked', reason: `triage: ${asks}` };
+      if (asks.length) {
+        run.findings = open.map((f) => asks.find((a) => a.id === f.id) ?? f);
+        return { result: 'blocked', reason: `ask-user: the judge did not call ${asks.length} ${asks.length === 1 ? 'finding' : 'findings'} (${asks.map((a) => a.id).join(', ')}) a skill that is out of date, so the user decides` };
+      }
+
+      step = h.begin('fix');
+      const round: Record<string, unknown> = { attempt: k, findings: open.map((f) => f.id) };
+      rounds.push(round);
+      const blocked = (reason: string): Pass => {
+        round.blocked = reason;
+        h.log('fix', { agent: agent.agent, model: agent.model, worktree: wt, rounds });
+        h.set(step, 'failed');
+        run.findings = open;
+        return { result: 'blocked', reason: `fix: ${reason}` };
+      };
+      const prompt = `You fix the verification skill of the ${cfg.app} app at ${skill}/ in this checkout, your working directory. The skill tells a coding agent how to launch, drive and prove the real app; done-done maintain checked it against the product's source and found the findings below.
+Change only files inside ${skill}/ so that each finding is gone: make the skill match the source. Never change product code or any file outside ${skill}/, do not commit, and do not run done-done. Put scratch files in ${scratch} (also in $TMPDIR).
+
+Findings (JSON): ${JSON.stringify(open.map(({ id, kind, file, line, what }) => ({ id, kind, file, line, what })))}
+
+Answer with summary (what you changed, in one line) and blocker ("" when you fixed them all, else why you could not).`;
+      mkdirSync(scratch, { recursive: true });
+      const a = await askAgent({ ...agent, prompt, schema: FIX_SCHEMA, cwd: wt, tools: 'edit', record: join(dir, 'agents', `fix-${k}.json`), dirs: [scratch], env: { DONE_DONE_DRIVE: run.run_id, TMPDIR: scratch }, onSpawn: h.spawned });
+      Object.assign(round, { record: a.record ?? a.recordError, ...(a.ok ? { summary: a.answer?.summary, blocker: a.answer?.blocker } : { error: a.error }) });
+      // The diff guard: only the skill folder may change, in the worktree only; anything else drops the attempt with the worktree.
+      const changed = changedSince(wt, base);
+      round.changed = changed;
+      const outside = changed.filter((p) => !inSkill(p));
+      if (repoState(repo) !== checkout) return blocked(`${agent.agent} changed your checkout at ${repo} during the fix; done-done does not undo changes there, so check git status`);
+      if (git(wt, 'rev-parse', 'HEAD').trim() !== base) return blocked(`${agent.agent} made a commit; done-done makes the only commit, so the attempt is dropped`);
+      if (outside.length) return blocked(`${agent.agent} changed files outside ${skill}/ (${outside.slice(0, LEFT_NAMED).join(', ')}${outside.length > LEFT_NAMED ? `, +${outside.length - LEFT_NAMED} more` : ''}), so the attempt is dropped with the done-done worktree; your branch is untouched`);
+      // A lost answer after skill edits still gets the re-run: the re-run, not the agent's word, says whether the skill is fixed.
+      if (!a.ok && !changed.length) return blocked(`${agent.agent} did not finish the fix: ${a.error}`);
+      const blocker = a.ok ? String(a.answer?.blocker ?? '').trim() : '';
+      if (blocker) return blocked(`${agent.agent} could not fix the skill: ${blocker}`);
+
+      // Re-run maintain on the fixed skill in the worktree; its steps are this fix step, and its records are named fix<k>-.
+      const again: Pick<MaintainRun, 'repo' | 'findings' | 'git_status' | 'unverified'> = { repo: wt };
+      const rerun = await pass(again, dir, cfg, { begin: () => null, set: () => {}, log: () => {} }, `fix${k}-`);
+      round.rerun = { result: rerun.result, reason: rerun.reason, findings: again.findings, unverified: again.unverified };
+      if (rerun.result === 'blocked') return blocked(`the re-run after attempt ${k} is blocked: ${rerun.reason}`);
+      if (rerun.result === 'clean') {
+        if (!changed.length) return blocked(`${agent.agent} changed nothing, yet the re-run is clean, so there is nothing to commit`);
+        try {
+          git(wt, 'add', '-A', '--', skill);
+          git(wt, 'commit', '-q', '-m', `fix(verify): done-done maintain fixes ${skill}`, '--', skill);
+        } catch (e) {
+          return blocked(`git commit failed: ${((e as { stderr?: string }).stderr || (e as Error).message).trim()}`);
+        }
+        const commit = git(wt, 'rev-parse', 'HEAD').trim();
+        const files = git(wt, 'diff', '--name-only', '--no-renames', '-z', base, commit).split('\0').filter(Boolean);
+        if (files.some((p) => !inSkill(p))) return blocked(`the commit holds files outside ${skill}/ (a commit hook added them), so no branch is made`);
+        const branch = `done-done/maintain-${run.run_id}`;
+        git(repo, 'branch', branch, commit);
+        run.fix = { branch, commit, files, attempts: k };
+        round.commit = commit;
+        h.log('fix', { agent: agent.agent, model: agent.model, worktree: wt, rounds });
+        h.set(step, 'completed', { outputs: files });
+        return { result: 'changed', reason: `the skill is clean after ${k} fix ${k === 1 ? 'attempt' : 'attempts'}, in one commit on ${branch}` };
+      }
+      open = (again.findings ?? []).filter((f) => !NOTICE.has(f.kind));
+      sources = rerun.sources ?? new Map();
+      h.log('fix', { agent: agent.agent, model: agent.model, worktree: wt, rounds });
+      h.set(step, 'completed');
+    }
+    run.findings = open;
+    return { result: 'blocked', reason: `fix: auto_fix.maintain allows ${tries} ${tries === 1 ? 'attempt' : 'attempts'}, and ${open.length} findings remain after them` };
+  } finally {
+    try {
+      git(repo, 'worktree', 'remove', '--force', wt);
+    } catch {
+      // Already gone; the branch, when made, stays.
+    }
+  }
 }

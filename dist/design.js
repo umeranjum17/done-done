@@ -1,4 +1,7 @@
-import { askJudge, backend, judgeable, prepare } from './judge.js';
+import { createHash } from 'node:crypto';
+import { join } from 'node:path';
+import { home } from './config.js';
+import { askJudge, backend, judgeable, prepare, readCache, VERSION, writeCache } from './judge.js';
 import { decodePixels } from './media.js';
 // The defect kinds, each its own question. Each asks for something the judge can see and measure, not whether it was
 // meant that way: a cheap model talks itself out of a judgment ("an intentional style", "the viewer's border"), not out of
@@ -22,7 +25,7 @@ const FLOOR = 0.7;
 // A cheap model sometimes answers six questions with the schema itself, so a malformed answer is asked once more.
 const ASK_ATTEMPTS = 2;
 const SCREEN = 'The image "screen" is an app\'s screen exactly as captured, edge to edge: everything in it, its edges included, is the app. Answer what you see and measure, not whether it looks intended. For a defect, name the element and where it is in personReason, for example "header avatar, top left".';
-const MOCK = ' The image "mock" is the approved design for that screen. Answer about the screen, and count a difference from the mock that a user would see as broken under its kind (a moved, missing or resized element is layout). A difference in live data such as names, numbers or times is not a defect, and neither is an element drawn the same shape as in the mock.';
+const MOCK = ' The image "mock" is the approved design for that screen. Answer about the screen, and count a difference from the mock that a user would see as broken under its kind (a moved, missing or resized element is layout). A difference in live data such as names, numbers or times is not a defect, and neither is an element drawn the same shape as in the mock. A dialog, sheet, menu, popover or toast is approved only where the mock draws that same overlay in the same place: then it covers or cuts the app as in the mock and is no defect of its own; one the mock lacks, or draws elsewhere, is judged like any other element.';
 const questions = (mock) => Object.fromEntries(Object.entries(KINDS).map(([kind, k]) => [kind, { kind: 'choice', instructions: `Write the rationale first: ${k.look}. ${SCREEN}${mock ? MOCK : ''}`, options: { defect: k.defect, none: NONE }, floor: FLOOR, personReason: true, images: mock ? ['screen', 'mock'] : ['screen'] }]));
 // A measured blank strip: a band along a whole edge, at least STRIP.min of that side deep, in one colour (each channel
 // within STRIP.tolerance of the edge line's colour) with nothing in it (at most STRIP.content of its pixels off that
@@ -131,8 +134,12 @@ function image(c) {
     const i = prepare(c);
     return typeof i === 'string' ? `${c.name}: ${i}` : i;
 }
-// records: where each answerer call leaves its record (design-<stamp>-<n>.agent.json), never the prompt.
+// records: where each answerer call leaves its record (design-<stamp>-<n>-<request>.agent.json), never the prompt.
+// The judge's answer is cached in the run store per exact input (screen and mock bytes, questions, route and model), so
+// the same input gets the same verdict on every run: one request per new input, none for a repeat. An answer that never
+// came or cannot be read is not kept.
 export async function design(cfg, choice, screens, records) {
+    const dir = join(home(), 'runs', cfg.app, 'design');
     const stamp = new Date().toISOString().replace(/[:.]/g, '-');
     const out = [];
     const backends = new Map();
@@ -150,26 +157,39 @@ export async function design(cfg, choice, screens, records) {
         let reason;
         const shot = image(s);
         const mock = s.mock && image(s.mock);
+        let cached = false;
         if (typeof shot === 'string' || typeof mock === 'string')
             reason = `not judged: ${typeof shot === 'string' ? shot : mock}`;
         else {
             const withMock = !!mock;
-            call = `${records}/design-${stamp}-${n + 1}`;
-            if (!backends.has(withMock))
-                backends.set(withMock, await backend(cfg, choice, () => `${call}.agent.json`, questions(withMock), ASK_ATTEMPTS));
-            const answers = await askJudge(cfg, backends.get(withMock), choice, { screen: withMock ? 'a screenshot next to its approved mock' : 'a screenshot' }, questions(withMock), { screen: shot, ...(mock && { mock }) });
-            if (typeof answers === 'string')
-                reason = answers;
-            else {
-                defects.push(...Object.entries(answers).filter(([, a]) => a.answer === 'defect').map(([kind, a]) => ({ kind, where: (a.personReason || a.rationale || 'not named').slice(0, 200) })));
-                const unsure = Object.entries(answers).filter(([, a]) => a.abstained).map(([kind]) => kind);
-                if (unsure.length)
-                    reason = `not confident enough about ${unsure.join(', ')}`;
+            const key = createHash('sha256').update(JSON.stringify([VERSION, s.sha256, s.mock?.sha256 ?? null, questions(withMock), choice.route, choice.model])).digest('hex');
+            const hit = readCache(dir, key);
+            cached = Array.isArray(hit?.defects) && Array.isArray(hit?.unsure);
+            let judge = cached ? hit : undefined;
+            if (!cached) {
+                call = `${records}/design-${stamp}-${n + 1}`;
+                if (!backends.has(withMock))
+                    backends.set(withMock, await backend(cfg, choice, (request) => `${call}-${request}.agent.json`, questions(withMock), ASK_ATTEMPTS));
+                const answers = await askJudge(cfg, backends.get(withMock), choice, { screen: withMock ? 'a screenshot next to its approved mock' : 'a screenshot' }, questions(withMock), { screen: shot, ...(mock && { mock }) });
+                if (typeof answers === 'string')
+                    reason = answers;
+                else {
+                    judge = {
+                        defects: Object.entries(answers).filter(([, a]) => a.answer === 'defect').map(([kind, a]) => ({ kind, where: (a.personReason || a.rationale || 'not named').slice(0, 200) })),
+                        unsure: Object.entries(answers).filter(([, a]) => a.abstained).map(([kind]) => kind),
+                    };
+                    writeCache(dir, key, { ...judge, route: choice.route, model: choice.model });
+                }
+            }
+            if (judge) {
+                defects.push(...judge.defects);
+                if (judge.unsure.length)
+                    reason = `not confident enough about ${judge.unsure.join(', ')}`;
             }
         }
         if (strips.unresolved)
             reason = 'approved mock could not be measured; give a PNG or JPEG mock';
-        out.push({ ...row, verdict: defects.length ? 'fail' : reason ? 'unsure' : 'pass', defects, ...(reason && { reason }) });
+        out.push({ ...row, verdict: defects.length ? 'fail' : reason ? 'unsure' : 'pass', defects, ...(reason && { reason }), ...(cached && { cached }) });
     }
     return out;
 }

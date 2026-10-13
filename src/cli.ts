@@ -1953,9 +1953,9 @@ function saveChoice(kind: Kind, { agent, model }: Choice): string {
   return `${kind === 'agent' ? agent : routeOf(agent)}${model ? ` (model ${model})` : ''} saved to ${file}`;
 }
 
-// Why a typed model is not one the agent lists (opencode models, pi --list-models), or '' when it is listed or unchecked.
+// Why a typed model is not one the agent lists (only opencode models; pi's list comes back cut short on a pipe), or '' when it is listed or unchecked.
 function modelList(agent: string): string[] | null {
-  return agent === 'opencode' ? ['models'] : agent === 'pi' ? ['--list-models'] : null;
+  return agent === 'opencode' ? ['models'] : null;
 }
 
 function unknownModel(agent: string, model: string, cfg: Config): string {
@@ -1971,13 +1971,8 @@ function unknownModel(agent: string, model: string, cfg: Config): string {
     process.stderr.write(`${agent} ${list[0]} failed (${(r.error?.message || r.stderr || `exit ${r.status}`).trim().split('\n').at(-1)}), so ${model} is saved unchecked\n`);
     return '';
   }
-  // opencode prints provider/model per line; pi prints a table whose first two columns are provider and model, after a header row.
-  const out = agent === 'pi' ? r.stdout.split(/^provider\s+model.*$/m)[1] ?? '' : r.stdout;
-  const names = out.split('\n').flatMap((l) => {
-    const [a, b] = l.trim().split(/\s+/);
-    return agent === 'pi' && b ? [`${a}/${b}`, b] : [a];
-  });
-  return names.includes(model) ? '' : `${model} is not a model ${agent} lists (${agent} ${list[0]})`;
+  // opencode prints one provider/model per line.
+  return r.stdout.split('\n').map((l) => l.trim()).includes(model) ? '' : `${model} is not a model ${agent} lists (${agent} ${list[0]})`;
 }
 
 const interactive = () => !!process.stdin.isTTY && !!process.stderr.isTTY;

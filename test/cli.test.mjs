@@ -2342,17 +2342,17 @@ test('init in a terminal says why it asks again and refuses a model the agent do
   const t = setup();
   const bin = join(t.dir, 'bin');
   mkdirSync(bin);
-  writeFileSync(join(bin, 'pi'), `#!/bin/sh\nprintf 'provider     model                       context\\nopencode-go  muse-spark-1.3-contributor  1.0M\\n'\n`, { mode: 0o755 });
+  writeFileSync(join(bin, 'opencode'), `#!/bin/sh\necho opencode-go/muse-spark-1.3-contributor\n`, { mode: 0o755 });
   const cmd = [process.execPath, CLI, 'init'].join(' ');
-  // Each list's answers are typed at once, ahead of the prompts: none is dropped while done-done checks the model list.
-  const agentAnswers = ['x', '9', '4', '2', 'model', 'muse', 'opencode-go/muse-spark-1.3-contributor'].join('\\n');
-  const r = spawnSync('/bin/sh', ['-c', `(sleep 2; printf '${agentAnswers}\\n'; sleep 3; printf 'x\\n1\\n1\\n'; sleep 3) | /usr/bin/script -qec "${cmd}" /dev/null`], { cwd: t.repo, env: { ...t.env, PATH: `${bin}:${t.env.PATH}:/usr/bin:/bin` }, encoding: 'utf8', timeout: 60_000 });
+  const agentAnswers = ['x', '9', '3', '2', 'muse', 'opencode-go/nope', 'opencode-go/muse-spark-1.3-contributor'].join('\\n');
+  const r = spawnSync('/bin/sh', ['-c', `(sleep 2; printf '${agentAnswers}\\n'; sleep 3; printf 'x\\n3\\nmuse\\n'; sleep 3) | /usr/bin/script -qec "${cmd}" /dev/null`], { cwd: t.repo, env: { ...t.env, PATH: `${bin}:${t.env.PATH}:/usr/bin:/bin` }, encoding: 'utf8', timeout: 60_000 });
   assert.equal(r.status, 0, r.stdout);
   assert.match(r.stdout, /x is not on the list; type a number from 1 to 6/); assert.match(r.stdout, /9 is not on the list; type a number from 1 to 6/);
-  assert.match(r.stdout, /model is not a model pi lists \(pi --list-models\); type it again/, 'the table header is not a model'); assert.match(r.stdout, /muse is not a model pi lists \(pi --list-models\); type it again/);
+  assert.match(r.stdout, /muse is not provider\/model; type it again/); assert.match(r.stdout, /opencode-go\/nope is not a model opencode lists \(opencode models\); type it again/);
   assert.match(r.stdout, /x is not on the list; type a number from 1 to 4/, 'the judge list says why too');
+  assert.match(r.stdout, /the model was not checked because pi has no model list; run 'done-done doctor --probe' to check it/, 'pi\'s list is not read');
   const g = parse(readFileSync(join(t.env.DONE_DONE_HOME, 'config.yaml'), 'utf8'));
-  assert.deepEqual([g.agent, g.agent_config.pi.model, g.judge.route], ['pi', 'opencode-go/muse-spark-1.3-contributor', 'claude-code']);
+  assert.deepEqual([g.agent, g.agent_config.opencode.model, g.judge.route, g.judge.model], ['opencode', 'opencode-go/muse-spark-1.3-contributor', 'answerer:pi', 'muse']);
 });
 
 test('init in a terminal says a typed model is saved unchecked when its agent is not on PATH', { skip: !existsSync('/usr/bin/script') && 'no script(1)' }, () => {
@@ -2360,11 +2360,11 @@ test('init in a terminal says a typed model is saved unchecked when its agent is
   const bin = join(t.dir, 'bin');
   mkdirSync(bin);
   const cmd = [process.execPath, CLI, 'init'].join(' ');
-  const agentAnswers = ['4', '2', 'muse'].join('\\n');
+  const agentAnswers = ['3', '2', 'opencode-go/x'].join('\\n');
   const r = spawnSync('/bin/sh', ['-c', `(sleep 2; printf '${agentAnswers}\\n'; sleep 3; printf 'x\\n1\\n1\\n'; sleep 3) | /usr/bin/script -qec "${cmd}" /dev/null`], { cwd: t.repo, env: { ...t.env, PATH: `${bin}:/usr/bin:/bin` }, encoding: 'utf8', timeout: 60_000 });
-  assert.match(r.stdout, /muse is saved unchecked because pi is not on PATH; run 'done-done doctor --probe' to check it/);
+  assert.match(r.stdout, /opencode-go\/x is saved unchecked because opencode is not on PATH; run 'done-done doctor --probe' to check it/);
   const g = parse(readFileSync(join(t.env.DONE_DONE_HOME, 'config.yaml'), 'utf8'));
-  assert.equal(g.agent_config.pi.model, 'muse');
+  assert.equal(g.agent_config.opencode.model, 'opencode-go/x');
 });
 
 test('agent_path_override takes a name on PATH or an absolute path, and refuses a relative path', () => {

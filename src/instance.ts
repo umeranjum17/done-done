@@ -78,7 +78,7 @@ async function waitCommand(command: string, env: NodeJS.ProcessEnv, cwd: string,
   }
 }
 
-type Started ={ pgid: number; env: Record<string, string> };
+type Started = { pgid: number; env: Record<string, string> };
 
 // Start the instance, wait for readiness, or kill it and throw a clear reason.
 // The app's output goes to logFile (in the run folder, never with the evidence),

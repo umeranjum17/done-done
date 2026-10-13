@@ -4785,8 +4785,9 @@ test('an instance serves the journey on its own port with its own HOME, then sto
   assert.match(reply, /home=.*done-done-instance-[^/]*\/instance-home\/home/);
   assert.match(reply, new RegExp(`base=http://127.0.0.1:${port}`));
   assert.notEqual(spawnSync('curl', ['-sf', `http://127.0.0.1:${port}/`], { timeout: 8000 }).status, 0, 'the instance stops at run end');
-  const logged = readFileSync(join(t.repo, '.proof', '.done-done', 'runs', `${id}.instance.log`), 'utf8');
-  assert.match(logged, /instance-marker/, 'the app output goes to instance.log next to the run record');
+  const runFolder = join(t.env.DONE_DONE_HOME, 'runs', 'notes', id);
+  assert.match(readFileSync(join(runFolder, 'logs', 'instance.log'), 'utf8'), /instance-marker/, 'the app output goes to instance.log in the run folder');
+  assert.ok(!readdirSync(join(t.repo, '.proof'), { recursive: true }).some((n) => String(n).endsWith('instance.log')), 'never with the evidence');
 });
 
 test('a verify journey waits on a readiness command and logs the app in its run folder', () => {

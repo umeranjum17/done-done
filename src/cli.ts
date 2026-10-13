@@ -454,8 +454,7 @@ async function cmdRun(argv: string[]): Promise<number> {
   if (cfg.instance) {
     scratch = mkdtempSync(join(tmpdir(), 'done-done-instance-'));
     try {
-      // The app's output goes to instance.log next to the run record, never with the evidence.
-      inst = await startInstance(repo, cfg.instance, rec.run_id, scratch, process.env, join(recordsDir(cfg), `${rec.run_id}.instance.log`));
+      inst = await startInstance(repo, cfg.instance, rec.run_id, scratch, process.env, join(runsRoot(cfg.app), rec.run_id, 'logs', 'instance.log'));
     } catch (e) {
       rmSync(scratch, { recursive: true, force: true });
       rec.exit = 1;

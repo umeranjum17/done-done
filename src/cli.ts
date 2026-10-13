@@ -1040,8 +1040,8 @@ function showRun(dir: string, cfg: Config, command: string, gone = false): numbe
       : /^locate:/.test(run.reason ?? '') ? [`Make ${cfg.skill} a real folder inside the repository (not a link), commit, then run again: ${again}`]
       : [`Read the step logs in ${shown(run.repo, join(dir, 'logs'))}`, `Fix the cause, then run again: ${again}`])
     : code === PASS ? [`Verify this receipt (CI or merge): done-done receipt --verify ${rec!.commit}`]
-    : status === 'cancelled' ? [`Start again from the failed step: done-done rerun --run ${run.run_id}`, `List past runs: done-done history`]
-    : [`Read the step logs in ${shown(run.repo, join(dir, 'logs'))}`, `Fix the cause, commit, then run again from the failed step: done-done rerun --run ${run.run_id}`, `Or start a new run: ${again}`];
+    : status === 'cancelled' ? [...(run.kind === 'maintain' ? [] : [`Start again from the failed step: done-done rerun --run ${run.run_id}`]), `List past runs: done-done history`]
+    : [`Read the step logs in ${shown(run.repo, join(dir, 'logs'))}`, ...(run.kind === 'maintain' ? [] : [`Fix the cause, commit, then run again from the failed step: done-done rerun --run ${run.run_id}`]), `Or start a new run: ${again}`];
   emit(result);
   return code;
 }
@@ -1175,6 +1175,7 @@ async function cmdRerun(argv: string[]): Promise<number> {
   const root = runsRoot(cfg.app);
   const srcId = pickId(root, repo, 'rerun', cfg, values.run);
   const src = loadRun(join(root, srcId));
+  if (src.kind === 'maintain') throw new UsageError(`run ${srcId} is a maintain run, which cannot be rerun`, 'Start a new one: done-done maintain');
   const open = shownStatus(src);
   if (open === 'pending' || open === 'running') throw new UsageError(`run ${srcId} is still ${open}, so it cannot be rerun while its runner lives`, `Read it: done-done status --run ${srcId}; stop it first: done-done abort --run ${srcId}`);
   const group = src.runner?.journey_pgid;
@@ -1215,9 +1216,10 @@ async function cmdAbort(argv: string[]): Promise<number> {
   const cfg = loadConfig(repo);
   const id = pickId(runsRoot(cfg.app), repo, 'abort', cfg, values.run);
   const dir = join(runsRoot(cfg.app), id);
+  const startAgain = (r: Run) => (r.kind === 'maintain' ? [] : [`Start again: done-done rerun --run ${id}`]);
   const closed = (r: Run, status = shownStatus(r)) => {
     if (status === 'pending' || status === 'running') return false;
-    emit({ command: 'abort', run_id: id, status, reason: `run ${id} is already ${status}`, help: [`List past runs: done-done history`, `Start again: done-done rerun --run ${id}`] });
+    emit({ command: 'abort', run_id: id, status, reason: `run ${id} is already ${status}`, help: [`List past runs: done-done history`, ...startAgain(r)] });
     return true;
   };
   const latest = loadRun(dir);
@@ -1238,7 +1240,7 @@ async function cmdAbort(argv: string[]): Promise<number> {
   after.reason = 'aborted';
   logEvent(dir, { status: 'cancelled' });
   saveRun(dir, after);
-  emit({ command: 'abort', run_id: id, status: 'cancelled', reason: after.reason, help: [`Read the run: done-done status --run ${id}`, `Start again: done-done rerun --run ${id}`] });
+  emit({ command: 'abort', run_id: id, status: 'cancelled', reason: after.reason, help: [`Read the run: done-done status --run ${id}`, ...startAgain(after)] });
   return PASS;
 }
 

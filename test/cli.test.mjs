@@ -3623,3 +3623,20 @@ test('maintain blocks the source wave for gemini, which cannot read tool-less, a
   assert.deepEqual(m.findings.map((f) => f.kind), ['dead-link', 'coverage'], r.out);
   assert.equal(s.calls().length, 0, 'no reader or reconcile call reaches gemini');
 });
+
+test('rerun refuses a maintain run with a usage error that points to done-done maintain', () => {
+  const { repo, env, sh } = setup();
+  const s = stubAgents(env, JSON.stringify({ drift: [], recipe: 'open it', recipes: [], missing: [] }));
+  const skill = join(repo, '.agents', 'skills', 'verify-notes');
+  mkdirSync(join(skill, 'features'), { recursive: true });
+  writeFileSync(join(skill, 'SKILL.md'), '# verify-notes\n');
+  writeFileSync(join(skill, 'features', 'README.md'), '# features\n\n- [Home](home.md)\n');
+  writeFileSync(join(skill, 'features', 'home.md'), '# Home\n');
+  sh('add', '-A');
+  sh('commit', '-qm', 'skill');
+  const id = toon(doctorIn(repo, s.env, 'maintain', '--foreground')).run_id;
+  const re = spawnSync(process.execPath, [CLI, 'rerun', '--run', id], { cwd: repo, env: s.env, encoding: 'utf8' });
+  assert.equal(re.status, 2, re.stdout + re.stderr);
+  assert.match(toon({ out: re.stdout }).error, /is a maintain run, which cannot be rerun/);
+  assert.match(toon({ out: re.stdout }).help[0], /done-done maintain$/);
+});

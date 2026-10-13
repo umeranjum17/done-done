@@ -1996,6 +1996,7 @@ process.stdout.write(JSON.stringify({ type: 'result', is_error: false, structure
   assert.equal(drive.tmp, join(runDir, 'tmp'), "the drive's scratch is the run's own tmp folder");
   assert.deepEqual(drive.argv.slice(drive.argv.indexOf('--permission-mode')), ['--permission-mode', 'acceptEdits', '--allowedTools', 'Bash', '--add-dir', drive.evidence, '--add-dir', drive.tmp, '--effort', 'low'], 'edits only in the repo, the evidence folder and the run scratch, at the configured effort');
   assert.match(drive.stdin, /Never add steps or data to make the outcome look true/, 'the drive is told not to stage the claim');
+  assert.match(drive.stdin, /a screenshot of an earlier step \(such as an empty or half-filled form\) fails the drive: keep those in /, 'the drive saves only screenshots of the outcome, since the judge checks each against it');
   assert.match(drive.stdin, /Outcome to prove: the note Umer added shows in the list[\s\S]*verify-notes\/features\/add-note\.md/, 'the claim and the feature recipe go on stdin');
   assert.ok(!drive.argv.some((a) => a.includes('Umer added')), 'never in argv');
   assert.deepEqual([judged.length, judged[0].agent], [1, 'opencode'], 'one capture, judged by another agent');
@@ -2039,6 +2040,16 @@ process.stdout.write(JSON.stringify({ type: 'result', is_error: false, structure
   assert.equal(logged.code, 4, logged.out);
   assert.deepEqual([logged.o.status, logged.o.step, logged.o.findings.length], ['awaiting_approval', 'gate', 1]);
   assert.match(logged.o.findings[0].what, /session\.log: the judge did not read this capture/);
+  // While that run waits at its gate, a new verify or a rerun of the same claim is refused: it would go around the gate.
+  const calls = right.calls().length;
+  for (const again of [verify(right.env, 'the note Umer added shows in the list'), spawnSync(process.execPath, [CLI, 'rerun', '--run', logged.o.run_id], { cwd: t.repo, env: right.env, encoding: 'utf8' })]) {
+    const out = again.out ?? again.stdout;
+    assert.equal(again.code ?? again.status, 2, out);
+    assert.match(out, new RegExp(`already has run ${logged.o.run_id} waiting at its gate`));
+    assert.match(out, new RegExp(`done-done respond --run ${logged.o.run_id} --action approve\\|skip\\|fix .*done-done abort --run ${logged.o.run_id}`));
+  }
+  assert.equal(right.calls().length, calls, 'no agent was started');
+  assert.equal(t.dd('respond', '--run', logged.o.run_id, '--action', 'fix').code, 1);
   // A drive that changes a tracked file fails: its captures would not be of the committed code.
   const edit = verify({ ...right.env, DRIVE: 'edit' }, 'the note Umer added shows in the list');
   assert.equal(edit.code, 1, edit.out);
@@ -2122,6 +2133,7 @@ test('verify --judge through pi and gemini: each judges tools-off with the captu
     assert.equal(bad.code, 4, bad.out);
     assert.equal(toon(bad).status, 'awaiting_approval');
     assert.match(toon(bad).findings[0].what, /judge says wrong screen/);
+    assert.equal(t.dd('respond', '--run', toon(bad).run_id, '--action', 'fix').code, 1, 'one run per claim waits at its gate');
   }
 });
 
@@ -2167,6 +2179,7 @@ globalThis.fetch = async (url, init) => {
   assert.equal(bad.code, 4, bad.out);
   assert.equal(toon(bad).status, 'awaiting_approval');
   assert.match(toon(bad).findings[0].what, /judge says wrong screen/);
+  assert.equal(t.dd('respond', '--run', toon(bad).run_id, '--action', 'fix').code, 1, 'one run per claim waits at its gate');
   // A refused key is unsure, and the reason names the real cause and where the key comes from.
   const refused = verify(withKey('401'), 'the home screen shows the sync banner');
   assert.equal(refused.code, 4, refused.out);

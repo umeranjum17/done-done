@@ -1095,20 +1095,21 @@ async function runSteps(dir: string): Promise<void> {
       const scratch = join(dir, 'tmp');
       mkdirSync(scratch, { recursive: true });
       // With an instance block the app is already running at $DONE_DONE_BASE_URL; the drive uses it, never a fixed port.
-      let instEnv: Record<string, string> = {};
+      // The agent keeps its own HOME and XDG folders (its login lives there); only the app runs isolated.
+      let instPort: Record<string, string> = {};
       if (cfg.instance) {
         try {
           const inst = await startInstance(run.repo, cfg.instance, rec.run_id, scratch, process.env, join(dir, 'logs', 'instance.log'));
           run.runner!.instance_pgid = inst.pgid;
           saveRun(dir, run);
-          instEnv = inst.env;
+          instPort = { DONE_DONE_PORT: inst.env.DONE_DONE_PORT, DONE_DONE_BASE_URL: inst.env.DONE_DONE_BASE_URL };
         } catch (e) {
           return finish('fail', `drive: instance: ${(e as Error).message}`);
         }
       }
       const a = await askAgent({
         ...agentRun(cfg, author.agent, author.model), prompt: drivePrompt(run, cfg, evidence, scratch), schema: DRIVE_SCHEMA, cwd: run.repo, tools: 'edit',
-        record: join(dir, 'agents', 'drive.json'), dirs: [evidence, scratch], env: { DONE_DONE_RUN_ID: rec.run_id, DONE_DONE_DRIVE: rec.run_id, DONE_DONE_EVIDENCE_ROOT: evidence, TMPDIR: scratch, ...instEnv },
+        record: join(dir, 'agents', 'drive.json'), dirs: [evidence, scratch], env: { DONE_DONE_RUN_ID: rec.run_id, DONE_DONE_DRIVE: rec.run_id, DONE_DONE_EVIDENCE_ROOT: evidence, TMPDIR: scratch, ...instPort },
         onSpawn: spawned,
       });
       if (run.runner?.instance_pgid) stopInstance(run.runner.instance_pgid);

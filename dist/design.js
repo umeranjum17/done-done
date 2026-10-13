@@ -11,8 +11,8 @@ export const KINDS = {
         defect: 'An avatar, profile picture, app icon or logo mark (a symbol or a face, not a word) is drawn more than 1.3 times wider than tall, or more than 1.3 times taller than wide; or a circle is drawn as an oval; or a photo shows people or objects flattened or stretched.',
         look: 'list each avatar, profile picture, app icon, logo mark and photo with its drawn width x height in pixels',
     },
-    'clipped-text': { defect: 'Some text is cut: letters cut off by an edge of the image or of their container, or a word or line that stops mid-way with no ellipsis. Text hidden behind a dialog, sheet, menu, popover or toast laid over the app is covered, not cut.', look: 'name any label whose letters touch or cross an edge of the image or of its container' },
-    overlap: { defect: 'Two elements are drawn over each other: text over text, a control over content, or content under the status bar, clock or system bars. A dialog, sheet, menu, popover or toast laid over the app is a layer above it, not this, unless its own contents overlap.', look: 'name any two elements that touch or cover each other' },
+    'clipped-text': { defect: 'Some text is cut: letters cut off by an edge of the image or of their container, or a word or line that stops mid-way with no ellipsis.', look: 'name any label whose letters touch or cross an edge of the image or of its container' },
+    overlap: { defect: 'Two elements are drawn over each other: text over text, a control over content, or content under the status bar, clock or system bars.', look: 'name any two elements that touch or cover each other' },
     'off-screen': { defect: 'An element is cut by the left, right or top edge of the image, so part of it is missing. Content cut by the bottom edge of a scrolling list is not this.', look: 'name any element that touches or crosses the left, right or top edge' },
     'blank-strip': {
         defect: 'A plain band with nothing in it runs along a whole edge of the image (left, right, top or bottom), in a colour different from the screen background beside it, such as a black bar beside a light screen; or a region of the image is left unpainted. The image is the screen captured edge to edge, with no border, margin, frame, crop or letterbox bars of its own, so black side bars or letterboxing mean the app did not fill the screen: that is this defect.',
@@ -25,7 +25,7 @@ const FLOOR = 0.7;
 // A cheap model sometimes answers six questions with the schema itself, so a malformed answer is asked once more.
 const ASK_ATTEMPTS = 2;
 const SCREEN = 'The image "screen" is an app\'s screen exactly as captured, edge to edge: everything in it, its edges included, is the app. Answer what you see and measure, not whether it looks intended. For a defect, name the element and where it is in personReason, for example "header avatar, top left".';
-const MOCK = ' The image "mock" is the approved design for that screen. Answer about the screen, and count a difference from the mock that a user would see as broken under its kind (a moved, missing or resized element is layout). A difference in live data such as names, numbers or times is not a defect, and neither is anything the screen draws as the mock does: the mock is approved, so an element shaped, placed, covered or cut as in the mock is no defect of any kind.';
+const MOCK = ' The image "mock" is the approved design for that screen. Answer about the screen, and count a difference from the mock that a user would see as broken under its kind (a moved, missing or resized element is layout). A difference in live data such as names, numbers or times is not a defect, and neither is an element drawn the same shape as in the mock. A dialog, sheet, menu, popover or toast is approved only where the mock draws that same overlay in the same place: then it covers or cuts the app as in the mock and is no defect of its own; one the mock lacks, or draws elsewhere, is judged like any other element.';
 const questions = (mock) => Object.fromEntries(Object.entries(KINDS).map(([kind, k]) => [kind, { kind: 'choice', instructions: `Write the rationale first: ${k.look}. ${SCREEN}${mock ? MOCK : ''}`, options: { defect: k.defect, none: NONE }, floor: FLOOR, personReason: true, images: mock ? ['screen', 'mock'] : ['screen'] }]));
 // A measured blank strip: a band along a whole edge, at least STRIP.min of that side deep, in one colour (each channel
 // within STRIP.tolerance of the edge line's colour) with nothing in it (at most STRIP.content of its pixels off that
@@ -125,17 +125,6 @@ export function blankStrips(s) {
     const alike = (b, m) => b.edge === m.edge && Math.abs(b.share - m.share) <= STRIP.alike && b.colour.every((v, k) => Math.abs(v - m.colour[k]) < STRIP.contrast);
     return { defects: found.filter((b) => !approved.some((m) => alike(b, m))).map(describe), unresolved: false };
 }
-// Is the screen its mock, pixel for pixel? Then everything in it is drawn as in the approved design, which is no defect
-// of any kind, so a sampled judge is not asked a question the mock already answers.
-function sameAsMock(s) {
-    if (!s.mock || s.media.status !== 'ok' || s.mock.media.status !== 'ok')
-        return false;
-    if (s.sha256 === s.mock.sha256)
-        return true;
-    const a = decodePixels(s.bytes, s.media.type);
-    const b = decodePixels(s.mock.bytes, s.mock.media.type);
-    return !!a && !!b && a.w === b.w && a.h === b.h && Buffer.from(a.rgb).equals(Buffer.from(b.rgb)) && Buffer.from(a.clear).equals(Buffer.from(b.clear));
-}
 // Why a file cannot be judged, or its image as sent.
 function image(c) {
     if (c.media.status !== 'ok')
@@ -148,7 +137,7 @@ function image(c) {
 // records: where each answerer call leaves its record (design-<stamp>-<n>.agent.json), never the prompt.
 // The judge's answer is cached in the run store per exact input (screen and mock bytes, questions, route and model), so
 // the same input gets the same verdict on every run: one request per new input, none for a repeat. An answer that never
-// came is not kept.
+// came or cannot be read is not kept.
 export async function design(cfg, choice, screens, records) {
     const dir = join(home(), 'runs', cfg.app, 'design');
     const stamp = new Date().toISOString().replace(/[:.]/g, '-');
@@ -171,10 +160,6 @@ export async function design(cfg, choice, screens, records) {
         let cached = false;
         if (typeof shot === 'string' || typeof mock === 'string')
             reason = `not judged: ${typeof shot === 'string' ? shot : mock}`;
-        else if (sameAsMock(s)) {
-            out.push({ ...row, verdict: 'pass', defects: [], reason: 'the screen is its approved mock, pixel for pixel, so nothing differs to judge' });
-            continue;
-        }
         else {
             const withMock = !!mock;
             const key = createHash('sha256').update(JSON.stringify([s.sha256, s.mock?.sha256 ?? null, questions(withMock), choice.route, choice.model])).digest('hex');

@@ -2365,10 +2365,6 @@ test('design fails a screen on each defect the judge names, alone or next to its
   assert.deepEqual(toon(again).screens[0].defects, b.screens[0].defects);
   writeFileSync(join(t.dir, 'mock2.png'), screen(5));
   assert.equal(design(answer(), 'screen.png', '--mock', 'screen.png=mock2.png').calls.length, 1);
-  // A screen that is its mock, pixel for pixel, is drawn as approved, so it passes without a request.
-  writeFileSync(join(t.dir, 'copy.png'), readFileSync(join(t.dir, 'screen.png')));
-  const same = design(answer({ overlap: { defect: 0.9, none: 0.1 } }), 'screen.png', '--mock', 'screen.png=copy.png');
-  assert.deepEqual([same.code, toon(same).screens[0].verdict, toon(same).screens[0].reason, same.calls.length], [0, 'pass', 'the screen is its approved mock, pixel for pixel, so nothing differs to judge', 0]);
   writeFileSync(join(t.dir, 'screen3.png'), screen(11));
   const unsure = design(answer({ layout: { defect: 0.5, none: 0.5 } }), 'screen3.png');
   assert.equal(unsure.code, 3, unsure.out);
@@ -2406,15 +2402,30 @@ console.log(JSON.stringify({ type: 'text', part: { type: 'text', text: replies[M
   assert.equal(again.code, 0, again.out);
   assert.equal(toon(again).screens[0].verdict, 'pass');
   assert.equal(again.calls.length, 2, 'the all-zero answer is asked once more');
-  assert.match(again.calls[1].file, /Your previous answer was not valid \(no probabilities for aspect, clipped-text, overlap, off-screen, blank-strip, layout that are each 0 to 1 and sum to 1/);
   const never = design(zero);
   assert.equal(never.code, 3, never.out);
   assert.equal(never.calls.length, 2);
-  assert.match(toon(never).screens[0].reason, /^the judge did not answer: the agent did not answer with valid JSON after 2 tries: no probabilities for aspect, /);
+  assert.equal(toon(never).screens[0].reason, 'the judge did not answer: no probabilities for aspect, clipped-text, overlap, off-screen, blank-strip, layout that are each 0 to 1 and sum to 1');
   // One kind left without an option is malformed too, and only that kind is named.
   const partial = JSON.parse(answer({ defect: 0.02, none: 0.98 }));
   partial.layout.probabilities = { defect: 0.02 };
-  assert.match(toon(design(JSON.stringify(partial))).screens[0].reason, /valid JSON after 2 tries: no probabilities for layout that/);
+  assert.match(toon(design(JSON.stringify(partial))).screens[0].reason, /^the judge did not answer: no probabilities for layout that/);
+});
+
+test('design fails an overlay the approved mock does not draw in that place', () => {
+  const t = setup();
+  mkdirSync(t.env.DONE_DONE_HOME, { recursive: true });
+  writeFileSync(join(t.env.DONE_DONE_HOME, 'config.yaml'), 'agent: claude\njudge:\n  route: answerer:opencode\n');
+  writeFileSync(join(t.dir, 'mock.png'), screen(3));
+  const kinds = ['aspect', 'clipped-text', 'overlap', 'off-screen', 'blank-strip', 'layout'];
+  const reply = JSON.stringify(Object.fromEntries(kinds.map((k) => [k, k === 'overlap' ? { probabilities: { defect: 0.9, none: 0.1 }, rationale: 'Looked.', personReason: 'toast over the save button' } : { probabilities: { defect: 0.03, none: 0.97 }, rationale: 'Looked.', personReason: 'Nothing of this kind.' }])));
+  const s = stubAgents(t.env, reply);
+  symlinkSync(process.execPath, join(s.bin, 'node'));
+  const run = spawnSync(process.execPath, [CLI, 'design', 'screen.png', '--mock', 'screen.png=mock.png'], { cwd: t.dir, env: s.env, encoding: 'utf8' });
+  const r = { code: run.status, out: run.stdout + run.stderr, calls: s.calls() };
+  assert.equal(r.code, 1, r.out);
+  assert.deepEqual(toon(r).screens[0].defects, [{ kind: 'overlap', where: 'toast over the save button' }]);
+  assert.equal(r.calls.length, 1, 'the overlay is judged, not passed without a request');
 });
 
 test('design measures a blank strip along an edge, but not a nav rail with icons or a uniform frame', () => {

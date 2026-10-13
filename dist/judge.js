@@ -103,12 +103,6 @@ export async function backend(cfg, choice, record = () => '', questions = { rele
             throw new UsageError(`judge: ${notStartable(choice.agent, override)}`, `Install ${choice.agent}, or ask the user for another judge and save it: done-done init --judge <agent> --judge-model <model>`);
         const { answerer, resolve } = await kit();
         let lastError = '';
-        // An answer the kit cannot read (all-zero probabilities, an option left out) would abstain on every question as if
-        // the judge were unsure, so it is asked again like any malformed answer.
-        const check = (answer) => {
-            const bad = Object.entries(questions).filter(([k, q]) => /^(malformed|no answer)/.test(resolve(q, answer[k]).reason ?? '')).map(([k]) => k);
-            return bad.length ? `no probabilities for ${bad.join(', ')} that are each 0 to 1 and sum to 1: ${JSON.stringify(answer).slice(0, 200)}` : '';
-        };
         // The kit hides a failed call's message from the verdict, so the real cause is kept here for the result.
         const ask = answerer({
             name: choice.route,
@@ -118,7 +112,7 @@ export async function backend(cfg, choice, record = () => '', questions = { rele
                 lastError = '';
                 const attached = images.map((img) => ({ name: `${img.id}.${img.mime.split('/')[1]}`, bytes: Buffer.from(img.dataUrl.slice(img.dataUrl.indexOf(',') + 1), 'base64') }));
                 // A tool-less call runs in its own scratch folder, so the CLI sees the attached capture and nothing else.
-                const a = await askAgent({ ...run, prompt, schema: answerSchema(questions), check, cwd: tmpdir(), tools: 'none', attempts, record: record(), images: attached });
+                const a = await askAgent({ ...run, prompt, schema: answerSchema(questions), cwd: tmpdir(), tools: 'none', attempts, record: record(), images: attached });
                 lastError = a.ok ? '' : a.error ?? 'no answer';
                 if (!a.ok)
                     throw new Error(lastError);
@@ -157,10 +151,19 @@ export function prepare(c) {
     return small ? { mime: 'image/png', bytes: small } : `${c.media.type} is ${c.media.w}x${c.media.h} and cannot be downscaled (only 8-bit PNG and JPEG that are not extremely long are), so capture a PNG or JPEG at most ${MAX_SIDE}px on its long side`;
 }
 // One request about the named images: each question's answer after the floors, or why the judge did not answer.
+// An answer the kit cannot read (all-zero probabilities, an option left out) would abstain on every question as if the
+// judge were unsure, so it is asked once more, and one that still cannot be read is never kept.
 // A signed-out or non-subscription claude-code sign-in is a usage error, since no later request can do better.
 export async function askJudge(cfg, be, choice, state, questions, images) {
     try {
-        const raw = await be.ask(state, questions, AbortSignal.timeout(parseDuration(cfg.agent_timeout)), Object.entries(images).map(([id, i]) => ({ id, mime: i.mime, dataUrl: `data:${i.mime};base64,${i.bytes.toString('base64')}` })));
+        const ask = () => be.ask(state, questions, AbortSignal.timeout(parseDuration(cfg.agent_timeout)), Object.entries(images).map(([id, i]) => ({ id, mime: i.mime, dataUrl: `data:${i.mime};base64,${i.bytes.toString('base64')}` })));
+        const unreadable = (raw) => Object.entries(questions).filter(([k, q]) => /^(malformed|no answer)/.test(be.resolve(q, raw[k]).reason ?? '')).map(([k]) => k);
+        let raw = await ask();
+        if (unreadable(raw).length)
+            raw = await ask();
+        const bad = unreadable(raw);
+        if (bad.length)
+            return `the judge did not answer: no probabilities for ${bad.join(', ')} that are each 0 to 1 and sum to 1`;
         return Object.fromEntries(Object.entries(questions).map(([k, q]) => [k, be.resolve(q, raw[k])]));
     }
     catch (e) {

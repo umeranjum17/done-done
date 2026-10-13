@@ -1315,7 +1315,7 @@ Answer with summary (what you changed, in one line) and blocker ("" when you fix
             round.rerun = { result: next.end?.result ?? (next.asks.length ? 'gate' : 'pass'), reason: next.end?.reason, ...next.logs };
             if (next.end && !next.fixable.length)
                 return blocked(`the re-run after attempt ${k} did not pass: ${next.end.reason}`, [{ id: 'F1', kind: 'verify', file: '.', what: next.end.reason }]);
-            const sorted = next.end ? await sortJudged(run, cfg, failures(next.fixable), join(dir, 'agents', `triage-fix${k}.json`), h) : [];
+            const sorted = next.end ? await sortJudged(run, cfg, failures(next.fixable), join(dir, 'agents', `triage-fix${k}.json`), h).catch((e) => { close('failed'); throw e; }) : [];
             if (typeof sorted === 'string')
                 return blocked(`triage: ${sorted}`, failures(next.fixable));
             if (!next.end || sorted.length) {

@@ -230,7 +230,7 @@ done-done history [--limit <n>]                                     # this check
 
 `rerun` starts a new run of the same journey and leaves the source run as it was. It reuses `resolve` when HEAD, the journey command and the verify skill are unchanged, and `drive` too when the source's drive record is clean and bound to that HEAD; every other step runs again, and the judge runs when the source run was judged or `judge.enabled` is set. It refuses a source run that is still pending or running (exit 2), one whose journey's process group is still alive, and a `maintain` run (exit 2; start a new one with `done-done maintain`). `--wait` (the default) waits for the new run and prints it; `--no-wait` returns at once, with exit 4 while the run is still running.
 
-`abort` signals the runner, then its journey's process group, and marks the run `cancelled`; `status` shows a cancelled run as failed (exit 1), with the step that was running marked `cancelled`. It exits 0 when it cancelled the run. A run that had already ended, or whose runner pid cannot be confirmed as this run's, is left alone and exits 1.
+`abort` kills the runner's process group (a `maintain` run's agent calls run in it, so they stop too), then its journey's process group, and marks the run `cancelled`; `status` shows a cancelled run as failed (exit 1), with the step that was running marked `cancelled`. It exits 0 when it cancelled the run. A run that had already ended, or whose runner pid cannot be confirmed as this run's, is left alone and exits 1.
 
 ### Keep the verify skill true
 

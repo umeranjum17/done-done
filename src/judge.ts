@@ -4,8 +4,8 @@ import { accessSync, constants, existsSync, mkdirSync, mkdtempSync, readFileSync
 import { tmpdir } from 'node:os';
 import { delimiter, isAbsolute, join } from 'node:path';
 import type { Backend, Question } from '@byokit/decide';
-import { askAgent, claudeBin, type JudgeChoice } from './agents.js';
-import { type Config, home, UsageError } from './config.js';
+import { agentRun, askAgent, claudeBin, type JudgeChoice } from './agents.js';
+import { type Config, home, parseDuration, UsageError } from './config.js';
 import { downscaleToPng, type Verdict } from './media.js';
 
 // The relevance judge: one question about one downscaled capture and the claim's outcome line, asked through a
@@ -15,7 +15,6 @@ export type Capture = { name: string; bytes: Buffer; sha256: string; media: Verd
 export type Judged = { path: string; sha256: string; verdict: 'pass' | 'fail' | 'unsure'; reason: string; cached: boolean };
 
 const MAX_SIDE = 1280; // long edge sent to the model, in pixels
-const TIMEOUT_MS = 120_000; // one model request per capture, no retry
 const MAX_CALLS = 10; // model requests per check; later captures are unsure
 const VERSION = 2; // bump when QUESTION or the cache key changes, so older cached verdicts are not reused
 const OPTIONS: Record<string, string> = {
@@ -93,9 +92,12 @@ export type Judge = { ask: Backend['ask']; resolve: typeof import('@byokit/decid
 // questions: what each request asks, so the answerer can ask its agent for that answer shape; attempts: asks per request
 // when the answer is malformed.
 export async function backend(cfg: Config, choice: JudgeChoice, record = () => '', questions: Record<string, Question> = { relevance: QUESTION }, attempts = 1): Promise<Judge & { detail: string }> {
+  const timeoutMs = parseDuration(cfg.agent_timeout)!;
+  const override = cfg.agent_path_override[choice.agent];
   if (choice.route !== 'claude-code') {
-    const bin = onPath(choice.agent);
-    if (!bin) throw new UsageError(`judge: ${choice.route} needs ${choice.agent} on PATH`, `Install ${choice.agent}, or set judge.route in ~/.done-done/config.yaml`);
+    const run = agentRun(cfg, choice.agent, choice.model);
+    const bin = run.path;
+    if (!bin) throw new UsageError(`judge: ${choice.route} needs ${override ? `agent_path_override.${choice.agent} ${override} to be an executable file` : `${choice.agent} on PATH`}`, `Install ${choice.agent}, or set judge.route in ~/.done-done/config.yaml`);
     const { answerer, resolve } = await kit();
     let lastError = '';
     // The kit hides a failed call's message from the verdict, so the real cause is kept here for the result.
@@ -112,7 +114,7 @@ export async function backend(cfg: Config, choice: JudgeChoice, record = () => '
             writeFileSync(file, Buffer.from(img.dataUrl.slice(img.dataUrl.indexOf(',') + 1), 'base64'), { mode: 0o600 });
             return file;
           });
-          const a = askAgent({ agent: choice.agent, model: choice.model, prompt, schema: answerSchema(questions), cwd: dir, timeoutMs: TIMEOUT_MS, tools: 'none', attempts, record: record(), files });
+          const a = askAgent({ ...run, prompt, schema: answerSchema(questions), cwd: dir, tools: 'none', attempts, record: record(), files });
           lastError = a.ok ? '' : a.error ?? 'no answer';
           if (!a.ok) throw new Error(lastError);
           return JSON.stringify(a.answer);
@@ -126,19 +128,19 @@ export async function backend(cfg: Config, choice: JudgeChoice, record = () => '
   const bin = claudeBin(cfg);
   const dir = cfg.judge.claude_code.config_dir;
   const signIn = `CLAUDE_CONFIG_DIR=${dir} ${bin || 'claude'} auth login`;
-  const where = '~/.done-done/config.yaml (judge.claude_code)';
-  if (!bin) throw new UsageError(`judge: no claude binary on PATH; install Claude Code or set judge.claude_code.bin in ${where}`, 'Install Claude Code, or set judge.claude_code.bin to its absolute path');
-  if (!isAbsolute(bin) || !isAbsolute(dir)) throw new UsageError(`judge: judge.claude_code.bin and judge.claude_code.config_dir must be absolute paths (got ${bin}, ${dir})`, `Fix bin or config_dir in ${where}`);
-  if (!isExecutable(bin)) throw new UsageError(`judge: judge.claude_code.bin ${bin} is not an executable file`, `Fix bin in ${where} or install Claude Code`);
+  const where = '~/.done-done/config.yaml';
+  if (!bin && override) throw new UsageError(`judge: agent_path_override.claude ${override} is not an executable file`, `Fix agent_path_override.claude in ${where} or install Claude Code`);
+  if (!bin) throw new UsageError(`judge: no claude binary on PATH; install Claude Code or set agent_path_override.claude in ${where}`, 'Install Claude Code, or set agent_path_override.claude to its absolute path');
+  if (!isAbsolute(dir)) throw new UsageError(`judge: judge.claude_code.config_dir must be an absolute path (got ${dir})`, `Fix judge.claude_code.config_dir in ${where}`);
   if (!existsSync(dir)) throw new UsageError(`judge: no Claude sign-in at ${dir}`, `Sign in once with your Claude plan: mkdir -p ${dir} && ${signIn}`);
   const { claudeCode, resolve } = await kit();
   // The real folder, so a link to ~/.claude is refused here as a config error, not later per capture.
   const real = realpathSync(dir);
   try {
-    const ask = claudeCode({ bin, configDir: real, model: choice.model, timeoutMs: TIMEOUT_MS }).ask;
+    const ask = claudeCode({ bin, configDir: real, model: choice.model, timeoutMs }).ask;
     return { ask, resolve, lastError: () => '', signIn, signedIn: () => claudeLoggedIn(bin, real), detail: `claude binary at ${bin}, a sign-in folder and the judge kit are present (login is checked only when a capture is judged)` };
   } catch (e) {
-    throw new UsageError(`judge: ${(e as Error).message} (judge.claude_code.bin ${bin}, judge.claude_code.config_dir ${dir})`, 'Set judge.claude_code.config_dir to a folder of its own, not your ~/.claude');
+    throw new UsageError(`judge: ${(e as Error).message} (claude ${bin}, judge.claude_code.config_dir ${dir})`, 'Set judge.claude_code.config_dir to a folder of its own, not your ~/.claude');
   }
 }
 
@@ -154,7 +156,7 @@ export function prepare(c: Capture): { mime: string; bytes: Buffer } | string {
 // A signed-out or non-subscription claude-code sign-in is a usage error, since no later request can do better.
 export async function askJudge(cfg: Config, be: Judge, choice: JudgeChoice, state: unknown, questions: Record<string, Question>, images: Record<string, { mime: string; bytes: Buffer }>): Promise<Record<string, ReturnType<Judge['resolve']>> | string> {
   try {
-    const raw = await be.ask(state, questions, AbortSignal.timeout(TIMEOUT_MS), Object.entries(images).map(([id, i]) => ({ id, mime: i.mime, dataUrl: `data:${i.mime};base64,${i.bytes.toString('base64')}` })));
+    const raw = await be.ask(state, questions, AbortSignal.timeout(parseDuration(cfg.agent_timeout)!), Object.entries(images).map(([id, i]) => ({ id, mime: i.mime, dataUrl: `data:${i.mime};base64,${i.bytes.toString('base64')}` })));
     return Object.fromEntries(Object.entries(questions).map(([k, q]) => [k, be.resolve(q, raw[k])]));
   } catch (e) {
     const code = (e as { code?: string }).code;

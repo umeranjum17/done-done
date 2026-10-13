@@ -19,9 +19,8 @@ type Harness<S> = {
   finish: (result: MaintainResult, reason?: string) => void;
 };
 
-// Plan 1.5 shared rules: a per-run call cap and a per-call timeout stop runaway cost.
+// Plan 1.5 shared rules: a per-run call cap and a per-call timeout (agent_timeout) stop runaway cost.
 const MAX_CALLS = 30;
-const CALL_MS = 20 * 60_000;
 const CHURN_SINCE = '30.days.ago';
 const CHURN_MAX = 500;
 const FEATURE_CHARS = 20_000;
@@ -322,7 +321,7 @@ ${toolless ? 'Use the cited source, not the skill, and explain' : "Read the prod
 
 Feature file ${rel(file)}:
 ${text.slice(0, FEATURE_CHARS)}${toolless ? citedSource(rel(file), text.slice(0, FEATURE_CHARS)) : ''}`;
-    const a = askAgent({ agent: agent.agent, model: agent.model, prompt, schema: READER_SCHEMA, cwd: repo, timeoutMs: CALL_MS, tools: toolless ? 'none' : 'read', record: record(`reader-${name.replace(/\.md$/, '')}`) });
+    const a = askAgent({ ...agent, prompt, schema: READER_SCHEMA, cwd: repo, tools: toolless ? 'none' : 'read', record: record(`reader-${name.replace(/\.md$/, '')}`) });
     if (!a.ok) add({ kind: 'coverage', file: rel(file), what: `the reader did not answer: ${a.error}` });
     return { feature: rel(file), ok: a.ok, drift: a.answer?.drift, recipe: a.answer?.recipe, ...(a.error && { error: a.error }), record: a.record, ...(a.recordError && { record_error: a.recordError }) };
   });
@@ -373,7 +372,7 @@ ${text.slice(0, FEATURE_CHARS)}${toolless ? citedSource(rel(file), text.slice(0,
 Features (JSON): ${JSON.stringify(answered.map((r) => ({ feature: r.feature, recipe: r.recipe })))}
 
 Recently changed files (git log since ${CHURN_SINCE}, most recent first${churnAll.length > churn.length ? `; ${churnAll.length - churn.length} older paths left out` : ''}): ${churn.length ? churn.join(', ') : 'none'}`;
-    const a = askAgent({ agent: agent.agent, model: agent.model, prompt, schema: RECONCILE_SCHEMA, cwd: repo, timeoutMs: CALL_MS, tools: 'none', record: record('reconcile') });
+    const a = askAgent({ ...agent, prompt, schema: RECONCILE_SCHEMA, cwd: repo, tools: 'none', record: record('reconcile') });
     if (!a.ok) add({ kind: 'coverage', file: skillDir, what: `the reconcile call did not answer: ${a.error}` });
     if (a.answer) {
       recipes = shaped<unknown>(a.answer.recipes, (x) => typeof x.state === 'string' && Array.isArray(x.features) && Array.isArray(x.steps), 'reconcile recipes');

@@ -617,10 +617,19 @@ test('init writes a minimal config that keeps evidence outside the repo, and is 
   assert.deepEqual(parse(readFileSync(yml, 'utf8')), { app: 'repo' }, 'the app is pinned and no in-repo evidence root is set');
   assert.ok(!existsSync(join(repo, '.gitignore')), 'no .gitignore is written');
   assert.match(d.evidence_root, /evidence[/\\]repo$/, 'init names the out-of-repo evidence root');
+  const globalYml = join(dir, 'home', 'config.yaml');
+  assert.equal(d.global_config, `written ${globalYml}`);
+  const globalText = readFileSync(globalYml, 'utf8');
+  const g = parse(globalText);
+  assert.deepEqual(Object.keys(g), ['agent', 'agent_config', 'agent_args_override', 'agent_path_override', 'acpx_path', 'agent_timeout', 'evidence', 'judge'], 'every global key, named as in no-mistakes where the meaning is the same');
+  assert.deepEqual([g.agent, g.agent_config.claude, g.agent_config.opencode, g.agent_timeout], ['auto', { model: 'claude-haiku-5-5', effort: 'low' }, { model: 'opencode-go/muse-spark-1.3-contributor', effort: 'low' }, '30m'], 'the cheap defaults');
+  for (const key of Object.keys(g)) assert.match(globalText, new RegExp(`# .*\\n${key}:`), `${key} has a comment`);
   const before = readFileSync(yml);
   const again = dd('init');
   assert.equal(again.code, 0, again.out);
   assert.equal(toon(again).config, 'unchanged');
+  assert.equal(toon(again).global_config, 'unchanged');
+  assert.equal(readFileSync(globalYml, 'utf8'), globalText, 'init never overwrites the global config');
   assert.equal(toon(again).gitignore, 'unchanged');
   assert.deepEqual(json(dd('init', '--json')), toon(again), '--json is the same result as JSON');
   assert.deepEqual(readFileSync(yml), before, 'repeat init preserves the config');
@@ -1628,7 +1637,7 @@ process.stdout.write(JSON.stringify({ type: 'result', subtype: 'success', is_err
   const stub = (a, li = loggedIn) => writeFileSync(join(cfgDir, 'stub.json'), JSON.stringify({ loggedIn: li, answer: a, reason: 'The screen shows the notes list.' }));
   stub(answer);
   mkdirSync(t.env.DONE_DONE_HOME, { recursive: true });
-  writeFileSync(join(t.env.DONE_DONE_HOME, 'config.yaml'), `agent: opencode\njudge:\n  route: claude-code\n  model: claude-test-1\n  claude_code: { bin: ${JSON.stringify(bin)}, config_dir: ${JSON.stringify(cfgDir)} }\n`);
+  writeFileSync(join(t.env.DONE_DONE_HOME, 'config.yaml'), `agent: opencode\njudge:\n  route: claude-code\n  model: claude-test-1\n  claude_code: { config_dir: ${JSON.stringify(cfgDir)} }\nagent_path_override: { claude: ${JSON.stringify(bin)} }\n`);
   const calls = () => (existsSync(join(cfgDir, 'calls.jsonl')) ? readFileSync(join(cfgDir, 'calls.jsonl'), 'utf8').trim().split('\n').map((l) => JSON.parse(l)) : []);
   return { ...t, cfgDir, stub, calls };
 }
@@ -1908,7 +1917,7 @@ test('auto judge skips an installed claude that is not signed in, even with its 
   const verdict = JSON.stringify({ relevance: { probabilities: CORRECT, rationale: 'The list shows the notes.', personReason: 'The list shows the notes.' } });
   const s = stubAgents(t.env, verdict);
   symlinkSync(process.execPath, join(s.bin, 'node'));
-  writeFileSync(join(t.env.DONE_DONE_HOME, 'config.yaml'), `agent: [opencode, claude]\njudge:\n  claude_code: { bin: ${JSON.stringify(join(s.bin, 'claude'))}, config_dir: ${JSON.stringify(cfgDir)} }\n`);
+  writeFileSync(join(t.env.DONE_DONE_HOME, 'config.yaml'), `agent: [opencode, claude]\njudge:\n  claude_code: { config_dir: ${JSON.stringify(cfgDir)} }\nagent_path_override: { claude: ${JSON.stringify(join(s.bin, 'claude'))} }\n`);
   const d = toon(doctorIn(t.repo, s.env, 'doctor'));
   const choice = d.checks.find((c) => c.check === 'judge_choice');
   assert.match(choice.detail, /^answerer:opencode /, choice.detail);
@@ -1937,14 +1946,16 @@ test('auto judge with claude as the only agent and no sign-in folder has no judg
   assert.doesNotMatch(run.reason, /judge: judge:/);
 });
 
-test('auto judge skips a claude route with a relative bin, since the claude-code route needs absolute paths', () => {
+test('agent_path_override takes a name on PATH or an absolute path, and refuses a relative path', () => {
   const t = setup();
-  mkdirSync(join(t.env.DONE_DONE_HOME, 'claude'), { recursive: true });
-  writeFileSync(join(t.env.DONE_DONE_HOME, 'config.yaml'), `agent: opencode\njudge:\n  claude_code: { bin: claude, config_dir: ${JSON.stringify(join(t.env.DONE_DONE_HOME, 'claude'))} }\n`);
+  mkdirSync(t.env.DONE_DONE_HOME, { recursive: true });
+  writeFileSync(join(t.env.DONE_DONE_HOME, 'config.yaml'), 'agent: opencode\nagent_path_override: { claude: bin/claude }\n');
   const env = pathEnv(t.env, ['claude', 'opencode']);
-  const choice = toon(doctorIn(t.repo, env, 'doctor')).checks.find((c) => c.check === 'judge_choice');
-  assert.match(choice.detail, /^answerer:opencode /, choice.detail);
-  assert.doesNotMatch(choice.detail, /claude-code/);
+  assert.match(toon(doctorIn(t.repo, env, 'doctor')).checks[1].detail, /agent_path_override must be a map of <agent>: <binary name or absolute path>/);
+  writeFileSync(join(t.env.DONE_DONE_HOME, 'config.yaml'), 'agent: opencode\nagent_path_override: { opencode: claude }\n');
+  const d = toon(doctorIn(t.repo, env, 'doctor'));
+  assert.match(d.checks.find((c) => c.check === 'agent').detail, /^opencode .* at .*\/claude$/, 'a bare name is looked up on PATH');
+  assert.match(d.checks.find((c) => c.check === 'agent_settings').detail, /path claude \(~?.*config\.yaml\)/);
 });
 
 // The design check: the same judge looks at each screen for visual defects, one tools-off request per screen.
@@ -2128,7 +2139,7 @@ test('doctor passes in a set-up repo and lists every check', () => {
   assert.equal(r.code, 0, r.out);
   const d = toon(r);
   assert.equal(d.result, 'pass');
-  assert.deepEqual(d.checks.map((c) => c.check), ['git', 'config', 'evidence_root', 'verify_skill', 'agent', 'judge', 'ffprobe', 'judge_choice']);
+  assert.deepEqual(d.checks.map((c) => c.check), ['git', 'config', 'evidence_root', 'verify_skill', 'agent', 'judge', 'ffprobe', 'judge_choice', 'agent_settings']);
   assert.deepEqual(d.checks.slice(0, 3).map((c) => c.status), ['ok', 'ok', 'ok']);
   assert.match(d.checks[1].detail, /app notes/);
   assert.equal(d.checks[3].status, 'missing', 'no verify skill yet, and that is optional');
@@ -2136,7 +2147,7 @@ test('doctor passes in a set-up repo and lists every check', () => {
   assert.ok(d.help.length >= 1);
   const j = json(dd('doctor', '--json'));
   assert.equal(j.result, 'pass');
-  assert.equal(j.checks.length, 8);
+  assert.equal(j.checks.length, 9);
 });
 
 test('doctor does not send a repo with a malformed global config to init', () => {
@@ -2207,35 +2218,37 @@ test('with no agent key, doctor names agent: auto and the cheap default judge mo
   assert.match(d.checks[7].detail, /^claude-code \(model claude-haiku-5-5; judge\.route auto\) judges the author claude/);
 });
 
-test('doctor reports the judge missing when claude has no sign-in or judge.claude_code.bin is relative', () => {
+test('doctor reports the judge missing when claude has no sign-in, whichever binary agent_path_override names', () => {
   const { repo, env, dd } = setup();
   const noSignIn = toon(doctorIn(repo, pathEnv(env, ['claude']), 'doctor'));
   assert.equal(noSignIn.checks[5].status, 'missing', 'a claude binary alone with no sign-in is not a judge');
   assert.match(noSignIn.checks[5].detail, /no installed agent can judge/);
   mkdirSync(env.DONE_DONE_HOME, { recursive: true });
-  writeFileSync(join(env.DONE_DONE_HOME, 'config.yaml'), 'judge:\n  claude_code: { bin: claude }\n');
+  writeFileSync(join(env.DONE_DONE_HOME, 'config.yaml'), 'agent_path_override: { claude: claude }\n');
   const relative = toon(doctorIn(repo, pathEnv(env, ['claude']), 'doctor'));
   assert.equal(relative.checks[5].status, 'missing');
   assert.match(relative.checks[5].detail, /no installed agent can judge/);
   writeFileSync(join(env.DONE_DONE_HOME, 'config.yaml'), 'judge:\n  bin: /usr/bin/claude\n');
   assert.match(toon(dd('doctor')).checks[1].detail, /unknown key judge\.bin/, 'a key that never shipped is unknown');
+  writeFileSync(join(env.DONE_DONE_HOME, 'config.yaml'), 'judge:\n  claude_code: { bin: /usr/bin/claude }\n');
+  assert.match(toon(dd('doctor')).checks[1].detail, /the claude binary is agent_path_override\.claude/, 'the old key points at its replacement');
 });
 
-test('doctor reports the judge missing when judge.claude_code.bin does not exist', () => {
+test('doctor reports the judge missing when agent_path_override.claude does not exist', () => {
   const { repo, env } = setup();
   mkdirSync(join(env.DONE_DONE_HOME, 'claude'), { recursive: true });
-  writeFileSync(join(env.DONE_DONE_HOME, 'config.yaml'), `judge:\n  claude_code: { bin: ${JSON.stringify(join(env.DONE_DONE_HOME, 'gone', 'claude'))} }\n`);
+  writeFileSync(join(env.DONE_DONE_HOME, 'config.yaml'), `agent_path_override: { claude: ${JSON.stringify(join(env.DONE_DONE_HOME, 'gone', 'claude'))} }\n`);
   const j = toon(doctorIn(repo, pathEnv(env, ['claude']), 'doctor'));
   assert.equal(j.checks[5].status, 'missing');
   assert.match(j.checks[5].detail, /no installed agent can judge/);
 });
 
-test('doctor reports the judge missing when judge.claude_code.bin is a directory', () => {
+test('doctor reports the judge missing when agent_path_override.claude is a directory', () => {
   const { repo, env } = setup();
   mkdirSync(join(env.DONE_DONE_HOME, 'claude'), { recursive: true });
   const dirBin = join(env.DONE_DONE_HOME, 'bindir');
   mkdirSync(dirBin, { recursive: true });
-  writeFileSync(join(env.DONE_DONE_HOME, 'config.yaml'), `judge:\n  claude_code: { bin: ${JSON.stringify(dirBin)} }\n`);
+  writeFileSync(join(env.DONE_DONE_HOME, 'config.yaml'), `agent_path_override: { claude: ${JSON.stringify(dirBin)} }\n`);
   const j = toon(doctorIn(repo, pathEnv(env, ['claude']), 'doctor'));
   assert.equal(j.checks[5].status, 'missing');
   assert.match(j.checks[5].detail, /no installed agent can judge/);
@@ -2276,7 +2289,7 @@ test('doctor finds agent, judge and ffprobe binaries from PATH; missing optional
   const none = doctorIn(repo, pathEnv(env, []), 'doctor');
   assert.equal(none.code, 0, 'missing optionals still exit 0 when every required item is ok');
   const n = toon(none);
-  assert.deepEqual(n.checks.slice(4).map((c) => c.status), ['missing', 'missing', 'missing', 'missing']);
+  assert.deepEqual(n.checks.slice(4).map((c) => c.status), ['missing', 'missing', 'missing', 'missing', 'ok']);
   assert.match(n.checks[4].fix, /Install claude, opencode, pi and gemini, or set agent: to an installed one of claude, codex, opencode, pi, gemini/);
   assert.match(n.checks[5].fix, /set judge\.route/);
   assert.match(n.checks[6].fix, /ffprobe/);
@@ -2299,9 +2312,9 @@ test('with no agent installed, the judge has no author to keep apart: doctor rec
   mkdirSync(claudeHome, { recursive: true });
   const bin = join(env.DONE_DONE_HOME, 'claude-bin');
   writeFileSync(bin, '#!/bin/sh\necho \'{"loggedIn":true}\'\n', { mode: 0o755 });
-  writeFileSync(join(env.DONE_DONE_HOME, 'config.yaml'), `judge:\n  claude_code: { bin: ${JSON.stringify(bin)}, config_dir: ${JSON.stringify(claudeHome)} }\n`);
+  writeFileSync(join(env.DONE_DONE_HOME, 'config.yaml'), `agent: opencode\njudge:\n  claude_code: { config_dir: ${JSON.stringify(claudeHome)} }\nagent_path_override: { claude: ${JSON.stringify(bin)} }\n`);
   const d = toon(doctorIn(repo, pathEnv(env, []), 'doctor'));
-  assert.match(d.checks[4].detail, /^claude \(model claude-haiku-5-5; agent: auto\) is not on PATH/);
+  assert.match(d.checks[4].detail, /^opencode \(model opencode-go\/muse-spark-1\.3-contributor; from config\) is not on PATH/);
   assert.equal(d.checks[7].status, 'ok', 'a judge with no author to keep apart is another agent');
   assert.match(d.checks[7].detail, /judges the author none \(model none\)/);
 });
@@ -2410,6 +2423,17 @@ test('the agent comes from config (a fallback list moves past missing agents), a
   assert.deepEqual(['--model', '--tools', '--setting-sources'].map((f) => c.argv[c.argv.indexOf(f) + 1]), ['claude-haiku-5-5', '', ''], 'no project or user settings load');
   assert.ok(c.argv.includes('-p') && c.argv.includes('--no-session-persistence') && JSON.parse(c.argv[c.argv.indexOf('--json-schema') + 1]).required[0] === 'ok');
   assert.match(c.stdin, /connectivity probe/);
+  assert.deepEqual(c.argv.slice(-2), ['--effort', 'low'], 'the cheap default effort goes to claude --effort');
+  // effort, extra flags and the call timeout come from the global config, and doctor names the file each came from.
+  const globalYml = join(env.DONE_DONE_HOME, 'config.yaml');
+  writeFileSync(globalYml, 'agent_config:\n  claude: { effort: high }\nagent_args_override:\n  claude: [--permission-mode, plan]\nagent_timeout: 2m\n');
+  const tuned = doctor('agent: claude\n', '--probe');
+  assert.equal(tuned.code, 0, tuned.out);
+  assert.deepEqual(s.calls()[2].argv.slice(-4), ['--effort', 'high', '--permission-mode', 'plan'], 'effort maps to the CLI flag, extra flags come after done-done\'s own');
+  const tunedRec = JSON.parse(readFileSync(tuned.by('probe').detail.match(/record (\S+)$/)[1], 'utf8'));
+  assert.deepEqual([tunedRec.effort, tunedRec.args, tunedRec.timeoutMs], ['high', ['--permission-mode', 'plan'], 120_000], 'the call record names the effort, flags and timeout');
+  assert.match(tuned.by('agent_settings').detail, /^agent claude \(\.done-done\.yaml\); model claude-haiku-5-5 \(default\); effort high \(.*config\.yaml\); args --permission-mode plan \(.*config\.yaml\); path claude on PATH \(default\); agent_timeout 2m \(.*config\.yaml\)$/);
+  writeFileSync(globalYml, 'agent_config:\n  opencode: { model: opencode-go/test-model }\n');
   // A failed answer fails the probe, which --probe makes required; without --probe nothing is asked.
   const bad = stubAgents(env, 'error');
   const failed = doctorIn(repo, bad.env, 'doctor', '--probe');
@@ -2458,8 +2482,21 @@ test('the agent comes from config (a fallback list moves past missing agents), a
   assert.match(doctor('judge: auto\n').out, /judge must be a mapping/, 'judge: auto is not a spelling of the judge');
   assert.match(doctor('agent_config:\n  opencode: { model: x }\n').out, /agent_config may only be set in the global config/, 'the project file cannot pick a model');
   writeFileSync(join(env.DONE_DONE_HOME, 'config.yaml'), 'agent_config:\n  cursor: { model: x }\n');
-  assert.match(doctor('').out, /agent_config must be a map of <agent>: \{model: <string>\}/);
-  assert.equal(s.calls().length, 3, 'only --probe asks the agent');
+  assert.match(doctor('').out, /agent_config must be a map of <agent>: \{model: <string>, effort: <string>\}/);
+  for (const [global, err] of [
+    ['agent_config:\n  gemini: { effort: low }\n', /agent_config\.gemini\.effort: gemini has no reasoning-effort flag/],
+    ['agent_config:\n  claude: { effort: turbo }\n', /agent_config\.claude\.effort must be one of minimal, low, medium, high, xhigh, max/],
+    ['agent_config:\n  opencode: { model: muse }\n', /agent_config\.opencode\.model must be provider\/model/],
+    ['agent_timeout: 0s\n', /agent_timeout must be a duration such as 90s, 30m or 1h/],
+    ['agent_args_override:\n  claude: --verbose\n', /agent_args_override must be a map of <agent>: \[<flag>, \.\.\.\]/],
+  ]) {
+    writeFileSync(join(env.DONE_DONE_HOME, 'config.yaml'), global);
+    assert.match(doctor('').out, err);
+  }
+  writeFileSync(join(env.DONE_DONE_HOME, 'config.yaml'), '');
+  for (const key of ['agent_args_override: { claude: [] }', 'agent_path_override: { claude: claude }', 'acpx_path: acpx', 'agent_timeout: 5m'])
+    assert.match(doctor(`${key}\n`).out, new RegExp(`${key.split(':')[0]} may only be set in the global config`), 'only agent may be set per repo, as in no-mistakes');
+  assert.equal(s.calls().length, 4, 'only --probe asks the agent');
   // Without a repo config, the agent keys still come from the global config.
   writeFileSync(join(env.DONE_DONE_HOME, 'config.yaml'), 'agent: opencode\n');
   rmSync(join(repo, '.done-done.yaml'));

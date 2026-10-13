@@ -8,8 +8,8 @@ import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import { encode } from '@toon-format/toon';
 import { Document, parseDocument } from 'yaml';
-import { ACPX_INSTALL, askAgent, JUDGES, knownAgentOf, selectAgent, selectJudge, supported, type AgentAnswer, type JudgeChoice } from './agents.js';
-import { AGENTS, type Config, home, loadConfig, parseDuration, UsageError } from './config.js';
+import { ACPX_INSTALL, askAgent, findBin, JUDGES, knownAgentOf, selectAgent, selectJudge, supported, type AgentAnswer, type JudgeChoice } from './agents.js';
+import { AGENTS, type Config, globalConfigText, home, loadConfig, parseDuration, UsageError } from './config.js';
 import { backend, type Capture, judge, judgeable, type Judged, onPath, quote } from './judge.js';
 import { type Finding as MaintainFinding, maintainSteps, type MaintainResult } from './maintain.js';
 import { design, KINDS } from './design.js';
@@ -44,12 +44,18 @@ const MAINTAIN_TEXT = `maintain reads the verify skill and the source and edits 
 const DOCTOR_TEXT = `doctor changes nothing except the --probe call record (the agent itself may keep its own session files) and exits 0 when every required item is ok, 2 otherwise.
   required: git (inside a repository), config (a valid .done-done.yaml), evidence_root (writable).
   optional: verify_skill (.agents/skills/verify-<app>/), agent (the configured agent, or with agent: auto the first
-  of claude, codex, opencode, pi, gemini on PATH that done-done can start, and its model), judge (the judge route is ready: for claude-code an
+  of claude, codex, opencode, pi, gemini on PATH that done-done can start, and its model), agent_settings (agent, model, effort,
+  args, path and agent_timeout, each with the file it came from: the global config, .done-done.yaml or default), judge (the judge route is ready: for claude-code an
   executable claude binary, a sign-in folder and the judge kit, for answerer:<agent> that agent's CLI and the kit; the model is never called),
   judge_choice (the judge, and how far it is from the author: another agent, another model, or session-only), ffprobe (video evidence only).
   --probe also asks the agent one JSON-schema question (one call at the agent's model: its cheap default where it has one, else its own; set agent_config.<agent>.model to choose; its record goes to
   $DONE_DONE_HOME/agents/) and then requires a valid answer.
   doctor lists every check; --full changes nothing. Missing optionals never fail the run.`;
+const CONFIG_TEXT = `config: ~/.done-done/config.yaml (global; DONE_DONE_HOME moves it) and .done-done.yaml (the repo), repo over global.
+  agent (either file): auto, claude, codex, opencode, pi, gemini, acp:<target>, or an ordered fallback list.
+  global only: agent_config.<agent>.{model,effort} (effort: minimal, low, medium, high, xhigh, max), agent_args_override.<agent>
+  (extra flags), agent_path_override.<agent> (binary), acpx_path, agent_timeout (one agent call, default 30m),
+  evidence.local_root, judge.{route,model,allow_same,claude_code.config_dir}. done-done doctor shows where each agent setting came from.`;
 
 // One table drives `--help` and every `<command> --help`: each command's usage lines and the flags it takes.
 const FLAGS: Record<string, string> = {
@@ -78,7 +84,7 @@ const FLAGS: Record<string, string> = {
 const COMMANDS: Record<string, { usage: [string, string][]; flags: string[]; more: string[] }> = {
   init: {
     usage: [
-      ['done-done init', 'write a minimal .done-done.yaml (evidence lives outside the repo)'],
+      ['done-done init', 'write a minimal .done-done.yaml (evidence lives outside the repo) and, when absent, a commented ~/.done-done/config.yaml'],
       ['done-done init', 'scaffold .agents/skills/verify-<app> from this repo (never overwrites)'],
       ['done-done init --agent claude', 'also show this repo\'s done-done state at each Claude Code session start'],
       ['done-done init --agent codex', 'also show this repo\'s done-done state at each Codex session start'],
@@ -88,7 +94,7 @@ const COMMANDS: Record<string, { usage: [string, string][]; flags: string[]; mor
       ['done-done init --journey <name> -- <command...>', "record a journey's capture recipe in .done-done.yaml"],
     ],
     flags: ['--agent <agent>', '--journey <name>', '-- <command...>'],
-    more: [JOURNEYS_TEXT],
+    more: [JOURNEYS_TEXT, CONFIG_TEXT],
   },
   doctor: {
     usage: [
@@ -96,7 +102,7 @@ const COMMANDS: Record<string, { usage: [string, string][]; flags: string[]; mor
       ['done-done doctor --probe', 'also ask the configured agent one question to prove it answers'],
     ],
     flags: ['--probe'],
-    more: [DOCTOR_TEXT],
+    more: [DOCTOR_TEXT, CONFIG_TEXT],
   },
   run: {
     usage: [
@@ -190,6 +196,7 @@ ${GLOBAL_TEXT}
 
 ${JOURNEYS_TEXT}
 ${CHECKS_TEXT}
+${CONFIG_TEXT}
 
 Results are printed as one TOON document (the AXI convention); pass --json for JSON.
 Run \`done-done <command> --help\` for that command's flags.`;
@@ -1636,6 +1643,15 @@ function cmdInit(argv: string[]): number {
   if (cfg.skill.split(/[\\/]/).includes('..')) throw new UsageError(`verify skill ${cfg.skill} has a .. segment; use a path inside the repo`, 'Set skill to a repo-relative path in .done-done.yaml');
   const spec = values.agent === undefined ? undefined : HOOKS[values.agent];
   const hook = spec?.make(repo); // likewise validated before any write
+  // The commented global config, once: every global key at its cheap default, for the user to edit.
+  const globalFile = join(home(), 'config.yaml');
+  const writeGlobal = (): string => {
+    if (existsSync(globalFile)) return 'unchanged';
+    mkdirSync(home(), { recursive: true });
+    writeFileSync(`${globalFile}.tmp`, globalConfigText());
+    renameSync(`${globalFile}.tmp`, globalFile);
+    return `written ${globalFile}`;
+  };
   // Written last on both paths, after the config; init reports it as <agent>_hook (or the plugin/extension key).
   const writeHook = (): { out: Record<string, string>; help: string[] } => {
     if (!spec || !hook) return { out: {}, help: [] };
@@ -1670,6 +1686,7 @@ function cmdInit(argv: string[]): number {
       command: 'init',
       result: 'pass',
       config: existed ? 'updated' : 'written',
+      global_config: writeGlobal(),
       journey,
       app: fresh.app,
       evidence_root: root,
@@ -1683,7 +1700,12 @@ function cmdInit(argv: string[]): number {
   if (!existed) {
     // No evidence.root: proof goes to <local_root>/<app>, outside the repo, so it outlives this checkout.
     // The pinned app name is what lets every checkout of the repo find the same evidence and receipts.
-    const body = `# done-done project config. \`done-done init\` never overwrites this file.\napp: ${JSON.stringify(cfg.app)}\n`;
+    const body = `# done-done project config. \`done-done init\` never overwrites this file.
+# The app name finds this repo's evidence and receipts from every checkout.
+app: ${JSON.stringify(cfg.app)}
+# This repo's coding agent, over agent in ~/.done-done/config.yaml (model, effort and the other agent settings stay there).
+# agent: auto
+`;
     writeFileSync(`${file}.tmp`, body);
     renameSync(`${file}.tmp`, file);
   }
@@ -1698,6 +1720,7 @@ function cmdInit(argv: string[]): number {
     command: 'init',
     result: 'pass',
     config: existed ? 'unchanged' : 'written',
+    global_config: writeGlobal(),
     app: cfg.app,
     evidence_root: root,
     gitignore: added ? `added ${rel!.replace(/\/+$/, '')}/` : 'unchanged',
@@ -1746,6 +1769,24 @@ function writableDir(p: string): boolean {
 const PROBE_SCHEMA = { type: 'object', properties: { ok: { type: 'boolean' } }, required: ['ok'], additionalProperties: false };
 type DoctorCheck = { check: string; status: 'ok' | 'warning' | 'missing'; detail: string; fix: string };
 const unknownRow = (check: string): DoctorCheck => ({ check, status: 'missing', detail: 'unknown without a valid config', fix: '' });
+// Each effective setting of the agent and the file it came from: the global config, the repo's .done-done.yaml, or the built-in default.
+function agentSettings(cfg: Config, agent: string): string {
+  const rh = relative(homedir(), join(home(), 'config.yaml'));
+  const globalFile = outside(rh) ? join(home(), 'config.yaml') : `~${sep}${rh}`;
+  const where = (key: string) => ({ global: globalFile, repo: '.done-done.yaml' })[cfg.from[key] as 'global' | 'repo'] ?? 'default';
+  const c = cfg.agent_config[agent] ?? {};
+  const acp = agent.startsWith('acp:');
+  const pathKey = acp ? 'acpx_path' : `agent_path_override.${agent}`;
+  const args = cfg.agent_args_override[agent] ?? [];
+  return [
+    `agent ${cfg.agent === 'auto' ? 'auto' : cfg.agent.join(', ')} (${where('agent')})`,
+    `model ${c.model || 'the CLI\'s own'} (${where(`agent_config.${agent}.model`)})`,
+    `effort ${c.effort || 'the CLI\'s own'} (${where(`agent_config.${agent}.effort`)})`,
+    `args ${args.length ? args.join(' ') : 'none'} (${where(`agent_args_override.${agent}`)})`,
+    `path ${acp ? cfg.acpx_path : cfg.agent_path_override[agent] || `${agent} on PATH`} (${where(pathKey)})`,
+    `agent_timeout ${cfg.agent_timeout} (${where('agent_timeout')})`,
+  ].join('; ');
+}
 const modelPhrase = (agent: string, model: string) => (model ? `model ${model}` : `its own default model; set agent_config.${agent}.model to choose one`);
 
 // Is this repo worth driving: git, a valid config and a writable evidence root are
@@ -1821,8 +1862,10 @@ async function cmdDoctor(argv: string[]): Promise<number> {
   const startableList = AGENTS.filter(supported);
   const startable = startableList.length > 1 ? `${startableList.slice(0, -1).join(', ')} and ${startableList.at(-1)}` : (startableList[0] ?? 'no agent');
   // An acp:<target> agent is missing when its acpx bridge is: say which, and how to install it.
-  const acpx = agent?.agent.startsWith('acp:') ? onPath('acpx') : undefined;
-  const notFound = acpx === undefined ? 'is not on PATH' : `needs acpx, the ACP bridge, which is not startable (${acpx ? `${acpx} does not run` : 'not on PATH'})`;
+  const acpx = agent?.agent.startsWith('acp:') ? findBin(agentCfg!.acpx_path) : undefined;
+  const override = agent && agentCfg!.agent_path_override[agent.agent];
+  const notFound = acpx !== undefined ? `needs acpx, the ACP bridge, which is not startable (${acpx ? `${acpx} does not run` : isAbsolute(agentCfg!.acpx_path) ? `acpx_path ${agentCfg!.acpx_path} is not an executable file` : 'not on PATH'})`
+    : override ? `is not startable: agent_path_override.${agent!.agent} ${override} is not an executable file` : 'is not on PATH';
   const installFix = acpx === undefined ? `Install ${startable}, or set agent: to an installed one of ${AGENTS.join(', ')}` : ACPX_INSTALL;
   const switchFix = `Set agent: to ${startable}`;
   if (repoFileInvalid) {
@@ -1892,13 +1935,14 @@ async function cmdDoctor(argv: string[]): Promise<number> {
     const record = join(home(), 'agents', `probe-${new Date().toISOString().replace(/[:.]/g, '-')}-${agent.agent}.json`);
     const probe: AgentAnswer & { fix?: string } = !agent.path ? { ok: false, error: `${agent.agent} ${notFound}`, fix: installFix }
       : !supported(agent.agent) ? { ok: false, error: `done-done cannot start ${agent.agent} yet (${startable} for now)`, fix: switchFix }
-      : askAgent({ agent: agent.agent, model: agent.model, prompt: 'This is a connectivity probe from done-done doctor. Use no tools. Answer with ok set to true.', schema: PROBE_SCHEMA, cwd: repo ?? process.cwd(), timeoutMs: 180_000, tools: 'none', record });
+      : askAgent({ ...agent, prompt: 'This is a connectivity probe from done-done doctor. Use no tools. Answer with ok set to true.', schema: PROBE_SCHEMA, cwd: repo ?? process.cwd(), tools: 'none', record });
     checks.push(
       probe.ok && probe.answer?.ok === true
         ? { check: 'probe', status: 'ok', detail: `${agent.agent} (${modelPhrase(agent.agent, agent.model)}) answered the schema question; ${probe.recordError ? `the call record could not be written: ${probe.recordError}` : `record ${record}`}`, fix: '' }
         : { check: 'probe', status: 'missing', detail: `${agent.agent} did not answer: ${probe.error ?? `answer ${JSON.stringify(probe.answer)}`}${probe.record ? `; record ${record}` : ''}${probe.recordError ? `; the call record could not be written: ${probe.recordError}` : ''}`, fix: probe.fix ?? `Check that ${agent.agent} is signed in${agent.model ? ` and can use model ${agent.model}` : ''}, or set agent_config.${agent.agent}.model` },
     );
   }
+  if (agent) checks.push({ check: 'agent_settings', status: 'ok', detail: agentSettings(agentCfg!, agent.agent), fix: '' });
   const required = ['git', 'config', 'evidence_root', ...(values.probe ? ['probe'] : [])];
   const missingRequired = checks.filter((c) => c.status === 'missing' && required.includes(c.check));
   const result: Record<string, unknown> = { command: 'doctor', result: missingRequired.length ? 'fail' : 'pass', checks };

@@ -2879,6 +2879,27 @@ test('maintain fingerprints untracked symlinks without reading through them and 
   assert.match(m.reason, /^coverage: .*broken\.md/);
 });
 
+test('maintain reports an untracked symlink retargeted during a run as a repo change', () => {
+  const { repo, env, sh } = setup();
+  const answer = JSON.stringify({ drift: [], recipe: 'open it', recipes: [], missing: [] });
+  const s = stubAgents(env, answer);
+  const skill = join(repo, '.agents', 'skills', 'verify-notes');
+  mkdirSync(join(skill, 'features'), { recursive: true });
+  mkdirSync(join(repo, 'src'), { recursive: true });
+  writeFileSync(join(skill, 'SKILL.md'), '# verify-notes\n');
+  writeFileSync(join(skill, 'features', 'README.md'), '# features\n\n- [Home](home.md)\n');
+  writeFileSync(join(skill, 'features', 'home.md'), '# Home\n');
+  sh('add', '-A');
+  sh('commit', '-qm', 'skill');
+  symlinkSync(join(repo, '.agents'), join(repo, 'agents-link'));
+  // The reader points the link somewhere else: its target text is what the fingerprint must catch.
+  writeFileSync(join(s.bin, 'claude'), `#!${process.execPath}\nconst fs = require('node:fs');\nif (process.argv.includes('Read,Grep,Glob')) { fs.unlinkSync('agents-link'); fs.symlinkSync('src', 'agents-link'); }\nprocess.stdout.write(JSON.stringify({ structured_output: ${answer} }));\n`, { mode: 0o755 });
+  const r = doctorIn(repo, s.env, 'maintain', '--foreground');
+  const m = toon(r);
+  assert.deepEqual([r.code, m.result, m.git_status], [3, 'blocked', 'changed'], r.out);
+  assert.match(m.reason, /^repo-changed: /);
+});
+
 test('maintain runs a reader with no user settings or MCP servers', () => {
   const { repo, env, sh } = setup();
   const s = stubAgents(env, JSON.stringify({ drift: [], recipe: 'open it', recipes: [], missing: [] }));

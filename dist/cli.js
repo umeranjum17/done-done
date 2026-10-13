@@ -1252,7 +1252,7 @@ async function runSteps(dir) {
             else {
                 const dirty = dirtyTracked(run.repo);
                 if (dirty.length) {
-                    run.findings = failures([...p.fixable, { kind: 'dirty', file: '.', what: `uncommitted changes to tracked files (${named(dirty)}): verify fixes the committed code, so commit them, or set auto_fix: { verify: 0 }, then run again` }]);
+                    run.findings = failures(p.fixable);
                     return finish('blocked', `dirty: uncommitted changes to tracked files (${named(dirty)}), so done-done does not fix this run (${p.end.reason}); commit them, or set auto_fix: { verify: 0 }, then run again`);
                 }
                 const f = await fixVerify(run, cfg, dir, p, tries, h, async (at, fix) => { const logs = (quiet = {}); const fixStep = step; try {

@@ -476,8 +476,7 @@ async function cmdRun(argv: string[]): Promise<number> {
   }
   // With a matrix block the journey runs once per required cell with that cell in env.
   const matrix = hasMatrix(cfg.matrix) ? splitMatrix(cfg.matrix!) : null;
-  const failed: string[] = [];
-  rec.exit = 0;
+  const failed: string[] = []; rec.exit = 0;
   for (const cell of matrix?.required ?? [{}]) {
     // The journey's own stdout goes to our stderr, never our stdout: stdout carries only done-done's
     // result document (TOON or --json), so a noisy journey cannot break `run --json | JSON.parse`.
@@ -1199,19 +1198,15 @@ async function runSteps(dir: string): Promise<void> {
         }
       }
       // With a matrix block the journey runs once per required cell with that cell in env.
-      const matrix = hasMatrix(cfg.matrix);
-      const cells = matrix ? splitMatrix(cfg.matrix!).required : [{}];
-      const failed: string[] = [];
-      rec.exit = 0;
-      let timedOut = false;
-      let running: number | undefined;
+      const matrix = hasMatrix(cfg.matrix) ? splitMatrix(cfg.matrix!).required : null;
+      const failed: string[] = []; rec.exit = 0;
+      let timedOut = false; let running: number | undefined;
       // The timeout bounds the whole verify run's journey: it kills the cell running now and stops the loop.
       const timer = setTimeout(() => {
         timedOut = true;
         if (running) killGroup(running);
       }, limit!);
-      for (const cell of cells) {
-        if (timedOut) break;
+      for (const cell of matrix ?? [{}]) {
         // An async child keeps the heartbeat going while the journey runs. The journey gets its own process group, so a
         // timeout or a dead runner can kill it and everything it started.
         const child = spawn(rec.command!, { cwd: at, shell: true, detached: true, stdio: ['ignore', fd, fd], env: { ...process.env, DONE_DONE_RUN_ID: rec.run_id, DONE_DONE_EVIDENCE_ROOT: runDir(cfg, rec.run_id), ...instEnv, ...(matrix ? cellEnv(cell) : {}) } });

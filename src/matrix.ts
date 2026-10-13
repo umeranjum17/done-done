@@ -19,12 +19,10 @@ export function expandMatrix(m: Matrix): Cell[] {
 const hits = (s: Cell, c: Cell) => (s.theme === undefined || s.theme === c.theme) && (s.width === undefined || s.width === c.width) && (s.form === undefined || s.form === c.form);
 
 export function splitMatrix(m: Matrix): { required: Cell[]; skipped: { cell: Cell; reason: string }[] } {
-  const required: Cell[] = [];
-  const skipped: { cell: Cell; reason: string }[] = [];
+  const required: Cell[] = [], skipped: { cell: Cell; reason: string }[] = [];
   for (const cell of expandMatrix(m)) {
     const hit = (m.skip ?? []).find((s) => hits(s, cell));
-    if (hit) skipped.push({ cell, reason: hit.reason });
-    else required.push(cell);
+    if (hit) skipped.push({ cell, reason: hit.reason }); else required.push(cell);
   }
   return { required, skipped };
 }

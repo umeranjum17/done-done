@@ -13,8 +13,7 @@ export function expandMatrix(m) {
 // A skip entry is a partial cell: it drops every cell agreeing on each axis it names.
 const hits = (s, c) => (s.theme === undefined || s.theme === c.theme) && (s.width === undefined || s.width === c.width) && (s.form === undefined || s.form === c.form);
 export function splitMatrix(m) {
-    const required = [];
-    const skipped = [];
+    const required = [], skipped = [];
     for (const cell of expandMatrix(m)) {
         const hit = (m.skip ?? []).find((s) => hits(s, cell));
         if (hit)

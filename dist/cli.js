@@ -1195,8 +1195,7 @@ async function runSteps(dir) {
                     }
                 }
                 // With a matrix block the journey runs once per required cell with that cell in env.
-                const matrix = hasMatrix(cfg.matrix);
-                const cells = matrix ? splitMatrix(cfg.matrix).required : [{}];
+                const matrix = hasMatrix(cfg.matrix) ? splitMatrix(cfg.matrix).required : null;
                 const failed = [];
                 rec.exit = 0;
                 let timedOut = false;
@@ -1207,9 +1206,7 @@ async function runSteps(dir) {
                     if (running)
                         killGroup(running);
                 }, limit);
-                for (const cell of cells) {
-                    if (timedOut)
-                        break;
+                for (const cell of matrix ?? [{}]) {
                     // An async child keeps the heartbeat going while the journey runs. The journey gets its own process group, so a
                     // timeout or a dead runner can kill it and everything it started.
                     const child = spawn(rec.command, { cwd: at, shell: true, detached: true, stdio: ['ignore', fd, fd], env: { ...process.env, DONE_DONE_RUN_ID: rec.run_id, DONE_DONE_EVIDENCE_ROOT: runDir(cfg, rec.run_id), ...instEnv, ...(matrix ? cellEnv(cell) : {}) } });

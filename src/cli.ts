@@ -1009,7 +1009,7 @@ async function runVerify(dir: string): Promise<void> {
       const author = run.author!;
       rec = { ...openRun(run.repo, cfg, null, null, run.run_id), author };
       const evidence = runDir(cfg, rec.run_id);
-      const tracked = () => git(run.repo, 'status', '--porcelain', '--untracked-files=no');
+      const tracked = () => sha256(Buffer.from(git(run.repo, 'diff', 'HEAD', '--binary')));
       const before = tracked();
       const scratch = join(dir, 'tmp');
       mkdirSync(scratch, { recursive: true });

@@ -36,7 +36,7 @@ What ships now:
 What comes next:
 
 - `auto_fix` for each `verify` step, like no-mistakes.
-- More project-agnostic primitives, such as a text-evidence judge, a base ref to compare before a change, and an `init` base for new projects
+- More project-agnostic primitives, such as a text-evidence judge, a base ref to compare before a change, and an `init` base for new projects.
 - Help to write the proof steps for your app.
 
 Custom behaviour from a project becomes a new primitive in done-done.

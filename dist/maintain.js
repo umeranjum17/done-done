@@ -240,7 +240,7 @@ export async function maintainSteps(run, dir, cfg, h) {
     h.log('hygiene', { features, findings: [...findings] });
     h.set(step, 'completed');
     // 3 source wave: one fresh, read-only reader per feature file, at the configured agent.
-    // ponytail: readers run one after another (askAgent is synchronous); run them in parallel when it is not.
+    // ponytail: readers run one after another; run them in parallel if a run with many feature files is too slow.
     step = h.begin('source-wave');
     const tracked = git(repo, 'ls-files', '-z').split('\0').filter(Boolean);
     const exts = new Set(tracked.map((p) => extname(p)));
@@ -309,7 +309,8 @@ export async function maintainSteps(run, dir, cfg, h) {
         });
         return text === undefined ? [] : [{ name, text }];
     });
-    const readers = regular.map(({ name, text }) => {
+    const readers = [];
+    for (const { name, text } of regular) {
         const file = join(featDir, name);
         if (text.length > FEATURE_CHARS)
             add({ kind: 'truncated', file: rel(file), what: `the reader saw only the first ${FEATURE_CHARS} characters of this feature file` });
@@ -321,11 +322,11 @@ ${toolless ? 'Use the cited source, not the skill, and explain' : "Read the prod
 
 Feature file ${rel(file)}:
 ${text.slice(0, FEATURE_CHARS)}${toolless ? citedSource(rel(file), text.slice(0, FEATURE_CHARS)) : ''}`;
-        const a = askAgent({ ...agent, prompt, schema: READER_SCHEMA, cwd: repo, tools: toolless ? 'none' : 'read', record: record(`reader-${name.replace(/\.md$/, '')}`) });
+        const a = await askAgent({ ...agent, prompt, schema: READER_SCHEMA, cwd: repo, tools: toolless ? 'none' : 'read', record: record(`reader-${name.replace(/\.md$/, '')}`) });
         if (!a.ok)
             add({ kind: 'coverage', file: rel(file), what: `the reader did not answer: ${a.error}` });
-        return { feature: rel(file), ok: a.ok, drift: a.answer?.drift, recipe: a.answer?.recipe, ...(a.error && { error: a.error }), record: a.record, ...(a.recordError && { record_error: a.recordError }) };
-    });
+        readers.push({ feature: rel(file), ok: a.ok, drift: a.answer?.drift, recipe: a.answer?.recipe, ...(a.error && { error: a.error }), record: a.record, ...(a.recordError && { record_error: a.recordError }) });
+    }
     h.log('source-wave', { agent: agent.agent, model: agent.model, readers });
     h.set(step, agentBlock ? 'failed' : 'completed', { outputs: readers.flatMap((r) => r.record ?? []) });
     // 4 reconcile: plain code checks each file:line the skill and the readers cite; churn comes from git log.
@@ -376,7 +377,7 @@ ${text.slice(0, FEATURE_CHARS)}${toolless ? citedSource(rel(file), text.slice(0,
 Features (JSON): ${JSON.stringify(answered.map((r) => ({ feature: r.feature, recipe: r.recipe })))}
 
 Recently changed files (git log since ${CHURN_SINCE}, most recent first${churnAll.length > churn.length ? `; ${churnAll.length - churn.length} older paths left out` : ''}): ${churn.length ? churn.join(', ') : 'none'}`;
-        const a = askAgent({ ...agent, prompt, schema: RECONCILE_SCHEMA, cwd: repo, tools: 'none', record: record('reconcile') });
+        const a = await askAgent({ ...agent, prompt, schema: RECONCILE_SCHEMA, cwd: repo, tools: 'none', record: record('reconcile') });
         if (!a.ok)
             add({ kind: 'coverage', file: skillDir, what: `the reconcile call did not answer: ${a.error}` });
         if (a.answer) {

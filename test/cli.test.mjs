@@ -2861,7 +2861,7 @@ test('maintain does not read host:port text as a file citation', () => {
   assert.equal(m.findings?.length ?? 0, 0);
 });
 
-test('maintain fingerprints untracked symlinks without reading through them and blocks a dangling feature entry', () => {
+test('maintain blocks a dangling feature entry next to untracked symlinks', () => {
   const { repo, env, sh } = setup();
   const s = stubAgents(env, JSON.stringify({ drift: [], recipe: 'open it', recipes: [], missing: [] }));
   const skill = join(repo, '.agents', 'skills', 'verify-notes');

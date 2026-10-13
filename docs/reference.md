@@ -126,7 +126,7 @@ Run `done-done` outside wrappers that expand `${...}` themselves (`systemd-run` 
 
 #### Run-instance harness
 
-One project-agnostic primitive: with an `instance` block, every run starts the app under test on its own port, with its own HOME and XDG folders, waits until it is ready, and stops it at the end:
+One project-agnostic primitive: with an `instance` block, each journey, agent drive and `done-done run -- <command>` starts the app under test on its own port, with its own HOME and XDG folders, waits until it is ready, and stops it at the end:
 
 ```yaml
 instance:
@@ -135,7 +135,7 @@ instance:
   ready_timeout: 30s
 ```
 
-done-done picks a free local port it owns (a port that is already taken is never used) and passes `DONE_DONE_PORT` and `DONE_DONE_BASE_URL` to the instance, the journey and the agent drive, so a recipe uses `$DONE_DONE_BASE_URL` instead of a hard-coded port. HOME and XDG_CONFIG_HOME/XDG_DATA_HOME/XDG_CACHE_HOME point under the run's scratch folder. Readiness is HTTP 2xx for `ready.url` or exit 0 for `ready.command` (each probe is killed at the remaining timeout, so a hung command cannot hang the run); past `ready_timeout` the run fails and the instance is killed. The app's output goes to `instance.log` in the run folder, never with the evidence. The group is killed at run end (pass, fail, park, timeout, or a dead runner on the next read). No `instance` block keeps today's behaviour.
+done-done picks a free local port it owns (a port that is already taken is never used) and passes `DONE_DONE_PORT` and `DONE_DONE_BASE_URL` to the instance, the journey and the agent drive, so a recipe uses `$DONE_DONE_BASE_URL` instead of a hard-coded port. HOME and XDG_CONFIG_HOME/XDG_DATA_HOME/XDG_CACHE_HOME point under the run's scratch folder. Readiness is HTTP 2xx for `ready.url` or exit 0 for `ready.command` (each probe is killed at the remaining timeout, so a hung command cannot hang the run); past `ready_timeout` the run fails and the instance is killed. The app's output goes to `instance.log` in the run folder, never with the evidence. The group is killed at run end (pass, fail, park, timeout, or a dead runner on the next read). `done-done run --open` does not start the app; its caller starts and stops its own. No `instance` block keeps today's behaviour.
 
 ### Check a claim
 

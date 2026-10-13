@@ -23,8 +23,7 @@ const PASS = 0, FAIL = 1, USAGE = 2, INCONCLUSIVE = 3, WAITING = 4;
 const journeyExample = 'journeys: { smoke: { command: "<drive the real app> > $DONE_DONE_EVIDENCE_ROOT/${RUN_ID}.log" } }';
 
 const JOURNEYS_TEXT = `journeys (.done-done.yaml): the command runs with DONE_DONE_EVIDENCE_ROOT (this run's own new folder in the evidence
-  root) and DONE_DONE_RUN_ID set, and \${RUN_ID} in it is replaced; it must write its files into that folder (the judge checks
-  every PNG/JPEG there against the outcome, so write screenshots of earlier steps elsewhere), e.g.
+  root) and DONE_DONE_RUN_ID set, and \${RUN_ID} in it is replaced; it must write its files into that folder, e.g.
   ${journeyExample}
   timeout (journeys.<name>.timeout): how long a verify run may drive the journey, e.g. 90s or 30m (default 30m); past it the journey is killed and the run is inconclusive`;
 const CHECKS_TEXT = `Checks block (--from): the newest "## Checks" heading, then these four keys, each at the start of a line:
@@ -1283,13 +1282,17 @@ async function preflightJudge(cfg: Config): Promise<JudgeChoice> {
   return selectJudge(cfg, selectAgent(cfg));
 }
 
-// A run waiting at its gate is the user's call, so a new verify or rerun of the same claim (claim id, else branch) is refused
-// until the user answers that run or it is aborted: starting another would go around its gate.
-function refuseParked(cfg: Config, claim: string) {
-  const parked = runsIn(runsRoot(cfg.app)).filter((r) => r.kind === 'verify' && r.status === 'awaiting_approval' && (r.claim_id ?? r.branch) === claim).map((r) => r.run_id);
+// A run waiting at its gate is the user's call, so a new verify or rerun is refused until the user answers that run or it is
+// aborted: starting another would go around its gate. A run is keyed by its claim id, else the branch it started on; a run with
+// neither (recorded by an older build) blocks every new run in its repo.
+function refuseParked(cfg: Config, repo: string, claim: string) {
+  const parked = runsIn(runsRoot(cfg.app)).filter((r) => {
+    const key = r.claim_id ?? r.branch;
+    return r.kind === 'verify' && r.status === 'awaiting_approval' && (key === claim || (key === undefined && r.repo === repo));
+  }).map((r) => r.run_id);
   if (!parked.length) return;
   const id = parked[0];
-  throw new UsageError(`claim ${claim} already has run ${parked.join(', ')} waiting at its gate for the user's answer; a new run of that claim would go around the gate`, `Show the user its findings and captures (done-done status --run ${id}), then answer with their choice: done-done respond --run ${id} --action approve|skip|fix [--reason "<why>"], or stop it: done-done abort --run ${id}`);
+  throw new UsageError(`run ${parked.join(', ')} waiting at its gate for the user's answer; a new run would go around the gate`, `Show the user its findings and captures (done-done status --run ${id}), then answer with their choice: done-done respond --run ${id} --action approve|skip|fix [--reason "<why>"], or stop it: done-done abort --run ${id}`);
 }
 
 async function cmdVerify(argv: string[]): Promise<number> {
@@ -1313,12 +1316,12 @@ async function cmdVerify(argv: string[]): Promise<number> {
   if (values['claim-id']?.trim() === '') throw new UsageError('--claim-id needs a non-empty id');
   const branch = git(repo, 'branch', '--show-current');
   if (!values['claim-id'] && !branch) throw new UsageError('HEAD is detached, so no branch names this claim; pass --claim-id <id>');
+  refuseParked(cfg, repo, values['claim-id'] ?? branch);
   const drive = journey === null ? await agentDrive(repo, cfg, values.feature) : undefined;
   // verify starts done-done's own judge by default; --no-judge or judge.enabled: false turns it off. An agent drive is judged too, since the author never grades its own captures.
   const judging = !values['no-judge'] && (!!drive || !!values.judge || cfg.judge.enabled !== false);
   // No judge set, or one config forbids (the author's own agent and model), is a usage error now, not a failed run later.
   if (judging) await preflightJudge(cfg);
-  refuseParked(cfg, values['claim-id'] ?? branch);
   const id = newRunId(git(repo, 'rev-parse', 'HEAD'));
   const dir = join(runsRoot(cfg.app), id);
   mkdirSync(join(dir, 'logs'), { recursive: true });
@@ -1434,6 +1437,9 @@ async function cmdRerun(argv: string[]): Promise<number> {
   if (open === 'pending' || open === 'running') throw new UsageError(`run ${srcId} is still ${open}, so it cannot be rerun while its runner lives`, `Read it: done-done status --run ${srcId}; stop it first: done-done abort --run ${srcId}`);
   const group = src.runner?.journey_pgid;
   if (['pending', 'running'].includes(src.status) && group && alive(-group)) throw new UsageError(`the journey of run ${srcId} is still running, so it cannot be rerun yet`, `Read it: done-done status --run ${srcId}`);
+  // The rerun keeps its source's claim and branch, so the gate it is checked against is the source's.
+  const branch = src.branch ?? git(repo, 'branch', '--show-current');
+  refuseParked(cfg, repo, src.claim_id ?? branch);
   // A source run with no journey is driven again by the author agent config names now; schema 2 runs before PR 4 always had a journey.
   const journey = src.journey ?? null;
   const drive = journey === null ? await agentDrive(src.repo, cfg, src.feature) : undefined;
@@ -1445,8 +1451,6 @@ async function cmdRerun(argv: string[]): Promise<number> {
   // error here too.
   const judging = !values['no-judge'] && !!src.judge;
   if (judging) await preflightJudge(cfg);
-  const branch = git(repo, 'branch', '--show-current');
-  refuseParked(cfg, src.claim_id ?? branch);
   const id = newRunId(git(repo, 'rev-parse', 'HEAD'));
   const dir = join(root, id);
   mkdirSync(join(dir, 'logs'), { recursive: true });

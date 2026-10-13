@@ -1981,7 +1981,7 @@ process.stdout.write(JSON.stringify({ type: 'result', is_error: false, structure
   assert.equal(t.dd('abort', '--run', abortRun.o.run_id).code, 0);
   assert.equal(toon(t.dd('status', '--run', abortRun.o.run_id)).status, 'cancelled');
   assert.equal(t.dd('respond', '--run', abortRun.o.run_id, '--action', 'fix').code, 2);
-  // A drive cannot answer its gate, write a receipt or start a run: those commands exit 2 inside it.
+  // With DONE_DONE_DRIVE set, the commands that answer a gate, write a receipt or start a run exit 2 (an accidental call, not a sandbox).
   const probe = verify({ ...right.env, DRIVE: 'probe' }, 'the note Umer added shows in the list');
   assert.equal(probe.code, 0, probe.out);
   const probed = right.calls().find((c) => c.probe).probe;

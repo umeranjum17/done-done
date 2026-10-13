@@ -2065,12 +2065,21 @@ test('design reports an opaque black strip that has transparent pixels beside it
   mkdirSync(t.env.DONE_DONE_HOME, { recursive: true });
   writeFileSync(join(t.env.DONE_DONE_HOME, 'config.yaml'), 'agent: claude\n');
   writeFileSync(join(t.dir, 'partial.png'), png(240, 160, (x, y) => (x < 24 ? (y < 30 ? [0, 0, 0, 0] : [0, 0, 0, 255]) : [245, 240, 230, 255]), 6));
+  writeFileSync(join(t.dir, 'clear-edge.png'), png(240, 160, (x) => (x === 0 ? [0, 0, 0, 0] : x < 24 ? [0, 0, 0, 255] : [245, 240, 230, 255]), 6));
+  writeFileSync(join(t.dir, 'clear-inside.png'), png(240, 160, (x) => (x === 3 ? [0, 0, 0, 0] : x < 8 ? [0, 0, 0, 255] : [245, 240, 230, 255]), 6));
   const clean = JSON.stringify(Object.fromEntries(['aspect', 'clipped-text', 'overlap', 'off-screen', 'blank-strip', 'layout'].map((k) => [k, { probabilities: { defect: 0.02, none: 0.98 }, rationale: 'Looked.', personReason: 'Nothing of this kind.' }])));
   const s = stubAgents(t.env, clean);
   symlinkSync(process.execPath, join(s.bin, 'node'));
-  const r = spawnSync(process.execPath, [CLI, 'design', '--full', 'partial.png'], { cwd: t.dir, env: s.env, encoding: 'utf8' });
-  assert.equal(r.status, 1, r.stdout + r.stderr);
-  assert.deepEqual(toon({ out: r.stdout + r.stderr }).screens[0].defects, [{ kind: 'blank-strip', where: 'left edge: a plain #000000 band 24 px deep (10% of the width), full height, with nothing in it' }]);
+  const design = (name) => spawnSync(process.execPath, [CLI, 'design', '--full', name], { cwd: t.dir, env: s.env, encoding: 'utf8' });
+  const partial = design('partial.png');
+  assert.equal(partial.status, 1, partial.stdout + partial.stderr);
+  assert.deepEqual(toon({ out: partial.stdout + partial.stderr }).screens[0].defects, [{ kind: 'blank-strip', where: 'left edge: a plain #000000 band 24 px deep (10% of the width), full height, with nothing in it' }]);
+  const edge = design('clear-edge.png');
+  assert.equal(edge.status, 1, edge.stdout + edge.stderr);
+  assert.deepEqual(toon({ out: edge.stdout + edge.stderr }).screens[0].defects, [{ kind: 'blank-strip', where: 'left edge: a plain #000000 band 24 px deep (10% of the width), full height, with nothing in it' }]);
+  const inside = design('clear-inside.png');
+  assert.equal(inside.status, 1, inside.stdout + inside.stderr);
+  assert.deepEqual(toon({ out: inside.stdout + inside.stderr }).screens[0].defects, [{ kind: 'blank-strip', where: 'left edge: a plain #000000 band 8 px deep (3% of the width), full height, with nothing in it' }]);
 });
 
 test('design judges a JPEG longer than the judge size, downscaled to a PNG', () => {

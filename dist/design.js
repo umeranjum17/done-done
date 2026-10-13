@@ -54,38 +54,50 @@ function bands(c) {
         const span = side ? h : w; // the length of the edge
         // The pixel offset `d` lines in from this edge, `s` along it.
         const at = (d, s) => 3 * (side ? s * w + (edge === 'left' ? d : w - 1 - d) : (edge === 'top' ? d : h - 1 - d) * w + s);
+        const lineMeasured = (d) => {
+            for (let s = 0; s < span; s++)
+                if (!clear[at(d, s) / 3])
+                    return true;
+            return false;
+        };
+        let ref = 0;
+        while (ref < depth && !lineMeasured(ref))
+            ref++;
+        if (ref === depth)
+            continue;
         const sum = [0, 0, 0];
         let n = 0;
         for (let s = 0; s < span; s++) {
-            const i = at(0, s);
+            const i = at(ref, s);
             if (clear[i / 3])
                 continue;
             n++;
             for (let k = 0; k < 3; k++)
                 sum[k] += rgb[i + k];
         }
-        if (!n)
-            continue;
         const colour = sum.map((v) => Math.round(v / n));
         const off = (i) => colour.some((v, k) => Math.abs(rgb[i + k] - v) > STRIP.tolerance);
         let deep = 0;
         let stray = 0;
         let seen = 0;
-        for (; deep < depth / 2; deep++) {
+        for (let d = 0; d < depth / 2; d++) {
             let miss = 0;
             let looked = 0;
             for (let s = 0; s < span; s++) {
-                const i = at(deep, s);
+                const i = at(d, s);
                 if (clear[i / 3])
                     continue;
                 looked++;
                 if (off(i))
                     miss++;
             }
-            if (!looked || miss > looked / 2)
+            if (!looked)
+                continue;
+            if (miss > looked / 2)
                 break;
             stray += miss;
             seen += looked;
+            deep = d + 1;
         }
         if (deep >= depth / 2 || deep < depth * STRIP.min || stray > seen * STRIP.content)
             continue;

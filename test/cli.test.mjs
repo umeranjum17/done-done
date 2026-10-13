@@ -4921,7 +4921,7 @@ test('a matrix skip drops the partial cell and records its reason', () => {
 test('a matrix skip that drops every cell or matches no cell is refused when the config is read', () => {
   const all = MATRIXED.replace('  width: [390, 1280]\n', '').replace('  theme: [light, dark]', '  theme: [dark]').replace('journeys:', '  skip:\n    - theme: dark\n      reason: ships later\njourneys:');
   const unmatched = MATRIXED.replace('journeys:', '  skip:\n    - form: phone\n      reason: no form axis\njourneys:');
-  for (const [yaml, why] of [[all, 'every cell is skipped, so there is nothing to capture'], [unmatched, 'skip form=phone matches no cell']]) {
+  for (const [yaml, why] of [[all, 'every cell is skipped, so there is nothing to capture'], [unmatched, 'skip form=phone matches no cell'], [MATRIXED.replace('[light, dark]', '[light, dark.hc]'), 'dark.hc']]) {
     const r = setup(yaml).dd('run', 'cells');
     assert.equal(r.code, 2, r.out);
     assert.ok(r.out.includes(why), r.out);
@@ -4929,10 +4929,11 @@ test('a matrix skip that drops every cell or matches no cell is refused when the
 });
 
 test('the check fails naming a matrix cell with no capture', () => {
-  const t = matrixed(MATRIXED.replace('  width: [390, 1280]\n', '').replace('[light, dark]', '[light, dark, dark-hc]'), "!theme || width !== '' || !cell", (t) => `if (theme !== 'dark') copyFileSync(${JSON.stringify(join(t.dir, 'screen.png'))}, root + '/home.' + theme + '.png');`);
+  const t = matrixed(MATRIXED.replace('  width: [390, 1280]\n', '').replace('[light, dark]', '[light, dark, dark-hc]'), "!theme || width !== '' || !cell", (t) => `if (theme !== 'dark') copyFileSync(${JSON.stringify(t.dir)} + (theme === 'light' ? '/screen.png' : '/screen2.png'), root + '/home.' + theme + '.png');`);
   const run = toon(t.dd('run', 'cells'));
-  const r = t.dd('check', '--outcome', 'home renders light', `.proof/${run.run_id}/home.light.png`);
+  const r = t.dd('check', '--outcome', 'home renders light', `.proof/${run.run_id}/home.light.png`, `.proof/${run.run_id}/home.dark-hc.png`);
   assert.equal(r.code, 1, r.out);
+  assert.equal(toon(r).findings.length, 1, r.out);
   assert.match(toon(r).findings[0].why, /cell theme=dark has no capture: name one file \*dark\*/);
 });
 

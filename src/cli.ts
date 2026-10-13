@@ -9,7 +9,7 @@ import { createInterface } from 'node:readline/promises';
 import { parseArgs } from 'node:util';
 import { encode } from '@toon-format/toon';
 import { Document, parseDocument } from 'yaml';
-import { ACPX_INSTALL, agentChoices, agentRun, askAgent, findBin, JUDGES, knownAgentOf, noAgent, notStartable, selectAgent, selectJudge, supported, type AgentAnswer, type JudgeChoice } from './agents.js';
+import { ACPX_INSTALL, agentChoices, agentRun, askAgent, findBin, JUDGES, knownAgentOf, modelFor, noAgent, noJudge, notStartable, routeOf, selectAgent, selectJudge, supported, type AgentAnswer, type JudgeChoice } from './agents.js';
 import { AGENTS, CHEAP, type Config, globalConfigText, home, isAgent, loadConfig, parseDuration, UsageError } from './config.js';
 import { backend, type Capture, judge, judgeable, type Judged, onPath, quote } from './judge.js';
 import { type Finding as MaintainFinding, maintainSteps, type MaintainResult } from './maintain.js';
@@ -33,7 +33,7 @@ const CHECKS_TEXT = `Checks block (--from): the newest "## Checks" heading, then
   evidence: <the evidence file paths, or "not proven: <cause>">`;
 const RUNS_TEXT = `runs: each verify or maintain run lives in $DONE_DONE_HOME/runs/<app>/<run-id> (run.json, events.jsonl, logs/<step>.log,
   agents/<n>-<name>.json for each agent call) and goes on when the command that started it ends;
-  verify steps: resolve, drive, check, judge (with --judge, and always after an agent drive), gate, receipt, report;
+  verify steps: resolve, drive, check, judge (unless --no-judge), gate, receipt, report;
   maintain steps: locate, hygiene, source-wave, reconcile, report
   drive: the journey when there is one; else the author agent (agent: in config) drives one feature of the verify skill the way a user
   does and saves screenshots into the run's evidence folder; it may run commands and edit files only in the repo and that folder where
@@ -55,7 +55,7 @@ const DOCTOR_TEXT = `doctor changes nothing except the --probe call record (the 
   set, with the command that saves the user's choice), agent_settings (agent, model, effort,
   args, path and agent_timeout, each with the file it came from: the global config, .done-done.yaml or default), judge (the judge route is ready: for claude-code an
   executable claude binary, a sign-in folder and the judge kit, for answerer:<agent> that agent's CLI and the kit, for openai:key
-  OPENAI_API_KEY and the kit; the model is never called),
+  OPENAI_API_KEY and the kit; the model is never called; missing when none is set, with the command that saves the user's choice),
   judge_choice (the judge, and how far it is from the author: another agent, another model, or session-only), ffprobe (video evidence only).
   --probe also asks the agent one JSON-schema question (one call at the agent's model: its cheap default where it has one, else its own; set agent_config.<agent>.model to choose; its record goes to
   $DONE_DONE_HOME/agents/) and then requires a valid answer.
@@ -64,7 +64,8 @@ const CONFIG_TEXT = `config: ~/.done-done/config.yaml (global; DONE_DONE_HOME mo
   agent (either file): claude, codex, opencode, pi, gemini or acp:<target>, set by the user (done-done init --agent); done-done never picks one.
   global only: agent_config.<agent>.{model,effort} (effort: minimal, low, medium, high, xhigh, max), agent_args_override.<agent>
   (extra flags), agent_path_override.<agent> (binary), acpx_path, agent_timeout (one agent call, default 30m),
-  evidence.local_root, judge.{route,model,allow_same,claude_code.config_dir}. done-done doctor shows where each agent setting came from.`;
+  evidence.local_root, judge.{route,model,allow_same,claude_code.config_dir} (the judge, set by the user with
+  init --judge; never picked). done-done doctor shows where each agent setting came from.`;
 
 // One table drives `--help` and every `<command> --help`: each command's usage lines and the flags it takes.
 const FLAGS: Record<string, string> = {
@@ -76,7 +77,8 @@ const FLAGS: Record<string, string> = {
   '--from <file | - | PR URL>': 'read the claim from the newest "## Checks" block of a file, stdin or a PR body',
   '--trusted-ref <ref>': 'read .done-done.yaml from this git ref instead of the working tree (use in CI)',
   '--claim-id <id>': 'the claim the evidence proves; evidence already used for another claim id is reuse (default: the current branch, or the PR branch with --from <PR URL>; required on a detached HEAD)',
-  '--judge': 'a judge that is a different agent from the author (with only the author agent installed, a different cheap model) says whether each PNG/JPEG capture shows the outcome (off by default; or judge.enabled: true)',
+  '--judge': 'the judge the user set (judge.route, never the agent and model that did the work) says whether each PNG/JPEG capture shows the outcome (verify does this by default; check and receipt only with --judge or judge.enabled: true)',
+  '--no-judge': 'skip the judge, only when the user chooses to (or judge.enabled: false in .done-done.yaml)',
   '--verify <head>': 'read-only: verify the receipt recorded for <head>',
   '--outcome "<what a user can now do>"': 'the outcome the run must prove',
   '--wait': 'wait until the run ends (the default)',
@@ -92,6 +94,8 @@ const FLAGS: Record<string, string> = {
   '--limit <n>': 'how many past runs to list (default all)',
   '--agent <agent>': 'the coding agent done-done starts (claude, opencode, pi, gemini or acp:<target>), saved as agent in ~/.done-done/config.yaml; without it, init asks in a terminal',
   '--model <model>': 'with --agent: that agent\'s model, saved as agent_config.<agent>.model (opencode: provider/model)',
+  '--judge <agent>': `the judge done-done starts (${JUDGES.join(' or ')}), saved as judge.route in ~/.done-done/config.yaml; never the agent and model that did the work; without it, init asks in a terminal`,
+  '--judge-model <model>': 'with --judge <agent>: the judge\'s model, saved as judge.model',
   '--hook <agent>': 'also add a SessionStart hook to .claude/settings.json (claude), .codex/hooks.json (codex) or .gemini/settings.json (gemini) that shows `done-done` to each session, or a plugin to .opencode/plugins (opencode) or an extension to .pi/extensions (pi) that adds it to the first message of each session (opt-in)',
 };
 // `more` is the reference text a command needs beyond its flags, shared with the top-level help.
@@ -101,6 +105,7 @@ const COMMANDS: Record<string, { usage: [string, string][]; flags: string[]; mor
       ['done-done init', 'write a minimal .done-done.yaml (evidence lives outside the repo) and, when absent, a commented ~/.done-done/config.yaml'],
       ['done-done init', 'scaffold .agents/skills/verify-<app> from this repo (never overwrites)'],
       ['done-done init --agent opencode --model opencode-go/muse-spark-1.3-contributor', 'set the coding agent done-done starts and its model (in a terminal, init asks when none is set)'],
+      ['done-done init --judge claude --judge-model claude-haiku-5-5', 'set the judge done-done starts and its model (in a terminal, init asks when none is set)'],
       ['done-done init --hook claude', 'also show this repo\'s done-done state at each Claude Code session start'],
       ['done-done init --hook codex', 'also show this repo\'s done-done state at each Codex session start'],
       ['done-done init --hook opencode', 'also add this repo\'s done-done state to the first message of each opencode session'],
@@ -108,7 +113,7 @@ const COMMANDS: Record<string, { usage: [string, string][]; flags: string[]; mor
       ['done-done init --hook gemini', 'also show this repo\'s done-done state at each Gemini CLI session start'],
       ['done-done init --journey <name> -- <command...>', "record a journey's capture recipe in .done-done.yaml"],
     ],
-    flags: ['--agent <agent>', '--model <model>', '--hook <agent>', '--journey <name>', '-- <command...>'],
+    flags: ['--agent <agent>', '--model <model>', '--judge <agent>', '--judge-model <model>', '--hook <agent>', '--journey <name>', '-- <command...>'],
     more: [JOURNEYS_TEXT, CONFIG_TEXT],
   },
   doctor: {
@@ -147,11 +152,11 @@ const COMMANDS: Record<string, { usage: [string, string][]; flags: string[]; mor
   },
   verify: {
     usage: [
-      ['done-done verify [<journey>] --outcome "<what a user can now do>" [--claim-id <id>] [--judge]', 'drive the journey in a run that outlives this command, check its evidence and record a receipt'],
+      ['done-done verify [<journey>] --outcome "<what a user can now do>" [--claim-id <id>] [--no-judge]', 'drive the journey in a run that outlives this command, check its evidence, judge each screenshot and record a receipt'],
       ['done-done verify --outcome "<claim>" [--feature <name>]', 'with no journey, the author agent drives a verify skill feature and the judge (never the author) judges its captures'],
       ['done-done verify [<journey>] --outcome "<claim>" --no-wait | --wait | --foreground', 'return at once, wait until the run ends or waits at its gate (default), or run in this process (CI)'],
     ],
-    flags: ['--outcome "<what a user can now do>"', '--feature <name>', '--claim-id <id>', '--judge', '--wait', '--no-wait', '--foreground'],
+    flags: ['--outcome "<what a user can now do>"', '--feature <name>', '--claim-id <id>', '--judge', '--no-judge', '--wait', '--no-wait', '--foreground'],
     more: [RUNS_TEXT],
   },
   maintain: {
@@ -162,7 +167,7 @@ const COMMANDS: Record<string, { usage: [string, string][]; flags: string[]; mor
   design: {
     usage: [['done-done design <screens...> [--mock <screen>=<mock>]', 'a judge looks at each PNG/JPEG screen, alone or next to its mock, and fails it on visual defects']],
     flags: ['--mock <screen>=<mock>'],
-    more: [`design: one judge request per screen (the --judge route, never the author); it fails a screen on any defect it names:
+    more: [`design: one judge request per screen (the judge the user set, never the author); it fails a screen on any defect it names:
   ${Object.keys(KINDS).join(', ')}; capture each variant (dark, small width, large font) as its own screen; exit 0 every screen
   passed, 1 a screen failed, 3 none failed but one is unsure`],
   },
@@ -190,8 +195,8 @@ const COMMANDS: Record<string, { usage: [string, string][]; flags: string[]; mor
     more: [RUNS_TEXT],
   },
   rerun: {
-    usage: [['done-done rerun [--run <run-id>] [--wait | --no-wait]', 'run again from the failed step, reusing steps whose inputs did not change; wait (default) or return at once (exit 4)']],
-    flags: ['--run <run-id>', '--wait', '--no-wait'],
+    usage: [['done-done rerun [--run <run-id>] [--wait | --no-wait] [--no-judge]', 'run again from the failed step, reusing steps whose inputs did not change; the judge runs as the source run did (--no-judge turns it off); wait (default) or return at once (exit 4)']],
+    flags: ['--run <run-id>', '--wait', '--no-wait', '--no-judge'],
     more: [RUNS_TEXT],
   },
   abort: {
@@ -214,10 +219,13 @@ const USAGE_TEXT = `install: npm install -g --prefix ~/.local --allow-git=all gi
 usage:
 ${rows([['done-done', "show this repo's config state and the next step"], ...Object.values(COMMANDS).flatMap((c) => c.usage)], 46)}
 ${GLOBAL_TEXT}
---judge (or judge.enabled: true): a model on your own plan, through BYOKit, says whether each PNG/JPEG capture
-  shows the outcome; a wrong screen fails, an unsure answer is inconclusive. Off by default. The judge is judge.route
-  (claude-code; answerer:<agent> through the CLI of opencode, pi or gemini with every tool off; or openai:key with judge.model on your own
-  OPENAI_API_KEY), or with auto the first installed agent that is not the author; with only the author's agent, its cheap model (a fresh session of the author's own model only when that cheap model is the same).
+judge: done-done's own agent, a fresh one on your own plan through BYOKit, says whether each PNG/JPEG capture shows
+  the outcome; a wrong screen fails, an unsure answer is inconclusive. verify judges by default (judge.enabled: false turns
+  that off; --judge turns it on for one run); rerun repeats its source run's judge choice (--no-judge turns it off for a run);
+  check and receipt start no model unless --judge or judge.enabled: true. The judge is the one the user set (judge.route:
+  claude-code; answerer:<agent> through the CLI of opencode, pi or gemini with every tool off; or openai:key with judge.model
+  on your own OPENAI_API_KEY), never the agent and model that did the work; with none set, done-done asks in a terminal or
+  stops (exit 2) with the command that saves it.
 
 ${JOURNEYS_TEXT}
 ${CHECKS_TEXT}
@@ -506,7 +514,7 @@ type CheckOutcome = {
 
 // Run a check and return its result without printing it, so `check` and `receipt` share one path.
 // run: a verify run's folder (the judge's call records go to its agents/) and the hook that starts its judge step.
-async function runCheck(argv: string[], run?: { dir: string; judging: (code: number, findings: Finding[]) => void; author?: { agent: string; model: string } }): Promise<CheckOutcome> {
+async function runCheck(argv: string[], run?: { dir: string; judge: boolean; judging: (code: number, findings: Finding[]) => void; author?: { agent: string; model: string } }): Promise<CheckOutcome> {
   const { values, positionals } = parseArgs({
     args: argv,
     options: { outcome: { type: 'string' }, from: { type: 'string' }, 'claim-id': { type: 'string' }, 'trusted-ref': { type: 'string' }, judge: { type: 'boolean' } },
@@ -615,12 +623,14 @@ async function runCheck(argv: string[], run?: { dir: string; judging: (code: num
   let judged: Record<string, unknown> | undefined;
   let judgeBlock: JudgeBlock | undefined;
   let judgeLevel: Finding['level'] | undefined;
-  if ((values.judge || cfg.judge.enabled) && claim) {
+  // A verify run judges as the run says; check and receipt only with --judge or judge.enabled: true.
+  if ((run ? run.judge : values.judge || cfg.judge.enabled === true) && claim) {
     // A judge pass never overrides a failed deterministic check: on a fail, no capture is judged.
     if (findings.some((f) => f.level === 'fail')) judged = { skipped: 'the check already failed, so no capture was judged' };
     else {
       // Only a capture the judge reads needs the user's agent (the judge is kept apart from it).
-      if (captures.some(judgeable)) await withAgent(cfg);
+      if (captures.some(judgeable)) await withChoice('agent', cfg);
+      if (captures.some(judgeable)) await withChoice('judge', cfg);
       if (captures.some(judgeable)) run?.judging(findings.length ? INCONCLUSIVE : PASS, [...findings]);
       const j = await judge(cfg, () => selectJudge(cfg, run?.author ? agentRun(cfg, run.author.agent, run.author.model) : selectAgent(cfg)), claim.outcome, captures, run ? join(run.dir, 'agents') : join(home(), 'agents'));
       // The judge's next step leads the help when its verdict decides the result.
@@ -936,8 +946,8 @@ function skillFeatures(repo: string, cfg: Config): string[] {
   }
 }
 
-// Who drives a run with no journey: the author agent, which must be one done-done can let drive, and a judge that is not
-// the author must be ready. A usage error now, never a failed run later. Returns the author and the feature to drive.
+// Who drives a run with no journey: the author agent, which must be one done-done can let drive. A usage error now, never a
+// failed run later. Returns the author and the feature to drive.
 async function agentDrive(repo: string, cfg: Config, feature?: string): Promise<{ author: { agent: string; model: string }; feature?: string }> {
   const skill = join(cfg.skill, 'SKILL.md');
   if (!existsSync(join(repo, skill))) throw new UsageError(`verify needs a journey or a verify skill to drive the app, and this repo has neither (no ${skill})`, 'Scaffold the verify skill: done-done init, or record a journey: done-done init --journey <name> -- <command that drives the real app>');
@@ -945,11 +955,10 @@ async function agentDrive(repo: string, cfg: Config, feature?: string): Promise<
   const name = feature?.replace(/^features\//, '').replace(/\.md$/, '');
   if (name !== undefined && !features.includes(name)) throw new UsageError(`no feature ${feature} in ${cfg.skill}/features; it has: ${features.join(', ') || 'none'}`, `Run: done-done verify --feature <${features.join('|') || 'name'}> --outcome "<what a user can now do>"`);
   // The author is the agent the user set; with none, ask (in a terminal) or stop with the command that saves the answer.
-  await withAgent(cfg);
+  await withChoice('agent', cfg);
   const a = selectAgent(cfg);
   if (!a.path || !supported(a.agent)) throw new UsageError(`verify needs an agent to drive the app: ${a.path ? `${a.agent} cannot be started by done-done yet` : notStartable(a.agent, a.override)}`, `Install ${a.agent}, or save the agent the user chooses: done-done init --agent <agent> --model <model>; or record a journey: done-done init --journey <name> -- <command>`);
   if (a.agent.startsWith('acp:')) throw new UsageError(`${a.agent} cannot drive the app: done-done runs ACP agents with every tool denied`, `Set agent: to one of ${AGENTS.filter(supported).join(', ')}, or record a journey: done-done init --journey <name> -- <command>`);
-  selectJudge(cfg, a);
   return { author: { agent: a.agent, model: a.model }, feature: name ?? (features.length === 1 ? features[0] : undefined) };
 }
 
@@ -1113,7 +1122,7 @@ async function runSteps(dir: string): Promise<void> {
       set(step!, code === PASS ? 'completed' : 'failed', { exit: code, findings });
       begin('judge');
     };
-    const checked = await runCheck(['--outcome', run.claim!, ...files, ...(run.claim_id ? ['--claim-id', run.claim_id] : []), ...(run.judge ? ['--judge'] : [])], { dir, judging, author: run.author });
+    const checked = await runCheck(['--outcome', run.claim!, ...files, ...(run.claim_id ? ['--claim-id', run.claim_id] : [])], { dir, judge: !!run.judge, judging, author: run.author });
     const logged: Record<string, unknown> = { ...checked.result, findings: checked.findings };
     delete logged.findings_omitted;
     log('check', logged);
@@ -1196,7 +1205,8 @@ function showRun(dir: string, cfg: Config, command: string, gone = false): numbe
   // An overridden run is never a pass: it exits 1 like a fail.
   const code = status === 'pending' || status === 'running' || status === 'awaiting_approval' ? WAITING : status === 'cancelled' || status === 'failed' || run.result === 'fail' || run.result === 'overridden' || run.result === 'drift' ? FAIL : run.result === 'inconclusive' || run.result === 'blocked' ? INCONCLUSIVE : PASS;
   const drive = run.journey ?? (run.feature ? `--feature ${arg(run.feature)}` : '');
-  const again = run.kind === 'maintain' ? 'done-done maintain' : `done-done verify ${drive ? `${drive} ` : ''}--outcome ${arg(run.claim!)}${run.claim_id ? ` --claim-id ${arg(run.claim_id)}` : ''}`;
+  const judgeFlag = run.judge === false && cfg.judge.enabled !== false ? ' --no-judge' : run.judge && cfg.judge.enabled === false ? ' --judge' : '';
+  const again = run.kind === 'maintain' ? 'done-done maintain' : `done-done verify ${drive ? `${drive} ` : ''}--outcome ${arg(run.claim!)}${run.claim_id ? ` --claim-id ${arg(run.claim_id)}` : ''}${judgeFlag}`;
   const findings = cap(run.findings ?? []);
   const ev = cap(rec ? evidenceOf(run.repo, cfg, rec) : []);
   const result: Record<string, unknown> = { command, run_id: run.run_id, kind: run.kind, status };
@@ -1248,15 +1258,23 @@ async function waitRun(dir: string, pid: number): Promise<void> {
   while (['pending', 'running'].includes(loadRun(dir).status) && alive(pid)) await new Promise((r) => setTimeout(r, 200));
 }
 
+// The judge a command will start: the user's agent and judge (asked for when unset), refused when it is the author.
+async function preflightJudge(cfg: Config): Promise<JudgeChoice> {
+  await withChoice('agent', cfg);
+  await withChoice('judge', cfg);
+  return selectJudge(cfg, selectAgent(cfg));
+}
+
 async function cmdVerify(argv: string[]): Promise<number> {
   const { values, positionals } = parseArgs({
     args: argv,
-    options: { outcome: { type: 'string' }, feature: { type: 'string' }, 'claim-id': { type: 'string' }, judge: { type: 'boolean' }, wait: { type: 'boolean' }, 'no-wait': { type: 'boolean' }, foreground: { type: 'boolean' } },
+    options: { outcome: { type: 'string' }, feature: { type: 'string' }, 'claim-id': { type: 'string' }, judge: { type: 'boolean' }, 'no-judge': { type: 'boolean' }, wait: { type: 'boolean' }, 'no-wait': { type: 'boolean' }, foreground: { type: 'boolean' } },
     allowPositionals: true,
   });
   if (!values.outcome?.trim()) throw new UsageError('verify needs --outcome "<what a user can now do>"');
   if (positionals.length > 1) throw new UsageError('verify takes at most one journey name');
   if (positionals.length && values.feature !== undefined) throw new UsageError('pass a journey or --feature, not both: a journey drives by its command, --feature by the author agent');
+  if (values.judge && values['no-judge']) throw new UsageError('pass only one of --judge and --no-judge');
   if ([values.wait, values['no-wait'], values.foreground].filter(Boolean).length > 1) throw new UsageError('pass only one of --wait, --no-wait and --foreground');
   const repo = repoRoot();
   const cfg = loadConfig(repo);
@@ -1268,11 +1286,10 @@ async function cmdVerify(argv: string[]): Promise<number> {
   if (values['claim-id']?.trim() === '') throw new UsageError('--claim-id needs a non-empty id');
   if (!values['claim-id'] && !git(repo, 'branch', '--show-current')) throw new UsageError('HEAD is detached, so no branch names this claim; pass --claim-id <id>');
   const drive = journey === null ? await agentDrive(repo, cfg, values.feature) : undefined;
-  // An agent drive is always judged, since the author never grades its own captures.
-  const judging = !!drive || !!values.judge || cfg.judge.enabled;
-  // A judge that config forbids (the author's own agent and model) is a usage error now, not a failed run later.
-  if (judging) await withAgent(cfg);
-  if (judging && cfg.judge.route !== 'auto') selectJudge(cfg, selectAgent(cfg));
+  // verify starts done-done's own judge by default; --no-judge or judge.enabled: false turns it off. An agent drive is judged too, since the author never grades its own captures.
+  const judging = !values['no-judge'] && (!!drive || !!values.judge || cfg.judge.enabled !== false);
+  // No judge set, or one config forbids (the author's own agent and model), is a usage error now, not a failed run later.
+  if (judging) await preflightJudge(cfg);
   const id = newRunId(git(repo, 'rev-parse', 'HEAD'));
   const dir = join(runsRoot(cfg.app), id);
   mkdirSync(join(dir, 'logs'), { recursive: true });
@@ -1307,7 +1324,7 @@ async function cmdMaintain(argv: string[]): Promise<number> {
   if ([values.wait, values['no-wait'], values.foreground].filter(Boolean).length > 1) throw new UsageError('pass only one of --wait, --no-wait and --foreground');
   const repo = repoRoot();
   const cfg = loadConfig(repo);
-  await withAgent(cfg);
+  await withChoice('agent', cfg);
   const id = newRunId(git(repo, 'rev-parse', 'HEAD'));
   const dir = join(runsRoot(cfg.app), id);
   mkdirSync(join(dir, 'logs'), { recursive: true });
@@ -1371,7 +1388,7 @@ const drivesClean = (record: string | undefined, head: string | undefined) => {
 };
 
 async function cmdRerun(argv: string[]): Promise<number> {
-  const { values } = parseArgs({ args: argv, options: { run: { type: 'string' }, wait: { type: 'boolean' }, 'no-wait': { type: 'boolean' } } });
+  const { values } = parseArgs({ args: argv, options: { run: { type: 'string' }, wait: { type: 'boolean' }, 'no-wait': { type: 'boolean' }, 'no-judge': { type: 'boolean' } } });
   if (values.wait && values['no-wait']) throw new UsageError('pass only one of --wait and --no-wait');
   const repo = repoRoot();
   const cfg = loadConfig(repo);
@@ -1390,11 +1407,10 @@ async function cmdRerun(argv: string[]): Promise<number> {
   const same = !!src.inputs && (['head', 'journey', 'skill'] as const).every((k) => src.inputs![k] === inputs[k]);
   const driveReuse = same && drivesClean(src.record, src.inputs?.head);
   const reused = (name: string) => (name === 'resolve' && same) || (name === 'drive' && driveReuse);
-  // A rerun judges when its source did or config now turns the judge on; a forbidden judge is a usage error here too.
-  // Steps follow the current list, so a run from before the judge step gains it.
-  const judging = !!drive || !!src.judge || cfg.judge.enabled;
-  if (judging) await withAgent(cfg);
-  if (judging && cfg.judge.route !== 'auto') selectJudge(cfg, selectAgent(cfg));
+  // A rerun judges as its source did; --no-judge turns it off for this run. A missing or forbidden judge is a usage
+  // error here too.
+  const judging = !values['no-judge'] && !!src.judge;
+  if (judging) await preflightJudge(cfg);
   const id = newRunId(git(repo, 'rev-parse', 'HEAD'));
   const dir = join(root, id);
   mkdirSync(join(dir, 'logs'), { recursive: true });
@@ -1891,72 +1907,119 @@ function checkChoice(agent: string, model: string) {
   if (agent === 'opencode' && model && !model.includes('/')) throw new UsageError(`--model ${model}: an opencode model is provider/model, e.g. ${CHEAP.opencode.model}`);
 }
 
-// Save the user's agent (and model) in the global config, in place, keeping its comments and every other key.
-function saveAgent(agent: string, model: string): string {
+type Kind = 'agent' | 'judge';
+type Choice = { agent: string; model: string };
+const ACP_TARGET = 'acp:<target>';
+
+// Save the user's agent or judge (and model) in the global config, in place, keeping its comments and every other key.
+function saveChoice(kind: Kind, { agent, model }: Choice): string {
   const file = join(home(), 'config.yaml');
   let text = readFileSync(file, 'utf8');
-  const example = /^# agent: .*$/m;
-  if (!parseDocument(text).has('agent')) text = example.test(text) ? text.replace(example, `agent: ${agent}`) : text.replace(/^(?=[a-z_]+:)/m, `agent: ${agent}\n`);
+  if (kind === 'agent') {
+    const example = /^# agent: .*$/m;
+    if (!parseDocument(text).has('agent')) text = example.test(text) ? text.replace(example, `agent: ${agent}`) : text.replace(/^(?=[a-z_]+:)/m, `agent: ${agent}\n`);
+  }
   const doc = parseDocument(text);
-  doc.set('agent', doc.createNode(agent));
-  if (model) doc.setIn(['agent_config', agent, 'model'], model);
+  if (kind === 'agent') {
+    doc.set('agent', doc.createNode(agent));
+    if (model) doc.setIn(['agent_config', agent, 'model'], model);
+  } else {
+    if (!doc.get('judge')) doc.set('judge', doc.createNode({}));
+    doc.setIn(['judge', 'route'], routeOf(agent));
+    if (model) doc.setIn(['judge', 'model'], model);
+    else doc.deleteIn(['judge', 'model']);
+  }
   writeFileSync(`${file}.tmp`, doc.toString({ lineWidth: 0 }));
   renameSync(`${file}.tmp`, file);
-  return `${agent}${model ? ` (model ${model})` : ''} saved to ${file}`;
+  return `${kind === 'agent' ? agent : routeOf(agent)}${model ? ` (model ${model})` : ''} saved to ${file}`;
 }
 
 const interactive = () => !!process.stdin.isTTY && !!process.stderr.isTTY;
+const missing = (kind: Kind) => (kind === 'agent' ? noAgent() : noJudge());
 
-// In a terminal the user picks the agent and its model from a list; done-done never picks for them.
-async function pickAgent(): Promise<{ agent: string; model: string }> {
+// In a terminal the user picks the agent (or the judge) and its model from a list; done-done never picks for them.
+async function pick(kind: Kind, cfg: Config): Promise<Choice> {
   const rl = createInterface({ input: process.stdin, output: process.stderr });
   const closed = new AbortController();
   rl.on('close', () => closed.abort());
   const ask = async (q: string) => (await rl.question(q, { signal: closed.signal })).trim();
   try {
-    const list = AGENTS.filter(supported);
-    process.stderr.write(`done-done starts a coding agent you choose, and none is set. Agents:\n${list.map((a, i) => `  ${i + 1}) ${a}\n`).join('')}  ${list.length + 1}) acp:<target> (an agent your acpx bridge starts)\n`);
-    let agent = '';
-    while (!agent) {
-      const n = Number(await ask(`agent [1-${list.length + 1}]: `));
-      if (n === list.length + 1) {
-        const target = await ask('acp target, e.g. claude-code: ');
-        if (isAgent(`acp:${target}`)) agent = `acp:${target}`;
-      } else if (Number.isInteger(n) && n >= 1 && n <= list.length) agent = list[n - 1];
-    }
-    const cheap = CHEAP[agent]?.model;
-    process.stderr.write(`Models for ${agent}:\n  1) ${cheap ? `${cheap} (cheap)` : `${agent}'s own default`}\n  2) another (type its name${agent === 'opencode' ? ' as provider/model' : ''})\n`);
+    const menu = kind === 'agent' ? [...AGENTS.filter(supported), ACP_TARGET] : JUDGES;
+    const label = (a: string) => (a === ACP_TARGET ? `${a} (an agent your acpx bridge starts)` : a);
+    const head = kind === 'agent' ? 'done-done starts a coding agent you choose, and none is set. Agents:' : `done-done judges each screenshot with an agent you choose, never the one that did the work (${cfg.agent || 'not set'}), and none is set. Judges:`;
+    process.stderr.write(`${head}\n${menu.map((a, i) => `  ${i + 1}) ${label(a)}\n`).join('')}`);
     for (;;) {
-      const n = await ask('model [1-2]: ');
-      if (n === '1') return { agent, model: cheap ?? '' };
-      if (n !== '2') continue;
-      const model = await ask('model: ');
-      if (model && (agent !== 'opencode' || model.includes('/'))) return { agent, model };
+      let agent = '';
+      while (!agent) {
+        const n = Number(await ask(`${kind} [1-${menu.length}]: `));
+        if (!Number.isInteger(n) || n < 1 || n > menu.length) continue;
+        agent = menu[n - 1];
+        if (agent !== ACP_TARGET) continue;
+        const target = await ask('acp target, e.g. claude-code: ');
+        agent = isAgent(`acp:${target}`) ? `acp:${target}` : '';
+      }
+      const cheap = CHEAP[agent]?.model;
+      const who = kind === 'agent' ? agent : `the ${agent} judge`;
+      const typed = kind === 'judge' && !cheap;
+      const example = agent === 'opencode' ? ' as provider/model' : '';
+      if (typed) process.stderr.write(`${who} has no cheap model, so type its model name${example}:\n`);
+      else process.stderr.write(`Models for ${who}:\n  1) ${cheap ? `${cheap} (cheap)` : `${agent}'s own default`}\n  2) another (type its name${example})\n`);
+      let model: string | undefined;
+      while (model === undefined) {
+        const n = typed ? '2' : await ask('model [1-2]: ');
+        if (n === '1') model = cheap ?? '';
+        else if (n === '2') {
+          const typedModel = await ask('model: ');
+          if (typedModel && (agent !== 'opencode' || typedModel.includes('/'))) model = typedModel;
+        }
+      }
+      if (kind === 'agent') return { agent, model };
+      try {
+        checkJudge(cfg, agent, model);
+        return { agent, model };
+      } catch (e) {
+        if (!(e instanceof UsageError)) throw e;
+        process.stderr.write(`${e.message}\n`);
+      }
     }
   } catch {
-    throw noAgent(); // the terminal closed before an answer
+    throw missing(kind); // the terminal closed before an answer
   } finally {
     rl.close();
   }
 }
 
-// A command that starts the agent needs the one the user set. With none, it asks in a terminal and saves the answer;
-// anywhere else it stops with noAgent, so a calling agent asks its user instead of picking.
-async function withAgent(cfg: Config): Promise<void> {
-  if (cfg.agent) return;
-  if (!interactive()) throw noAgent();
-  const { agent, model } = await pickAgent();
+// A command that starts the agent or the judge needs the one the user set. With none, it asks in a terminal and saves
+// the answer; anywhere else it stops with the ask error, so a calling agent asks its user instead of picking.
+async function withChoice(kind: Kind, cfg: Config): Promise<void> {
+  if (kind === 'agent' ? cfg.agent : cfg.judge.route) return;
+  if (!interactive()) throw missing(kind);
+  const choice = await pick(kind, cfg);
   writeGlobal();
-  process.stderr.write(`${saveAgent(agent, model)}\n`);
-  cfg.agent = agent;
-  if (model) cfg.agent_config[agent] = { ...cfg.agent_config[agent], model };
+  process.stderr.write(`${saveChoice(kind, choice)}\n`);
+  if (kind === 'agent') {
+    cfg.agent = choice.agent;
+    if (choice.model) cfg.agent_config[choice.agent] = { ...cfg.agent_config[choice.agent], model: choice.model };
+  } else {
+    cfg.judge.route = routeOf(choice.agent);
+    cfg.judge.model = choice.model;
+  }
+}
+
+// The user's judge choice, checked before anything is written: an agent that can judge, and never the author's own
+// agent and model (selectJudge refuses that pair) unless judge.allow_same.
+function checkJudge(cfg: Config, agent: string, model: string) {
+  if (!JUDGES.includes(agent)) throw new UsageError(`done-done cannot judge through ${agent}; it judges through ${JUDGES.join(', ')}`, noJudge().help);
+  if (agent === 'opencode' && model && !model.includes('/')) throw new UsageError(`--judge-model ${model}: an opencode model is provider/model, e.g. ${CHEAP.opencode.model}`);
+  if (!model && !modelFor(cfg, agent)) throw new UsageError(`judge: ${agent} has no default model, so a judge needs one`, `Save the judge with its model: done-done init --judge ${agent} --judge-model <model>`);
+  if (cfg.agent) selectJudge({ ...cfg, judge: { ...cfg.judge, route: routeOf(agent), model } }, selectAgent(cfg));
 }
 
 async function cmdInit(argv: string[]): Promise<number> {
   const dash = argv.indexOf('--');
   const { values } = parseArgs({
     args: dash < 0 ? argv : argv.slice(0, dash),
-    options: { agent: { type: 'string' }, model: { type: 'string' }, hook: { type: 'string' }, journey: { type: 'string' } },
+    options: { agent: { type: 'string' }, model: { type: 'string' }, judge: { type: 'string' }, 'judge-model': { type: 'string' }, hook: { type: 'string' }, journey: { type: 'string' } },
     allowPositionals: false,
   });
   const parts = dash < 0 ? [] : argv.slice(dash + 1);
@@ -1965,6 +2028,7 @@ async function cmdInit(argv: string[]): Promise<number> {
     throw new UsageError(`--hook ${values.hook} is not supported; the supported values are ${Object.keys(HOOKS).join(', ')}`, `Run: done-done init --hook <${Object.keys(HOOKS).join('|')}>`);
   if (values.model !== undefined && values.agent === undefined) throw new UsageError('--model needs --agent', `Run: done-done init --agent <agent> --model ${values.model}`);
   if (values.agent !== undefined) checkChoice(values.agent, values.model ?? '');
+  if (values['judge-model'] !== undefined && values.judge === undefined) throw new UsageError('--judge-model needs --judge', `Run: done-done init --judge <agent> --judge-model ${values['judge-model']}`);
   if (journey === null && parts.length) throw new UsageError('init needs --journey <name> to record a command after --');
   if (journey !== null && !parts.some((p) => p.trim())) throw new UsageError(`init --journey ${journey} needs a command after --`);
   if (journey !== null && !/^[A-Za-z0-9][A-Za-z0-9_-]*$/.test(journey)) throw new UsageError(`invalid journey name ${journey}; use letters, digits, - or _`);
@@ -1976,16 +2040,25 @@ async function cmdInit(argv: string[]): Promise<number> {
   const spec = values.hook === undefined ? undefined : HOOKS[values.hook];
   const hook = spec?.make(repo); // likewise validated before any write
   // The agent: --agent, else with none set the user's pick in a terminal (asked before any write); never done-done's.
-  const choice = values.agent !== undefined ? { agent: values.agent, model: values.model ?? '' } : !cfg.agent && interactive() ? await pickAgent() : undefined;
+  const choice = values.agent !== undefined ? { agent: values.agent, model: values.model ?? '' } : !cfg.agent && interactive() ? await pick('agent', cfg) : undefined;
+  if (choice) cfg.agent_config[choice.agent] = { ...cfg.agent_config[choice.agent], ...(choice.model && { model: choice.model }) };
+  // The judge likewise: --judge, else with none set the user's pick in a terminal; checked against the agent above.
+  const judgeChoice = values.judge !== undefined ? { agent: values.judge, model: values['judge-model'] ?? (cfg.judge.route === routeOf(values.judge) ? cfg.judge.model : '') } :!cfg.judge.route && interactive() ? await pick('judge', { ...cfg, agent: choice?.agent ?? cfg.agent }) : undefined;
+  if (judgeChoice) checkJudge({ ...cfg, agent: choice?.agent ?? cfg.agent }, judgeChoice.agent, judgeChoice.model);
   const writeAgent = (): { out: Record<string, string>; help: string[]; code: number } => {
     if (choice) {
-      const saved = saveAgent(choice.agent, choice.model);
+      const saved = saveChoice('agent', choice);
       const overridden = cfg.from.agent === 'repo' && cfg.agent !== choice.agent;
       return { out: { agent: overridden ? `${saved}; .done-done.yaml overrides it with ${cfg.agent}` : saved }, help: [], code: PASS };
     }
     if (cfg.agent) return { out: { agent: `unchanged (${cfg.agent})` }, help: [], code: PASS };
     return { out: { agent: 'not set' }, help: [`${noAgent().message}. ${noAgent().help}`], code: USAGE };
   };
+  // A judge not set is not an init failure: verify asks for it when it needs one.
+  const writeJudge = (): { out: Record<string, string>; help: string[] } =>
+    judgeChoice ? { out: { judge: saveChoice('judge', judgeChoice) }, help: [] }
+    : cfg.judge.route ? { out: { judge: `unchanged (${cfg.judge.route})` }, help: [] }
+    : { out: { judge: 'not set' }, help: [`${noJudge().message}. ${noJudge().help}`] };
   // Written last on both paths, after the config; init reports it as <agent>_hook (or the plugin/extension key).
   const writeHook = (): { out: Record<string, string>; help: string[] } => {
     if (!spec || !hook) return { out: {}, help: [] };
@@ -2018,19 +2091,21 @@ async function cmdInit(argv: string[]): Promise<number> {
     const agentHook = writeHook();
     const globalConfig = writeGlobal();
     const ag = writeAgent();
+    const jg = writeJudge();
     emit({
       command: 'init',
       result: ag.code === PASS ? 'pass' : 'fail',
       config: existed ? 'updated' : 'written',
       global_config: globalConfig,
       ...ag.out,
+      ...jg.out,
       journey,
       app: fresh.app,
       evidence_root: root,
       gitignore: added ? `added ${rel!.replace(/\/+$/, '')}/` : 'unchanged',
       verify_skill: verify,
       ...agentHook.out,
-      help: [`Capture proof: done-done run ${journey}, then: ${check}`, ...agentHook.help, ...ag.help],
+      help: [`Capture proof: done-done run ${journey}, then: ${check}`, ...agentHook.help, ...ag.help, ...jg.help],
     });
     return ag.code;
   }
@@ -2055,12 +2130,14 @@ app: ${JSON.stringify(cfg.app)}
   const agentHook = writeHook();
   const globalConfig = writeGlobal();
   const ag = writeAgent();
+  const jg = writeJudge();
   emit({
     command: 'init',
     result: ag.code === PASS ? 'pass' : 'fail',
     config: existed ? 'unchanged' : 'written',
     global_config: globalConfig,
     ...ag.out,
+    ...jg.out,
     app: cfg.app,
     evidence_root: root,
     gitignore: added ? `added ${rel!.replace(/\/+$/, '')}/` : 'unchanged',
@@ -2072,6 +2149,7 @@ app: ${JSON.stringify(cfg.app)}
         : [`Add a journey that drives the real app and saves proof under $DONE_DONE_EVIDENCE_ROOT (each run's own folder in ${root}), e.g. ${journeyExample}`, `Then commit, run \`done-done run smoke\`, and: ${check}`]),
       ...agentHook.help,
       ...ag.help,
+      ...jg.help,
     ],
   });
   return ag.code;
@@ -2205,8 +2283,8 @@ async function cmdDoctor(argv: string[]): Promise<number> {
   // An acp:<target> agent is missing when its acpx bridge is: say which, and how to install it.
   const acpx = agent?.agent.startsWith('acp:') ? findBin(agentCfg!.acpx_path) : undefined;
   const override = agent && agentCfg!.agent_path_override[agent.agent];
-  const notFound = acpx !== undefined ? `needs acpx, the ACP bridge, which is not startable (${acpx ? `${acpx} does not run` : isAbsolute(agentCfg!.acpx_path) ? `acpx_path ${agentCfg!.acpx_path} is not an executable file` : 'not on PATH'})`
-    : override ? `is not startable: agent_path_override.${agent!.agent} ${override} is not an executable file` : 'is not on PATH';
+  const notFound = acpx !== undefined ? `${agent!.agent} needs acpx, the ACP bridge, which is not startable (${acpx ? `${acpx} does not run` : isAbsolute(agentCfg!.acpx_path) ? `acpx_path ${agentCfg!.acpx_path} is not an executable file` : 'not on PATH'})`
+    : notStartable(agent?.agent ?? '', override || '');
   const askFix = `ask the user which agent to use and save it: done-done init --agent <agent> --model <model>`;
   const installFix = acpx === undefined ? `Install ${agent?.agent}, or ${askFix}` : ACPX_INSTALL;
   const switchFix = `done-done starts ${startable}: ${askFix}`;
@@ -2220,14 +2298,14 @@ async function cmdDoctor(argv: string[]): Promise<number> {
     const what = `${agent.agent} (${modelPhrase(agent.agent, agent.model)}; from config)`;
     checks.push(
       !agent.path
-        ? { check: 'agent', status: 'missing', detail: `${what} ${notFound}`, fix: installFix }
+        ? { check: 'agent', status: 'missing', detail: `${what}: ${notFound}`, fix: installFix }
         : !supported(agent.agent)
           ? { check: 'agent', status: 'missing', detail: `${what} at ${agent.path}, but done-done cannot start ${agent.agent} yet (${startable} for now)`, fix: switchFix }
           : { check: 'agent', status: 'ok', detail: `${what} at ${agent.path}`, fix: '' },
     );
     if (agent.agent === 'pi') checks.push({ check: 'tool_gate', status: 'warning', detail: 'pi has no permission gate: every pi tool runs without approval', fix: '' });
   }
-  // The judge --judge runs: judge.route, or with auto the first installed agent that can judge and is not the author.
+  // The judge the user set (judge.route), kept apart from the agent.
   let choice: JudgeChoice | undefined;
   let choiceError: UsageError | undefined;
   if (cfg && agent)
@@ -2267,18 +2345,17 @@ async function cmdDoctor(argv: string[]): Promise<number> {
     const apart = { agent: 'a different agent from the author', model: 'the author\'s agent at a different model', 'session-only': 'the author\'s agent and model in a fresh session (session-only independence)' }[choice.independence];
     const accepted = choice.independence === 'session-only' && cfg.judge.allow_same ? '; judge.allow_same accepts it' : '';
     const apartOk = choice.independence === 'agent';
-    const modelIgnored = cfg.judge.route === 'auto' && !!cfg.judge.model;
     checks.push({
       check: 'judge_choice',
-      status: apartOk && !modelIgnored ? 'ok' : 'warning',
-      detail: `${choice.route} (model ${choice.model}; ${choice.from === 'auto' ? 'judge.route auto' : 'from config'}) judges the author ${choice.author.agent} (model ${choice.author.model || 'none'}): ${apart}${accepted}${modelIgnored ? `; judge.model ${cfg.judge.model} is ignored under judge.route auto` : ''}`,
-      fix: !apartOk ? `Install another agent that can judge (${JUDGES.join(' or ')}) so the judge is apart from the author` : modelIgnored ? 'Set judge.route to claude-code or answerer:<agent> to use judge.model, or remove judge.model' : '',
+      status: apartOk ? 'ok' : 'warning',
+      detail: `${choice.route} (model ${choice.model}; from config) judges the author ${choice.author.agent} (model ${choice.author.model || 'none'}): ${apart}${accepted}`,
+      fix: apartOk ? '' : `Ask the user whether to judge with another agent (${JUDGES.join(' or ')}) and save it: done-done init --judge <agent> --judge-model <model>`,
     });
   }
   if (values.probe && !agent) checks.push(unknownRow('probe'));
   if (values.probe && agent) {
     const record = join(home(), 'agents', `probe-${new Date().toISOString().replace(/[:.]/g, '-')}-${agent.agent}.json`);
-    const probe: AgentAnswer & { fix?: string } = !agent.path ? { ok: false, error: `${agent.agent} ${notFound}`, fix: installFix }
+    const probe: AgentAnswer & { fix?: string } = !agent.path ? { ok: false, error: notFound, fix: installFix }
       : !supported(agent.agent) ? { ok: false, error: `done-done cannot start ${agent.agent} yet (${startable} for now)`, fix: switchFix }
       : await askAgent({ ...agent, prompt: 'This is a connectivity probe from done-done doctor. Use no tools. Answer with ok set to true.', schema: PROBE_SCHEMA, cwd: repo ?? process.cwd(), tools: 'none', record });
     checks.push(
@@ -2336,7 +2413,7 @@ async function cmdDesign(argv: string[]): Promise<number> {
     repo = process.cwd();
   }
   const cfg = loadConfig(repo);
-  const choice = selectJudge(cfg, selectAgent(cfg));
+  const choice = await preflightJudge(cfg);
   const judged = await design(cfg, choice, screens, join(home(), 'agents'));
   const count = (v: string) => judged.filter((j) => j.verdict === v).length;
   const code = count('fail') ? FAIL : count('unsure') ? INCONCLUSIVE : PASS;

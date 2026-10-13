@@ -2,8 +2,8 @@ import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { accessSync, constants, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { delimiter, isAbsolute, join } from 'node:path';
-import { agentRun, askAgent, claudeBin } from './agents.js';
+import { basename, delimiter, isAbsolute, join } from 'node:path';
+import { agentRun, askAgent, claudeBin, notStartable } from './agents.js';
 import { home, KEY_ROUTES, parseDuration, UsageError } from './config.js';
 import { downscaleToPng } from './media.js';
 const MAX_SIDE = 1280; // long edge sent to the model, in pixels
@@ -73,7 +73,10 @@ async function kit() {
     catch (e) {
         if (e.code !== 'ERR_MODULE_NOT_FOUND')
             throw e;
-        throw new UsageError(`judge: the judge needs the optional ${KIT} kit, which is not installed`, `Run this check with the kit: npx -y --allow-git=all -p github:umeranjum17/done-done-axi -p ${KIT} done-done-axi ${process.argv.slice(2).map(quote).join(' ')}`);
+        // A verify run's detached runner has no command of the user's to repeat, so it names the rerun of its run.
+        const [cmd, dir] = process.argv.slice(2);
+        const again = cmd === '__runner' ? ['rerun', '--run', basename(dir)] : process.argv.slice(2);
+        throw new UsageError(`judge: the judge needs the optional ${KIT} kit, which is not installed`, `${cmd === 'check' || cmd === 'receipt' ? 'Run this check' : 'Run it again'} with the kit: npx -y --allow-git=all -p github:umeranjum17/done-done-axi -p ${KIT} done-done-axi ${again.map(quote).join(' ')}`);
     }
 }
 // The backend for one judge choice. It checks everything that needs no model call, so doctor can use it too.
@@ -97,7 +100,7 @@ export async function backend(cfg, choice, record = () => '', questions = { rele
         const run = agentRun(cfg, choice.agent, choice.model);
         const bin = run.path;
         if (!bin)
-            throw new UsageError(`judge: ${choice.route} needs ${override ? `agent_path_override.${choice.agent} ${override} to be an executable file` : `${choice.agent} on PATH`}`, `Install ${choice.agent}, or set judge.route in ~/.done-done/config.yaml`);
+            throw new UsageError(`judge: ${notStartable(choice.agent, override)}`, `Install ${choice.agent}, or ask the user for another judge and save it: done-done init --judge <agent> --judge-model <model>`);
         const { answerer, resolve } = await kit();
         let lastError = '';
         // The kit hides a failed call's message from the verdict, so the real cause is kept here for the result.
@@ -122,10 +125,8 @@ export async function backend(cfg, choice, record = () => '', questions = { rele
     const dir = cfg.judge.claude_code.config_dir;
     const signIn = `CLAUDE_CONFIG_DIR=${dir} ${bin || 'claude'} auth login`;
     const where = '~/.done-done/config.yaml';
-    if (!bin && override)
-        throw new UsageError(`judge: agent_path_override.claude ${override} is not an executable file`, `Fix agent_path_override.claude in ${where} or install Claude Code`);
     if (!bin)
-        throw new UsageError(`judge: no claude binary on PATH; install Claude Code or set agent_path_override.claude in ${where}`, 'Install Claude Code, or set agent_path_override.claude to its absolute path');
+        throw new UsageError(`judge: ${notStartable('claude', override)}`, override ? `Fix agent_path_override.claude in ${where}, or install Claude Code` : 'Install Claude Code, or set agent_path_override.claude to its absolute path');
     if (!isAbsolute(dir))
         throw new UsageError(`judge: judge.claude_code.config_dir must be an absolute path (got ${dir})`, `Fix judge.claude_code.config_dir in ${where}`);
     if (!existsSync(dir))

@@ -42,7 +42,7 @@ First run \`command -v done-done\`. If it prints a path, run \`done-done\` as sh
 - \`done-done <command> --help\` for one command's usage and flags
 
 Results are TOON: read \`result\` and follow the \`help\` lines through
-\`init\`, \`doctor\`, \`run\`, \`check\` and \`receipt\`. Proof comes from driving the real product, not from a unit test run, and counts only from a committed
+\`init\`, \`doctor\`, \`run\`, \`verify\`, \`check\` and \`receipt\`. Proof comes from driving the real product, not from a unit test run, and counts only from a committed
 tree: commit the done-done setup (config, capture script) before you capture. \`fail\` or
 \`inconclusive\` is not done: fix the cause and re-run, or tell the user exactly what is still unproven.
 A run waiting at its gate (\`awaiting_approval\`) is the user's call: show them its findings and captures, and run
@@ -50,6 +50,11 @@ A run waiting at its gate (\`awaiting_approval\`) is the user's call: show them 
 
 done-done starts a coding agent the user chose. When it says no agent is set, ask the user which agent
 (and model) to use and save their answer with the command it prints; never choose one for them.
+
+done-done runs its own agent: \`done-done verify\` drives the journey, then a judge the user chose, never
+the agent that did the work (never you), looks at each screenshot. That is on by default; skip it with
+\`--no-judge\` only when the user chooses to. When it says no judge is set, ask the user which judge (and
+model) to use and save their answer with the command it prints; never choose one for them.
 
 ## Request
 

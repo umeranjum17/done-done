@@ -22,8 +22,9 @@ export type Config = {
   journeys: Record<string, { command: string; timeout?: string }>;
   evidence: { local_root: string; root: string; allow_dirty: boolean; ignore_paths: string[] };
   checks: { not_proven: 'inconclusive' | 'allow'; fix_title: string };
-  // route: auto, claude-code, answerer:<agent> or openai:key; model: '' for the route's cheap default; claude_code: that route's own config.
-  judge: { enabled: boolean; route: string; model: string; allow_same: boolean; claude_code: { config_dir: string } };
+  // enabled: verify judges unless false (--judge turns it on for a run); check and receipt judge with --judge or true; rerun repeats its source run.
+  // route: claude-code, answerer:<agent> or openai:key, set by the user ('' until they do); model: '' for that agent's agent_config model; claude_code: that route's own config.
+  judge: { enabled?: boolean; route: string; model: string; allow_same: boolean; claude_code: { config_dir: string } };
   trusted: boolean; // project file came from --trusted-ref
   from: Record<string, 'global' | 'repo'>; // the file that set each key path; a key path not here is the built-in default
 };
@@ -128,7 +129,7 @@ function apply(target: Config, text: string | undefined, file: string, scope: 'g
       : spec.type === 'boolean' ? typeof value === 'boolean'
       : spec.type === 'string[]' ? Array.isArray(value) && value.every((v) => typeof v === 'string')
       : spec.type === 'agent' ? isAgent(value)
-      : spec.type === 'route' ? typeof value === 'string' && (['', 'auto', 'claude-code'].includes(value) || Object.hasOwn(KEY_ROUTES, value) || ANSWERER_JUDGES.some((a) => value === `answerer:${a}`))
+      : spec.type === 'route' ? typeof value === 'string' && (value === 'claude-code' || Object.hasOwn(KEY_ROUTES, value) || ANSWERER_JUDGES.some((a) => value === `answerer:${a}`))
       : spec.type === 'claude_code' ? isMap(value) && Object.entries(value).every(([k, v]) => k === 'config_dir' && typeof v === 'string')
       : spec.type === 'agent_config' ? isMap(value) && Object.entries(value).every(([a, c]) => isAgent(a) && isMap(c) && Object.entries(c).every(([k, m]) => ['model', 'effort'].includes(k) && typeof m === 'string'))
       : spec.type === 'args' ? isMap(value) && Object.entries(value).every(([a, v]) => AGENTS.includes(a) && Array.isArray(v) && v.every((x) => typeof x === 'string'))
@@ -144,9 +145,10 @@ function apply(target: Config, text: string | undefined, file: string, scope: 'g
       paths: `a map of <agent>: <binary name or absolute path> for ${AGENTS.join(', ')}`,
       bin: 'a binary name on PATH or an absolute path',
       duration: 'a duration such as 90s, 30m or 1h',
-      route: `auto, claude-code (for claude), answerer:<agent> for one of ${ANSWERER_JUDGES.join(', ')}, or a key route (${Object.keys(KEY_ROUTES).join(', ')}); codex cannot judge yet (done-done cannot start it), nor can an acp:<target> agent (done-done cannot send it an image)`,
+      route: `claude-code (for claude), answerer:<agent> for one of ${ANSWERER_JUDGES.join(', ')}, or a key route (${Object.keys(KEY_ROUTES).join(', ')}); codex cannot judge yet (done-done cannot start it), nor can an acp:<target> agent (done-done cannot send it an image)`,
       claude_code: 'a map with config_dir, a string (the claude binary is agent_path_override.claude)',
     } as Record<string, string>;
+    if (key === 'judge.route' && (value === 'auto' || value === '')) throw new UsageError(`${file}: judge.route ${value === '' ? 'must not be empty; to leave it unset, remove the key' : 'auto is gone: done-done never picks the judge, the user sets it'}`, `Delete the judge.route line in ${file}, then run: done-done init --judge <agent> --judge-model <model>`);
     if (key === 'agent' && value === '') throw new UsageError(`${file}: agent must not be empty; to leave it unset, remove the key`);
     if (!ok) throw new UsageError(`${file}: ${key} must be ${want[spec.type] ?? `a ${spec.type}`}`);
     if (key === 'checks.not_proven' && value !== 'inconclusive' && value !== 'allow') throw new UsageError(`${file}: checks.not_proven must be inconclusive or allow`);
@@ -197,7 +199,7 @@ function defaultConfig(repo: string): Config {
     journeys: {},
     evidence: { local_root: join(home(), 'evidence'), root: '', allow_dirty: false, ignore_paths: [] },
     checks: { not_proven: 'inconclusive', fix_title: '^(fix|bugfix|hotfix)\\b' },
-    judge: { enabled: false, route: 'auto', model: '', allow_same: false, claude_code: { config_dir: join(home(), 'claude') } },
+    judge: { route: '', model: '', allow_same: false, claude_code: { config_dir: join(home(), 'claude') } },
     trusted: false,
     from: {},
   };
@@ -212,7 +214,6 @@ export function loadConfig(repo: string, projectText?: string | null): Config {
   const projectFile = join(repo, '.done-done.yaml');
   apply(cfg, projectText ?? readOptional(projectFile), projectFile, 'repo');
   cfg.skill ||= `.agents/skills/verify-${cfg.app}`;
-  cfg.judge.route ||= 'auto';
   const local = tilde(cfg.evidence.local_root);
   cfg.acpx_path = tilde(cfg.acpx_path);
   for (const a of Object.keys(cfg.agent_path_override)) cfg.agent_path_override[a] = tilde(cfg.agent_path_override[a]);
@@ -253,11 +254,14 @@ evidence:
   # Where evidence and receipts live, one folder per app, outside every checkout.
   local_root: ${short(join(home(), 'evidence'))}
 
-# The judge that says whether each screenshot shows the outcome (on with --judge or judge.enabled in .done-done.yaml).
+# The judge: a fresh agent that says whether each screenshot shows the outcome. verify starts it by default (turn it
+# off with --no-judge or judge.enabled: false in .done-done.yaml); check and receipt start it only with --judge.
+# done-done never picks one: while none is set it asks you in a terminal, or stops with the command that sets it:
+# done-done init --judge <agent> --judge-model <model>.
 judge:
-  # Which agent judges captures: auto (an installed agent that is not the author), claude-code, or answerer:opencode.
-  route: auto
-  # The judge's model with an explicit route; empty means that agent's agent_config model (its cheap one if it is the author's agent).
+  # Which agent judges: claude-code (claude) or answerer:opencode. Never the agent and model that did the work.
+  # route: answerer:opencode
+  # The judge's model; empty means that agent's agent_config model.
   model: ""
   # Accept a judge that is the author's own agent and model in a fresh session.
   allow_same: false

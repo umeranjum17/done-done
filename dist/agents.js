@@ -164,7 +164,7 @@ const ADAPTERS = {
     // headless call never blocks on an approval prompt; auto_edit (edits approved, shell still asks) is only for edit steps.
     // plan mode still reads files, so a tool-less call also loads a deny-all --policy, which replaces the user's own
     // policy folder and removes every tool, MCP ones too, from the model (its policy-engine.md). An @<file> in the -p text
-    // attaches an image: the CLI reads it itself, outside the policy, and only inside the cwd, the call's scratch folder.
+    // attaches an image: per Gemini CLI's source, its own @-command code reads it, outside the tool policy, and only inside the cwd, the call's scratch folder; not yet proven live (Gemini CLI was not signed in on the test machine).
     // --skip-trust is only for the tool-less probe in its scratch folder (the headless path in its trusted-folders.md): done-done
     // never runs interactively, so the trust dialog could never be answered there. Repo calls keep Gemini's trust gate.
     gemini: {

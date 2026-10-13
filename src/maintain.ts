@@ -31,9 +31,6 @@ const CITED_CHARS = 60_000;
 const BLOCKING = new Set(['coverage', 'repo-changed']);
 // Notices are listed in the run but do not make the result drift.
 const NOTICE = new Set(['truncated']);
-// Readers without tools get each feature's cited source from plain code. Only claude reads the repo itself: its read
-// tools refuse paths outside it, while opencode follows an in-repo symlink to an outside target.
-const TOOLLESS_READERS = new Set(['pi', 'gemini', 'opencode']);
 
 const git = (cwd: string, ...args: string[]) => execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: 64 << 20 });
 // The read-only proof: HEAD, the status, and the content of every changed or untracked path. Regular files are hashed
@@ -98,7 +95,7 @@ function citeProblem(repo: string, file: string, line: number, end = line): stri
   let n: number;
   try {
     if (!realInside(repo, p)) return `${file} is outside the repository`;
-    if (!lstatSync(p, { throwIfNoEntry: false })?.isFile()) return `${file} is not a file in the repository`;
+    if (!statSync(p, { throwIfNoEntry: false })?.isFile()) return `${file} is not a file in the repository`;
     const text = readFileSync(p, 'utf8');
     n = text === '' ? 0 : text.split('\n').length - (text.endsWith('\n') ? 1 : 0);
   } catch {
@@ -111,9 +108,14 @@ function citeProblem(repo: string, file: string, line: number, end = line): stri
 const trackedNamed = (tracked: string[], name: string) => tracked.filter((p) => p === name || p.endsWith(`/${name}`));
 
 // Why the cited `name` (a repo-relative path or a bare file name) has no line `line` through `end`, or '' when a tracked
-// match has them. A bare name matches the tracked files whose path ends with it.
+// file has them. A path must itself be tracked; a bare name matches the tracked files whose path ends with it.
 function citeWhy(repo: string, tracked: string[], name: string, line: number, end = line): string {
-  const cited = name.includes('/') ? [name] : trackedNamed(tracked, name);
+  if (name.includes('/')) {
+    const why = citeProblem(repo, name, line, end);
+    if (why) return why;
+    return tracked.includes(relative(repo, resolve(repo, name))) ? '' : `${name} is not a tracked file`;
+  }
+  const cited = trackedNamed(tracked, name);
   if (!cited.length) return `no tracked file is named ${name}`;
   const whys = cited.map((p) => citeProblem(repo, p, line, end));
   return whys.includes('') ? '' : whys[0];
@@ -246,7 +248,7 @@ export async function maintainSteps<S>(run: { repo: string; findings?: Finding[]
       for (const p of m[1].includes('/') ? tracked.filter((t) => t === from) : trackedNamed(tracked, m[1])) {
         if (seen.has(p) || left.has(p)) continue;
         const abs = join(repo, p);
-        const body = tryRead<string | undefined>(abs, undefined, () => (lstatSync(abs, { throwIfNoEntry: false })?.isFile() && realInside(repo, abs) ? readFileSync(abs, 'utf8') : undefined));
+        const body = tryRead<string | undefined>(abs, undefined, () => (statSync(abs, { throwIfNoEntry: false })?.isFile() && realInside(repo, abs) ? readFileSync(abs, 'utf8') : undefined));
         if (body === undefined) continue;
         const kept = body.length > FEATURE_CHARS ? `${body.slice(0, FEATURE_CHARS)}\n[truncated after ${FEATURE_CHARS} characters]` : body;
         if (left.size || total + kept.length > CITED_CHARS) {
@@ -266,7 +268,9 @@ export async function maintainSteps<S>(run: { repo: string; findings?: Finding[]
     return parts.join('');
   };
   const agent = selectAgent(cfg);
-  const toolless = TOOLLESS_READERS.has(agent.agent);
+  // Only claude reads the repo with its own tools: its read tools refuse paths outside it, while the other agents'
+  // tools cannot be trusted that way, so they get the cited source from plain code.
+  const toolless = agent.agent !== 'claude';
   const agentBlock = !agent.path || !supported(agent.agent) ? `source-wave: no agent done-done can start (${agent.agent}${agent.path ? ' is not supported yet' : ' is not on PATH'}); run done-done doctor` : '';
   let calls = 0;
   const record = (name: string) => join(dir, 'agents', `${++calls}-${name}.json`);

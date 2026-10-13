@@ -2358,7 +2358,15 @@ test('design fails a screen on each defect the judge names, alone or next to its
   const ok = design(answer(), 'screen.png');
   assert.equal(ok.code, 0, ok.out);
   assert.deepEqual([toon(ok).result, toon(ok).screens[0].verdict, toon(ok).screens[0].defects], ['pass', 'pass', []]);
-  const unsure = design(answer({ layout: { defect: 0.5, none: 0.5 } }), 'screen.png');
+  // The same input gets the same verdict: a re-run asks no model, whatever it would answer now; a new mock is a new input.
+  const again = design(answer({ layout: { defect: 0.9, none: 0.1 } }), 'screen.png', 'screen2.png', '--mock', 'screen.png=mock.png');
+  assert.deepEqual(toon(again).screens.map((s) => [s.path, s.verdict, s.cached ?? false]), [['screen.png', 'fail', true], ['screen2.png', 'fail', true]]);
+  assert.equal(again.calls.length, 0, 'both answers come from the cache');
+  assert.deepEqual(toon(again).screens[0].defects, b.screens[0].defects);
+  writeFileSync(join(t.dir, 'mock2.png'), screen(5));
+  assert.equal(design(answer(), 'screen.png', '--mock', 'screen.png=mock2.png').calls.length, 1);
+  writeFileSync(join(t.dir, 'screen3.png'), screen(11));
+  const unsure = design(answer({ layout: { defect: 0.5, none: 0.5 } }), 'screen3.png');
   assert.equal(unsure.code, 3, unsure.out);
   assert.match(toon(unsure).screens[0].reason, /^not confident enough about layout$/);
   const empty = design(answer(), 'blank.png');
@@ -2367,6 +2375,61 @@ test('design fails a screen on each defect the judge names, alone or next to its
   assert.equal(empty.calls.length, 0, 'a blank frame fails without a request');
   assert.equal(design(answer(), '--mock', 'screen.png').code, 2);
   assert.match(toon(design(answer(), 'gone.png')).error, /gone\.png: cannot read \(ENOENT\)/);
+});
+
+// A cheap model sometimes answers every kind with all-zero probabilities: that is a malformed answer to ask again, not
+// a judge unsure of all six kinds, so the same screen gets the same verdict on every run.
+test('design asks again when the judge answers with probabilities it cannot read, and never calls that unsure', () => {
+  const t = setup();
+  mkdirSync(t.env.DONE_DONE_HOME, { recursive: true });
+  writeFileSync(join(t.env.DONE_DONE_HOME, 'config.yaml'), 'agent: claude\njudge:\n  route: answerer:opencode\n');
+  const kinds = ['aspect', 'clipped-text', 'overlap', 'off-screen', 'blank-strip', 'layout'];
+  const answer = (p) => JSON.stringify(Object.fromEntries(kinds.map((k) => [k, { probabilities: p, rationale: '' }])));
+  // The stub opencode gives its answers in turn, the last one from then on.
+  const design = (...replies) => {
+    const s = stubAgents(t.env);
+    symlinkSync(process.execPath, join(s.bin, 'node'));
+    writeFileSync(join(s.bin, 'replies.json'), JSON.stringify(replies));
+    rmSync(join(t.env.DONE_DONE_HOME, 'runs'), { recursive: true, force: true });
+    const oc = join(s.bin, 'opencode');
+    writeFileSync(oc, readFileSync(oc, 'utf8').replace(/^console\.log\('mise[\s\S]*$/m, `const replies = JSON.parse(readFileSync(${JSON.stringify(join(s.bin, 'replies.json'))}, 'utf8'));
+console.log(JSON.stringify({ type: 'text', part: { type: 'text', text: replies[Math.min(readFileSync(${JSON.stringify(join(s.bin, 'calls.jsonl'))}, 'utf8').trim().split('\\n').length, replies.length) - 1] } }));`));
+    const r = spawnSync(process.execPath, [CLI, 'design', 'screen.png'], { cwd: t.dir, env: s.env, encoding: 'utf8' });
+    return { code: r.status, out: r.stdout + r.stderr, calls: s.calls() };
+  };
+  const zero = answer({ defect: 0, none: 0 });
+  const again = design(zero, answer({ defect: 0.02, none: 0.98 }));
+  assert.equal(again.code, 0, again.out);
+  assert.equal(toon(again).screens[0].verdict, 'pass');
+  assert.equal(again.calls.length, 2, 'the all-zero answer is asked once more');
+  const never = design(zero);
+  assert.equal(never.code, 3, never.out);
+  assert.equal(never.calls.length, 2);
+  assert.equal(toon(never).screens[0].reason, 'the judge did not answer: no probabilities for aspect, clipped-text, overlap, off-screen, blank-strip, layout that are each 0 to 1 and sum to 1');
+  // One kind left without an option is malformed too, and only that kind is named.
+  const partial = JSON.parse(answer({ defect: 0.02, none: 0.98 }));
+  partial.layout.probabilities = { defect: 0.02 };
+  assert.match(toon(design(JSON.stringify(partial))).screens[0].reason, /^the judge did not answer: no probabilities for layout that/);
+});
+
+test('design fails an overlay the approved mock does not draw in that place', () => {
+  const t = setup();
+  mkdirSync(t.env.DONE_DONE_HOME, { recursive: true });
+  writeFileSync(join(t.env.DONE_DONE_HOME, 'config.yaml'), 'agent: claude\njudge:\n  route: answerer:opencode\n');
+  writeFileSync(join(t.dir, 'mock.png'), screen(3));
+  const kinds = ['aspect', 'clipped-text', 'overlap', 'off-screen', 'blank-strip', 'layout'];
+  const reply = JSON.stringify(Object.fromEntries(kinds.map((k) => [k, k === 'overlap' ? { probabilities: { defect: 0.9, none: 0.1 }, rationale: 'Looked.', personReason: 'toast over the save button' } : { probabilities: { defect: 0.03, none: 0.97 }, rationale: 'Looked.', personReason: 'Nothing of this kind.' }])));
+  const s = stubAgents(t.env, reply);
+  symlinkSync(process.execPath, join(s.bin, 'node'));
+  const run = spawnSync(process.execPath, [CLI, 'design', 'screen.png', '--mock', 'screen.png=mock.png'], { cwd: t.dir, env: s.env, encoding: 'utf8' });
+  const r = { code: run.status, out: run.stdout + run.stderr, calls: s.calls() };
+  assert.equal(r.code, 1, r.out);
+  assert.deepEqual(toon(r).screens[0].defects, [{ kind: 'overlap', where: 'toast over the save button' }]);
+  assert.equal(r.calls.length, 1, 'the overlay is judged, not passed without a request');
+  assert.match(r.calls[0].file, /only where the mock draws that same overlay in the same place/, 'the mock is asked to approve an overlay only where it draws it');
+  const alone = spawnSync(process.execPath, [CLI, 'design', 'screen2.png'], { cwd: t.dir, env: s.env, encoding: 'utf8' });
+  assert.equal(alone.status, 1, alone.stdout + alone.stderr);
+  assert.doesNotMatch(s.calls()[1].file, /dialog, sheet, menu, popover or toast/, 'alone, an overlay is judged as any element');
 });
 
 test('design measures a blank strip along an edge, but not a nav rail with icons or a uniform frame', () => {

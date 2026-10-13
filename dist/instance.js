@@ -5,7 +5,7 @@ import { dirname, join } from 'node:path';
 import { parseDuration } from './config.js';
 // A free local port done-done owns: bind 127.0.0.1:0, read it back, release.
 // A fixed port that is already taken can never be used.
-export const pickPort = () => new Promise((resolve, reject) => {
+const pickPort = () => new Promise((resolve, reject) => {
     const s = createServer();
     s.once('error', reject);
     s.listen(0, '127.0.0.1', () => {
@@ -16,7 +16,7 @@ export const pickPort = () => new Promise((resolve, reject) => {
 const expand = (text, env) => text.replaceAll('${RUN_ID}', env.DONE_DONE_RUN_ID ?? '').replace(/\$(DONE_DONE_PORT|DONE_DONE_BASE_URL)|\${(DONE_DONE_PORT|DONE_DONE_BASE_URL)}/g, (m, a, b) => env[a ?? b] ?? m);
 // Run-scoped HOME and XDG folders under the run's scratch folder, so the app
 // never touches the user's own config, cache or data.
-export function instanceHome(scratch) {
+function instanceHome(scratch) {
     const root = join(scratch, 'instance-home');
     const home = join(root, 'home');
     const config = join(root, 'config');

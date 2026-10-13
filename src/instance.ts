@@ -10,7 +10,7 @@ export type Instance = { command: string; ready: { url?: string; command?: strin
 
 // A free local port done-done owns: bind 127.0.0.1:0, read it back, release.
 // A fixed port that is already taken can never be used.
-export const pickPort = (): Promise<number> =>
+const pickPort = (): Promise<number> =>
   new Promise((resolve, reject) => {
     const s = createServer();
     s.once('error', reject);
@@ -25,7 +25,7 @@ const expand = (text: string, env: Record<string, string>) =>
 
 // Run-scoped HOME and XDG folders under the run's scratch folder, so the app
 // never touches the user's own config, cache or data.
-export function instanceHome(scratch: string): Record<string, string> {
+function instanceHome(scratch: string): Record<string, string> {
   const root = join(scratch, 'instance-home');
   const home = join(root, 'home');
   const config = join(root, 'config');
@@ -78,7 +78,7 @@ async function waitCommand(command: string, env: NodeJS.ProcessEnv, cwd: string,
   }
 }
 
-export type Started = { pgid: number; env: Record<string, string> };
+type Started ={ pgid: number; env: Record<string, string> };
 
 // Start the instance, wait for readiness, or kill it and throw a clear reason.
 // The app's output goes to logFile (in the run folder, never with the evidence),

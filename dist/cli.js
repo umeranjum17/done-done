@@ -425,10 +425,21 @@ async function cmdRun(argv) {
     // $DONE_DONE_BASE_URL instead of a hard-coded port; without one this is today's behaviour.
     let inst;
     let scratch;
+    const SIGS = ['SIGINT', 'SIGTERM', 'SIGHUP'];
+    const reap = (sig) => {
+        if (inst)
+            stopInstance(inst.pgid);
+        if (scratch)
+            rmSync(scratch, { recursive: true, force: true });
+        if (sig)
+            process.kill(process.pid, sig);
+    };
     if (cfg.instance) {
         scratch = mkdtempSync(join(tmpdir(), 'done-done-instance-'));
         try {
             inst = await startInstance(repo, cfg.instance, rec.run_id, scratch, process.env, join(runsRoot(cfg.app), rec.run_id, 'logs', 'instance.log'));
+            for (const s of SIGS)
+                process.once(s, reap);
         }
         catch (e) {
             rmSync(scratch, { recursive: true, force: true });
@@ -439,15 +450,14 @@ async function cmdRun(argv) {
     }
     // The journey's own stdout goes to our stderr, never our stdout: stdout carries only done-done's
     // result document (TOON or --json), so a noisy journey cannot break `run --json | JSON.parse`.
-    const r = spawnSync(expanded, {
-        cwd: repo, shell: true, stdio: ['inherit', process.stderr, 'inherit'],
-        env: { ...process.env, DONE_DONE_RUN_ID: rec.run_id, DONE_DONE_EVIDENCE_ROOT: runDir(cfg, rec.run_id), ...inst?.env },
+    const r = await new Promise((done) => {
+        spawn(expanded, {
+            cwd: repo, shell: true, stdio: ['inherit', process.stderr, 'inherit'],
+            env: { ...process.env, DONE_DONE_RUN_ID: rec.run_id, DONE_DONE_EVIDENCE_ROOT: runDir(cfg, rec.run_id), ...inst?.env },
+        }).on('error', () => done(null)).on('close', done);
     });
-    if (inst)
-        stopInstance(inst.pgid);
-    if (scratch)
-        rmSync(scratch, { recursive: true, force: true });
-    rec.exit = r.status ?? 1;
+    reap();
+    rec.exit = r ?? 1;
     return emitted(closeRun(repo, cfg, rec));
 }
 // The newest "## Checks" block: outcome, repro, proof and evidence lines.

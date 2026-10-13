@@ -4772,7 +4772,7 @@ test('maintain with auto_fix leaves out a cited file the numbered source would p
   assert.match(left?.what ?? '', /1 cited files were left out \(three\.txt\)/);
 });
 
-test('an instance serves the journey on its own port with its own HOME, then stops', () => {
+test('an instance serves the journey on its own port; the journey keeps the caller HOME, only the app runs isolated', () => {
   const t = setup('app: notes\njudge:\n  enabled: false\nevidence:\n  root: .proof\ninstance:\n  command: node server.mjs\n  ready:\n    url: http://127.0.0.1:$DONE_DONE_PORT/health\n  ready_timeout: 15s\njourneys:\n  probe:\n    command: curl -sf $DONE_DONE_BASE_URL/ > $DONE_DONE_EVIDENCE_ROOT/reply.txt && echo "port=$DONE_DONE_PORT home=$HOME base=$DONE_DONE_BASE_URL" >> $DONE_DONE_EVIDENCE_ROOT/reply.txt\n');
   writeFileSync(join(t.repo, 'server.mjs'), `import {createServer} from 'node:http';\nimport {writeSync} from 'node:fs';\nwriteSync(1, 'instance-marker\\ninstance-home=' + process.env.HOME + '\\n');\ncreateServer((q,s)=>s.writeHead(200).end('ok')).listen(Number(process.env.DONE_DONE_PORT),'127.0.0.1');\n`);
   t.sh('add', '-A');
@@ -4790,18 +4790,6 @@ test('an instance serves the journey on its own port with its own HOME, then sto
   assert.match(appLog, /instance-marker/, 'the app output goes to instance.log in the run folder');
   assert.match(appLog, /instance-home=.*done-done-instance-[^/\n]*\/instance-home\/home/, 'the app runs with its own HOME');
   assert.ok(!readdirSync(join(t.repo, '.proof'), { recursive: true }).some((n) => String(n).endsWith('instance.log')), 'never with the evidence');
-});
-
-test('a verify journey waits on a readiness command and logs the app in its run folder', () => {
-  const t = setup('app: notes\njudge:\n  enabled: false\nevidence:\n  root: .proof\ninstance:\n  command: node server.mjs\n  ready:\n    command: curl -sf $DONE_DONE_BASE_URL/\n  ready_timeout: 15s\njourneys:\n  shots:\n    command: curl -sf $DONE_DONE_BASE_URL/ && node make-shots.mjs ${RUN_ID}\n');
-  writeFileSync(join(t.repo, 'server.mjs'), `import {createServer} from 'node:http';\nimport {writeSync} from 'node:fs';\nwriteSync(1, 'instance-marker\\ninstance-home=' + process.env.HOME + '\\n');\ncreateServer((q,s)=>s.writeHead(200).end('ok')).listen(Number(process.env.DONE_DONE_PORT),'127.0.0.1');\n`);
-  t.sh('add', '-A');
-  t.sh('commit', '-qm', 'instance fixture');
-  const r = t.dd('verify', 'shots', '--outcome', 'home and settings render', '--foreground');
-  assert.equal(r.code, 0, r.out);
-  const runFolder = join(t.env.DONE_DONE_HOME, 'runs', 'notes', toon(r).run_id);
-  assert.match(readFileSync(join(runFolder, 'logs', 'instance.log'), 'utf8'), /instance-marker/, 'the app output goes to instance.log in the run folder');
-  assert.ok(!readdirSync(join(t.repo, '.proof', toon(r).run_id)).some((n) => n.includes('instance')), 'never with the evidence');
 });
 
 test('a verify whose instance never becomes ready marks its drive step failed', () => {

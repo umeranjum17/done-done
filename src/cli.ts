@@ -410,7 +410,7 @@ function closeRun(repo: string, cfg: Config, rec: RunRecord): { code: number; re
   return { code: reason ? FAIL : PASS, result, reason };
 }
 
-async function cmdRun(argv: string[]): Promise<number> {
+function cmdRun(argv: string[]): number {
   const dash = argv.indexOf('--');
   const { values, positionals } = parseArgs({
     args: dash < 0 ? argv : argv.slice(0, dash),
@@ -1133,28 +1133,26 @@ async function runSteps(dir: string): Promise<void> {
       rec.exit = 0;
       let timedOut = false;
       for (const cell of cells) {
-      // An async child keeps the heartbeat going while the journey runs. The journey gets its own process group, so a
-      // timeout or a dead runner can kill it and everything it started.
-      const child = spawn(rec.command!, { cwd: run.repo, shell: true, detached: true, stdio: ['ignore', fd, fd], env: { ...process.env, DONE_DONE_RUN_ID: rec.run_id, DONE_DONE_EVIDENCE_ROOT: runDir(cfg, rec.run_id), ...(matrix ? cellEnv(cell) : {}) } });
-      run.runner!.journey_pgid = child.pid;
-      saveRun(dir, run);
-      let cellTimedOut = false;
-      const timer = setTimeout(() => {
-        cellTimedOut = true;
-        killGroup(child.pid!);
-      }, limit!);
-      const code = await new Promise<number>((done) => child.on('close', (c) => done(c ?? 1)));
-      clearTimeout(timer);
-      if (cellTimedOut) {
-        timedOut = true;
-        failed.push(`${cellName(cell)} (timed out after ${timeout})`);
-        if (!rec.exit) rec.exit = 1;
-        break;
-      }
-      if (code !== 0) {
-        if (!rec.exit) rec.exit = code;
-        failed.push(`${cellName(cell)} (exit ${code})`);
-      }
+        // An async child keeps the heartbeat going while the journey runs. The journey gets its own process group, so a
+        // timeout or a dead runner can kill it and everything it started.
+        const child = spawn(rec.command!, { cwd: run.repo, shell: true, detached: true, stdio: ['ignore', fd, fd], env: { ...process.env, DONE_DONE_RUN_ID: rec.run_id, DONE_DONE_EVIDENCE_ROOT: runDir(cfg, rec.run_id), ...(matrix ? cellEnv(cell) : {}) } });
+        run.runner!.journey_pgid = child.pid;
+        saveRun(dir, run);
+        const timer = setTimeout(() => {
+          timedOut = true;
+          killGroup(child.pid!);
+        }, limit!);
+        const code = await new Promise<number>((done) => child.on('close', (c) => done(c ?? 1)));
+        clearTimeout(timer);
+        if (timedOut) {
+          failed.push(`${cellName(cell)} (timed out after ${timeout})`);
+          if (!rec.exit) rec.exit = 1;
+          break;
+        }
+        if (code !== 0) {
+          if (!rec.exit) rec.exit = code;
+          failed.push(`${cellName(cell)} (exit ${code})`);
+        }
       }
       closeSync(fd);
       const sealed = closeRun(run.repo, cfg, rec);
@@ -1277,7 +1275,7 @@ function showRun(dir: string, cfg: Config, command: string, gone = false): numbe
   if (run.response) result.response = run.response;
   if (ev.items.length) result.evidence = ev.items;
   if (ev.omitted) result.evidence_omitted = ev.omitted;
-  if (hasMatrix(cfg.matrix)) result.matrix = matrixManifest(cfg.matrix!, rec ? evidenceOf(run.repo, cfg, rec) : []);
+  if (rec?.matrix) result.matrix = rec.matrix;
   if (run.receipt) result.receipt = run.receipt;
   if (run.fix) result.fix = run.fix;
   if (run.git_status) result.git_status = run.git_status;
@@ -2587,7 +2585,7 @@ async function main(argv: string[]): Promise<number> {
     if (process.env.DONE_DONE_DRIVE && DRIVE_REFUSED.includes(cmd)) throw new UsageError(`${cmd} refuses to run inside an agent drive (DONE_DONE_DRIVE is set), so the agent does not answer its own gate, write a receipt or start a run by accident; this guards against accidents and is not a sandbox`, 'Stop the drive and report what you captured; done-done answers the run and writes the receipt');
     if (cmd === 'init') return await cmdInit(rest);
     if (cmd === 'doctor') return await cmdDoctor(rest);
-    if (cmd === 'run') return await cmdRun(rest);
+    if (cmd === 'run') return cmdRun(rest);
     if (cmd === 'check') return await cmdCheck(rest);
     if (cmd === 'receipt') return await cmdReceipt(rest);
     if (cmd === 'verify') return await cmdVerify(rest);

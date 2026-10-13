@@ -379,7 +379,7 @@ function closeRun(repo, cfg, rec) {
     }
     return { code: reason ? FAIL : PASS, result, reason };
 }
-async function cmdRun(argv) {
+function cmdRun(argv) {
     const dash = argv.indexOf('--');
     const { values, positionals } = parseArgs({
         args: dash < 0 ? argv : argv.slice(0, dash),
@@ -1125,15 +1125,13 @@ async function runSteps(dir) {
                 const child = spawn(rec.command, { cwd: run.repo, shell: true, detached: true, stdio: ['ignore', fd, fd], env: { ...process.env, DONE_DONE_RUN_ID: rec.run_id, DONE_DONE_EVIDENCE_ROOT: runDir(cfg, rec.run_id), ...(matrix ? cellEnv(cell) : {}) } });
                 run.runner.journey_pgid = child.pid;
                 saveRun(dir, run);
-                let cellTimedOut = false;
                 const timer = setTimeout(() => {
-                    cellTimedOut = true;
+                    timedOut = true;
                     killGroup(child.pid);
                 }, limit);
                 const code = await new Promise((done) => child.on('close', (c) => done(c ?? 1)));
                 clearTimeout(timer);
-                if (cellTimedOut) {
-                    timedOut = true;
+                if (timedOut) {
                     failed.push(`${cellName(cell)} (timed out after ${timeout})`);
                     if (!rec.exit)
                         rec.exit = 1;
@@ -1283,8 +1281,8 @@ function showRun(dir, cfg, command, gone = false) {
         result.evidence = ev.items;
     if (ev.omitted)
         result.evidence_omitted = ev.omitted;
-    if (hasMatrix(cfg.matrix))
-        result.matrix = matrixManifest(cfg.matrix, rec ? evidenceOf(run.repo, cfg, rec) : []);
+    if (rec?.matrix)
+        result.matrix = rec.matrix;
     if (run.receipt)
         result.receipt = run.receipt;
     if (run.fix)
@@ -2688,7 +2686,7 @@ async function main(argv) {
         if (cmd === 'doctor')
             return await cmdDoctor(rest);
         if (cmd === 'run')
-            return await cmdRun(rest);
+            return cmdRun(rest);
         if (cmd === 'check')
             return await cmdCheck(rest);
         if (cmd === 'receipt')

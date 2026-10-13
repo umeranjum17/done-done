@@ -18,7 +18,7 @@ export type AgentCall = {
   schema: { required?: string[] } & Record<string, unknown>;
   cwd: string;
   timeoutMs: number;
-  tools: 'none' | 'read' | 'edit'; // none for the judge and readers
+  tools: 'none' | 'read' | 'edit'; // none for the judge and most readers; read for the claude reader
   record: string; // where the call record is written
   files?: string[]; // images attached to the prompt, for the answerer judge
   attempts?: number; // asks allowed for a bad tool-less answer, default ASK_ATTEMPTS
@@ -103,7 +103,7 @@ const ADAPTERS: Record<string, Adapter> = {
   claude: {
     argv: (c) => ['-p', '--output-format', 'json', '--json-schema', JSON.stringify(c.schema), '--model', c.model, '--no-session-persistence',
       ...(c.tools === 'edit' ? ['--permission-mode', 'acceptEdits'] : ['--tools', c.tools === 'read' ? 'Read,Grep,Glob' : '']),
-      ...(c.tools === 'none' ? ['--setting-sources', ''] : [])],
+      ...(c.tools === 'edit' ? [] : ['--setting-sources', '']), ...(c.tools === 'read' ? ['--strict-mcp-config'] : [])],
     answer: (out) => {
       const r = JSON.parse(out);
       if (r.is_error) throw new ProviderError(String(r.result || r.subtype));
@@ -126,14 +126,14 @@ const ADAPTERS: Record<string, Adapter> = {
       }
       return extractJsonObject(text, c.schema.required);
     },
-    env: (c): Record<string, string> => (c.tools === 'edit' ? {} : { OPENCODE_PERMISSION: JSON.stringify(c.tools === 'read' ? { '*': 'deny', read: 'allow', grep: 'allow', glob: 'allow', list: 'allow' } : { '*': 'deny' }) }),
+    env: (c): Record<string, string> => (c.tools === 'edit' ? {} : { OPENCODE_PERMISSION: JSON.stringify({ '*': 'deny' }) }),
   },
   // pi -p reads the prompt on stdin (probed 12 Oct: with no positional message, stdin becomes the user
   // message); --mode json streams JSONL events whose assistant message_end holds the answer text,
   // --no-session keeps the probe ephemeral.
   // Pi has no permission gate for edit steps, so doctor warns about it. Without a model, pi runs its own default.
   pi: {
-    argv: (c) => ['-p', '--mode', 'json', '--no-session', ...(c.tools === 'none' ? ['--no-tools'] : c.tools === 'read' ? ['-t', 'read,grep,find,ls'] : []), ...(c.model ? ['--model', c.model] : [])],
+    argv: (c) => ['-p', '--mode', 'json', '--no-session', ...(c.tools === 'edit' ? [] : ['--no-tools']), ...(c.model ? ['--model', c.model] : [])],
     answer: (out, c) => {
       let text = '';
       let failure = '';

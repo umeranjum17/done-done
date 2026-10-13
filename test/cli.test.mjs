@@ -4771,3 +4771,42 @@ test('maintain with auto_fix leaves out a cited file the numbered source would p
   const left = m.findings.find((f) => f.kind === 'truncated');
   assert.match(left?.what ?? '', /1 cited files were left out \(three\.txt\)/);
 });
+
+// auto_fix.verify: the journey fails while src/app.js says BUG; the opencode stub fixes it, and also writes the file named in `extra`.
+test('verify with auto_fix fixes the product on a done-done branch, and never fixes a dirty checkout or keeps a fix that touches the skill, config or tests', () => {
+  const t = setup('app: notes\nevidence:\n  root: .proof\n  ignore_paths: ["docs/**"]\njudge:\n  enabled: false\nauto_fix:\n  verify: 2\njourneys:\n  shots:\n    command: node shot.mjs\n');
+  const e = pathEnv(t.env, []);
+  writeFileSync(join(t.repo, 'shot.mjs'), `import { copyFileSync, mkdirSync, readFileSync } from 'node:fs';\nif (readFileSync('src/app.js', 'utf8').includes('BUG')) process.exit(1);\nmkdirSync(process.env.DONE_DONE_EVIDENCE_ROOT, { recursive: true });\ncopyFileSync(${JSON.stringify(join(t.dir, 'screen.png'))}, process.env.DONE_DONE_EVIDENCE_ROOT + '/home.png');\n`);
+  writeFileSync(join(t.repo, 'src', 'app.js'), 'export const title = "BUG";\n');
+  t.sh('add', '-A');
+  t.sh('commit', '-qm', 'a broken title');
+  writeFileSync(join(e.PATH, 'opencode'), `#!${process.execPath}
+const { appendFileSync, mkdirSync, readFileSync, writeFileSync } = require('node:fs');
+const extra = readFileSync(${JSON.stringify(join(e.PATH, 'extra'))}, 'utf8');
+appendFileSync(${JSON.stringify(join(e.PATH, 'calls'))}, process.cwd() + '\\n');
+writeFileSync('src/app.js', 'export const title = "Notes";\\n');
+if (extra) mkdirSync(require('node:path').dirname(extra), { recursive: true }), writeFileSync(extra, 'changed\\n');
+console.log(JSON.stringify({ type: 'text', part: { type: 'text', text: JSON.stringify({ summary: 'fixed the title', blocker: '' }) } }));
+`, { mode: 0o755 });
+  mkdirSync(t.env.DONE_DONE_HOME, { recursive: true });
+  writeFileSync(join(t.env.DONE_DONE_HOME, 'config.yaml'), 'agent: opencode\nagent_config:\n  opencode: { model: opencode-go/author }\n');
+  const [head, git] = [t.head(), (...a) => t.sh(...a).toString().trim()];
+  const off = /^fix: opencode changed the verify skill, \.done-done\.yaml, a test file or a test-runner config, which a fix never changes/;
+  for (const [extra, dirty, code, reason] of [
+    ['test/home.test.js', false, 3, off], ['src/app_test.go', false, 3, off], ['test_app.py', false, 3, off], ['spec/home_spec.rb', false, 3, off],
+    ['vitest.config.ts', false, 3, off], ['.done-done.yaml', false, 3, off], ['.agents/skills/verify-notes/SKILL.md', false, 3, off],
+    ['', true, 3, /^dirty: uncommitted changes to tracked files \(docs\/guide\.md\)/],
+    ['', false, 1, /^your HEAD failed; the fix passes, on done-done\/verify-/],
+  ]) {
+    writeFileSync(join(e.PATH, 'extra'), extra);
+    if (dirty) writeFileSync(join(t.repo, 'docs', 'guide.md'), '# guide, edited\n');
+    const r = doctorIn(t.repo, { ...e, PATH: `${e.PATH}:${dirname(process.execPath)}` }, 'verify', 'shots', '--outcome', 'the home screen shows the title Notes', '--foreground');
+    assert.deepEqual([r.code, toon(r).reason?.match(reason)?.[0] !== undefined], [code, true], `${extra || (dirty ? 'dirty' : 'fix')}: ${r.out}`);
+    if (dirty) t.sh('checkout', '--', 'docs/guide.md');
+    assert.equal(git('worktree', 'list').split('\n').length, 1, 'the done-done worktree is removed');
+  }
+  const calls = readFileSync(join(e.PATH, 'calls'), 'utf8').trim().split('\n');
+  assert.deepEqual([calls.length, calls.includes(t.repo)], [8, false], 'no fixer on the dirty checkout; the fixer edits a done-done worktree, never the checkout');
+  const branch = git('branch', '--list', 'done-done/*').trim();
+  assert.deepEqual([git('rev-parse', 'HEAD'), git('status', '--porcelain'), git('diff', '--name-only', head, branch)], [head, '', 'src/app.js'], 'one fix on its own branch; the user branch and checkout are untouched');
+});

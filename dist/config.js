@@ -29,8 +29,8 @@ export const CHEAP = {
     opencode: { model: 'opencode-go/muse-spark-1.3-contributor', effort: 'low' },
     gemini: { model: 'flash-lite' },
 };
-// The steps auto_fix can name; maintain is the only one done-done fixes yet.
-export const AUTO_FIX_STEPS = ['maintain'];
+// The steps auto_fix can name.
+export const AUTO_FIX_STEPS = ['maintain', 'verify'];
 export const EFFORTS = ['minimal', 'low', 'medium', 'high', 'xhigh', 'max'];
 // Each CLI's own reasoning-effort flag; an agent not here has none, so agent_config.<agent>.effort is refused for it.
 export const EFFORT_FLAGS = {
@@ -267,6 +267,7 @@ agent_timeout: ${AGENT_TIMEOUT}
 # a done-done/maintain-<run-id> branch, never on your branch.
 auto_fix:
   maintain: 0
+  verify: 0
 
 # Evidence storage.
 evidence:

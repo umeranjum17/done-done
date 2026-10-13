@@ -261,9 +261,10 @@ export function selectJudge(cfg: Config, found: { agent: string; model: string; 
 type Ran = { status: number | null; stdout: string; stderr: string; error?: Error };
 
 const DRAIN_MS = 500;
+const OUTPUT_CAP = 64 << 20;
 
 // One agent process. An edit step gets its own process group, so whatever it started (a dev server, a browser) is
-// killed with it when it ends or times out.
+// killed with it when it ends, times out or writes past the output cap.
 function start(bin: string, argv: string[], c: AgentCall, cwd: string, input: string, env: NodeJS.ProcessEnv): Promise<Ran> {
   const group = c.tools === 'edit';
   return new Promise((done) => {
@@ -280,6 +281,10 @@ function start(bin: string, argv: string[], c: AgentCall, cwd: string, input: st
         // Already gone.
       }
     };
+    const overflow = () => {
+      error ??= new Error(`${c.agent} wrote more than ${OUTPUT_CAP >> 20} MiB of output`);
+      kill();
+    };
     const timer = setTimeout(() => {
       error = new Error(`${c.agent} timed out after ${Math.round(c.timeoutMs / 1000)}s`);
       kill();
@@ -290,8 +295,14 @@ function start(bin: string, argv: string[], c: AgentCall, cwd: string, input: st
     });
     if (!child.pid) return;
     if (group) c.onSpawn?.(child.pid);
-    child.stdout.setEncoding('utf8').on('data', (d) => (stdout += d));
-    child.stderr.setEncoding('utf8').on('data', (d) => (stderr += d));
+    child.stdout.setEncoding('utf8').on('data', (d) => {
+      stdout += d;
+      if (stdout.length > OUTPUT_CAP) overflow();
+    });
+    child.stderr.setEncoding('utf8').on('data', (d) => {
+      stderr += d;
+      if (stderr.length > OUTPUT_CAP) overflow();
+    });
     child.on('exit', () => {
       drain = setTimeout(() => {
         child.stdout.destroy();

@@ -1955,6 +1955,13 @@ process.stdout.write(JSON.stringify({ type: 'result', is_error: false, structure
   assert.equal(edit.code, 1, edit.out);
   assert.match(edit.o.reason, /^drive: claude changed tracked files in the repo during the drive/);
   t.sh('checkout', '--', 'src/app.js');
+  // A tracked file already modified before the drive is checked by content: a further edit to it fails the drive too.
+  writeFileSync(join(t.repo, '.done-done.yaml'), 'app: notes\nevidence:\n  root: .proof\n  allow_dirty: true\n');
+  appendFileSync(join(t.repo, 'src/app.js'), '// wip\n');
+  const wip = verify({ ...right.env, DRIVE: 'edit' }, 'the note Umer added shows in the list');
+  assert.equal(wip.code, 1, wip.out);
+  assert.match(wip.o.reason, /^drive: claude changed tracked files in the repo during the drive/);
+  t.sh('checkout', '--', 'src/app.js', '.done-done.yaml');
   // Usage errors before any run: an unknown feature, a journey with --feature, no verify skill.
   assert.match(toon(verify(right.env, 'x', '--feature', 'nope')).error, /no feature nope in \.agents\/skills\/verify-notes\/features; it has: add-note/);
   rmSync(skill, { recursive: true });

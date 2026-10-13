@@ -1004,7 +1004,7 @@ async function runSteps(dir) {
             const author = run.author;
             rec = { ...openRun(run.repo, cfg, null, null, run.run_id), author };
             const evidence = runDir(cfg, rec.run_id);
-            const tracked = () => sha256(Buffer.from(git(run.repo, 'diff', 'HEAD', '--binary')));
+            const tracked = () => sha256(execFileSync('git', ['diff', 'HEAD', '--binary'], { cwd: run.repo, maxBuffer: Infinity, stdio: ['ignore', 'pipe', 'pipe'] }));
             const before = tracked();
             const scratch = join(dir, 'tmp');
             mkdirSync(scratch, { recursive: true });

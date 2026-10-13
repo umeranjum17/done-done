@@ -124,6 +124,19 @@ You can also run a one-off command without a journey: `done-done run -- <command
 A run whose command matches no repo-recorded journey says so in its `help`: the recipe is not in the repo, so nobody can re-run the proof from the config. Record it with `done-done init --journey <name> -- <command>` and commit.
 Run `done-done` outside wrappers that expand `${...}` themselves (`systemd-run` does): put such a wrapper inside the command, or it eats `${RUN_ID}`.
 
+#### Run-instance harness
+
+One project-agnostic primitive: with an `instance` block, each journey, agent drive and `done-done run -- <command>` starts the app under test on its own port, with its own HOME and XDG folders, waits until it is ready, and stops it at the end:
+
+```yaml
+instance:
+  command: node server.mjs
+  ready: { url: http://127.0.0.1:$DONE_DONE_PORT/health }  # or { command: curl -sf $DONE_DONE_BASE_URL/ }
+  ready_timeout: 30s
+```
+
+done-done picks a free local port it owns (a port that is already taken is never used) and passes `DONE_DONE_PORT` and `DONE_DONE_BASE_URL` to the instance, the journey and the agent drive, so a recipe uses `$DONE_DONE_BASE_URL` instead of a hard-coded port. For the app alone, HOME, XDG_CONFIG_HOME/XDG_DATA_HOME/XDG_CACHE_HOME and TMPDIR point under the run's scratch folder; the journey keeps your own HOME, XDG and TMPDIR, and the agent drive keeps its own HOME and XDG. Readiness is HTTP 2xx for `ready.url` or exit 0 for `ready.command` (each probe is killed at the remaining timeout, so a hung command cannot hang the run); past `ready_timeout` the run fails and the instance is killed. The app's output goes to `instance.log` in the run folder, never with the evidence. The group is killed when its journey or agent drive ends, or on the next read after a dead runner. `done-done run --open` does not start the app; its caller starts and stops its own. No `instance` block keeps today's behaviour.
+
 ### Check a claim
 
 ```sh
@@ -281,7 +294,7 @@ done-done abort [--run <run-id>]                                    # stop a liv
 done-done history [--limit <n>]                                     # this checkout's runs, newest first
 ```
 
-`verify` writes `$DONE_DONE_HOME/runs/<app>/<run-id>/run.json` (schema 2), then starts a detached runner that drives the journey, checks the files it wrote and records a receipt (steps `resolve`, `drive`, `check`, `judge`, `gate`, `receipt`, `report`; `judge` runs unless `--no-judge` or `judge.enabled: false` (then `--judge` turns it on), and its output goes to `logs/judge.log`; with no judge set, `verify` asks for one or exits 2 before it starts a run, as in [Judge relevance](#judge-relevance)). The runner goes on when the command or shell that started it ends. It writes its pid, the journey's process group and a heartbeat to `run.json`, each step to `events.jsonl`, and step output to `logs/`. `run.json` keeps the run's inputs and step state; the head, tree, dirty flag and evidence come from the evidence run record it points to. `verify` waits until the run ends (`--wait`, the default), then prints it like `status`; `--no-wait` returns at once. A journey still running after `journeys.<name>.timeout` (default `30m`, e.g. `90s`) is killed with everything it started, and the run ends inconclusive (exit 3) with `journey timed out after <timeout>`. `status` only reads the store, except that an open run whose runner is gone (its pid is no longer alive, or it never wrote a pid and is still open after 60 s) is shown as `failed` at the step it was on and its journey's process group is killed once (a `journey.killed` marker in the run folder keeps later reads from signalling again). Runs are stored per app, shared by every checkout of it; `status` shows the newest run of the current checkout and names its `repo`.
+`verify` writes `$DONE_DONE_HOME/runs/<app>/<run-id>/run.json` (schema 2), then starts a detached runner that drives the journey, checks the files it wrote and records a receipt (steps `resolve`, `drive`, `check`, `judge`, `gate`, `receipt`, `report`; `judge` runs unless `--no-judge` or `judge.enabled: false` (then `--judge` turns it on), and its output goes to `logs/judge.log`; with no judge set, `verify` asks for one or exits 2 before it starts a run, as in [Judge relevance](#judge-relevance)). The runner goes on when the command or shell that started it ends. It writes its pid, the journey's and the instance's process groups and a heartbeat to `run.json`, each step to `events.jsonl`, and step output to `logs/`. `run.json` keeps the run's inputs and step state; the head, tree, dirty flag and evidence come from the evidence run record it points to. `verify` waits until the run ends (`--wait`, the default), then prints it like `status`; `--no-wait` returns at once. A journey still running after `journeys.<name>.timeout` (default `30m`, e.g. `90s`) is killed with everything it started, and the run ends inconclusive (exit 3) with `journey timed out after <timeout>`. `status` only reads the store, except that an open run whose runner is gone (its pid is no longer alive, or it never wrote a pid and is still open after 60 s) is shown as `failed` at the step it was on and its journey's and instance's process groups are killed once (`journey.killed` and `instance.killed` markers in the run folder keep later reads from signalling again). Runs are stored per app, shared by every checkout of it; `status` shows the newest run of the current checkout and names its `repo`.
 
 `attach` prints each new event line to stderr while the run goes on, and exits when the run ends or its runner is gone. The step names for `logs --step` are the run's steps (`resolve`, `drive`, `check`, `judge` (unless `--no-judge`), `gate`, `receipt`, `report`; a `maintain` run has `locate`, `hygiene`, `source-wave`, `reconcile`, `report`, plus `triage` and `fix` when `auto_fix.maintain` is above 0).
 
@@ -407,6 +420,7 @@ An `agent_config` entry merges with the defaults field by field, so `claude: { m
 | `skill` | `.agents/skills/verify-<app>` |
 | `journeys.<name>.command` | none |
 | `journeys.<name>.timeout` | `30m`; a positive duration such as `90s` or `30m` (up to about 24 days), used by `verify` |
+| `instance` | none; the app under test started per run, see [Run-instance harness](#run-instance-harness) |
 | `evidence.root` | `<local_root>/<app>`, outside the repo. A relative path is under the repo; an absolute path is used as-is |
 | `evidence.allow_dirty` | `false` |
 | `evidence.ignore_paths` | `[]` |

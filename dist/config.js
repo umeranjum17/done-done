@@ -53,6 +53,7 @@ const KEYS = {
     app: { scope: 'repo', type: 'string' },
     skill: { scope: 'repo', type: 'string' },
     journeys: { scope: 'repo', type: 'journeys' },
+    instance: { scope: 'repo', type: 'instance' },
     'evidence.root': { scope: 'repo', type: 'string' },
     'evidence.allow_dirty': { scope: 'repo', type: 'boolean' },
     'evidence.ignore_paths': { scope: 'repo', type: 'string[]' },
@@ -128,6 +129,7 @@ function apply(target, text, file, scope) {
                                                         : isMap(value) && Object.values(value).every((j) => j && typeof j.command === 'string');
         const want = {
             journeys: 'a map of name: {command: <string>}',
+            instance: '{command: <string>, ready: {url: <http url>} or {command: <shell command>}, ready_timeout: <duration>}',
             agent: `one of ${AGENTS.join(', ')}, or acp:<target>`,
             agent_config: `a map of <agent>: {model: <string>, effort: <string>} for ${AGENTS.join(', ')}, acp:<target>`,
             args: `a map of <agent>: [<flag>, ...] for ${AGENTS.join(', ')}`,
@@ -142,6 +144,24 @@ function apply(target, text, file, scope) {
             throw new UsageError(`${file}: judge.route ${value === '' ? 'must not be empty; to leave it unset, remove the key' : 'auto is gone: done-done never picks the judge, the user sets it'}`, `Delete the judge.route line in ${file}, then run: done-done init --judge <agent> --judge-model <model>`);
         if (key === 'agent' && value === '')
             throw new UsageError(`${file}: agent must not be empty; to leave it unset, remove the key`);
+        if (key === 'instance') {
+            // instance: {command, ready: {url} or {command}, ready_timeout}. Validated here; the harness owns the port.
+            const v = value;
+            const fail = (why) => { throw new UsageError(`${file}: instance ${why}`); };
+            if (!isMap(value) || typeof v.command !== 'string' || !v.command)
+                fail('needs a command string');
+            if (!isMap(v.ready))
+                fail('needs ready: {url: <http url>} or ready: {command: <shell command>}');
+            const r = v.ready;
+            const has = (x) => typeof x === 'string' && x !== '';
+            if (has(r.url) === has(r.command))
+                fail('needs exactly one of ready.url and ready.command');
+            if (v.ready_timeout !== undefined && (typeof v.ready_timeout !== 'string' || parseDuration(v.ready_timeout) === null))
+                fail('ready_timeout must be a duration such as 30s, 2m or 1h');
+            target.from[key] = scope;
+            target[key] = { command: v.command, ready: has(r.url) ? { url: r.url } : { command: r.command }, ready_timeout: v.ready_timeout ?? '30s' };
+            continue;
+        }
         if (!ok)
             throw new UsageError(`${file}: ${key} must be ${want[spec.type] ?? `a ${spec.type}`}`);
         if (key === 'checks.not_proven' && value !== 'inconclusive' && value !== 'allow')
@@ -200,6 +220,7 @@ function defaultConfig(repo) {
         app: basename(repo),
         skill: '',
         journeys: {},
+        instance: null,
         evidence: { local_root: join(home(), 'evidence'), root: '', allow_dirty: false, ignore_paths: [] },
         checks: { not_proven: 'inconclusive', fix_title: '^(fix|bugfix|hotfix)\\b' },
         judge: { route: '', model: '', allow_same: false, claude_code: { config_dir: join(home(), 'claude') } },

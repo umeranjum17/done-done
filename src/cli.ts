@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import { createHash, randomBytes } from 'node:crypto';
-import { accessSync, appendFileSync, closeSync, constants, existsSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
-import { homedir, userInfo } from 'node:os';
+import { accessSync, appendFileSync, closeSync, constants, existsSync, lstatSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { homedir, tmpdir, userInfo } from 'node:os';
 import { delimiter, dirname, isAbsolute, join, matchesGlob, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createInterface } from 'node:readline/promises';
@@ -12,6 +12,7 @@ import { Document, parseDocument } from 'yaml';
 import { ACPX_INSTALL, agentChoices, agentPath, agentRun, askAgent, editOnlyReason, findBin, JUDGES, modelFor, noAgent, noJudge, notStartable, routeOf, selectAgent, selectJudge, type AgentAnswer, type JudgeChoice } from './agents.js';
 import { AGENTS, CHEAP, type Config, globalConfigText, home, isAgent, loadConfig, parseDuration, UsageError } from './config.js';
 import { backend, type Capture, judge, judgeable, type Judged, onPath, quote } from './judge.js';
+import { startInstance, stopInstance } from './instance.js';
 import { type Finding as MaintainFinding, maintainSteps, type MaintainResult, refuseSameSession } from './maintain.js';
 import { design, KINDS } from './design.js';
 import { checkMedia } from './media.js';
@@ -405,7 +406,7 @@ function closeRun(repo: string, cfg: Config, rec: RunRecord): { code: number; re
   return { code: reason ? FAIL : PASS, result, reason };
 }
 
-function cmdRun(argv: string[]): number {
+async function cmdRun(argv: string[]): Promise<number> {
   const dash = argv.indexOf('--');
   const { values, positionals } = parseArgs({
     args: dash < 0 ? argv : argv.slice(0, dash),
@@ -446,13 +447,38 @@ function cmdRun(argv: string[]): number {
   if (!command) throw new UsageError('run needs a journey, a command after --, or --open');
   const expanded = command.replaceAll('${RUN_ID}', rec.run_id);
   rec.command = expanded;
+  // With an instance block the app starts first on its own port, so the recipe uses
+  // $DONE_DONE_BASE_URL instead of a hard-coded port; without one this is today's behaviour.
+  let inst: { pgid: number; env: Record<string, string> } | undefined;
+  let scratch: string | undefined;
+  const SIGS = ['SIGINT', 'SIGTERM', 'SIGHUP'] as const;
+  const reap = (sig?: NodeJS.Signals) => {
+    if (inst) stopInstance(inst.pgid);
+    if (scratch) rmSync(scratch, { recursive: true, force: true });
+    if (sig) process.kill(process.pid, sig);
+  };
+  if (cfg.instance) {
+    scratch = mkdtempSync(join(tmpdir(), 'done-done-instance-'));
+    try {
+      inst = await startInstance(repo, cfg.instance, rec.run_id, scratch, process.env, join(runsRoot(cfg.app), rec.run_id, 'logs', 'instance.log'));
+      for (const s of SIGS) process.once(s, reap);
+    } catch (e) {
+      rmSync(scratch, { recursive: true, force: true });
+      rec.exit = 1;
+      const closed = closeRun(repo, cfg, rec);
+      return emitted({ code: closed.code, result: { ...closed.result, reason: `instance: ${(e as Error).message}` } });
+    }
+  }
   // The journey's own stdout goes to our stderr, never our stdout: stdout carries only done-done's
   // result document (TOON or --json), so a noisy journey cannot break `run --json | JSON.parse`.
-  const r = spawnSync(expanded, {
-    cwd: repo, shell: true, stdio: ['inherit', process.stderr, 'inherit'],
-    env: { ...process.env, DONE_DONE_RUN_ID: rec.run_id, DONE_DONE_EVIDENCE_ROOT: runDir(cfg, rec.run_id) },
+  const r = await new Promise<number | null>((done) => {
+    spawn(expanded, {
+      cwd: repo, shell: true, stdio: ['inherit', process.stderr, 'inherit'],
+      env: { ...process.env, DONE_DONE_RUN_ID: rec.run_id, DONE_DONE_EVIDENCE_ROOT: runDir(cfg, rec.run_id), ...inst?.env },
+    }).on('error', () => done(null)).on('close', done);
   });
-  rec.exit = r.status ?? 1;
+  reap();
+  rec.exit = r ?? 1;
   return emitted(closeRun(repo, cfg, rec));
 }
 
@@ -869,7 +895,7 @@ type Run = {
   schema: 2; run_id: string; kind: 'verify' | 'maintain'; app: string; repo: string; journey?: string | null; feature?: string; author?: { agent: string; model: string };
   claim?: string; claim_id: string | null; judge?: boolean; branch?: string; // the branch it started on, which names the claim when claim_id is null
   status: 'pending' | 'running' | 'awaiting_approval' | 'completed' | 'failed' | 'cancelled';
-  runner?: { pid: number; started: string; heartbeat: string; journey_pgid?: number }; steps: Step[];
+  runner?: { pid: number; started: string; heartbeat: string; journey_pgid?: number; instance_pgid?: number }; steps: Step[];
   result?: 'pass' | 'fail' | 'inconclusive' | 'overridden' | MaintainResult; reason?: string; findings?: MaintainFinding[]; unverified?: string[]; git_status?: string;
   record?: string; receipt?: string; created: string; updated: string;
   fix?: { branch: string; commit: string; files: string[]; attempts: number }; // a maintain run that ended changed
@@ -984,12 +1010,13 @@ const driveHint = (repo: string, cfg: Config) => existsSync(join(repo, cfg.skill
 function drivePrompt(run: Run, at: string, cfg: Config, evidence: string, scratch: string): string {
   const skill = join(at, cfg.skill);
   const recipe = run.feature ? `the feature recipe ${join(skill, 'features', `${run.feature}.md`)}` : `its feature map ${join(skill, 'features', 'README.md')}, then pick the one feature the outcome is about`;
+  const inst = cfg.instance ? `\n\nThe app is already running at $DONE_DONE_BASE_URL (started by done-done on its own port with its own HOME; DONE_DONE_PORT is its port). Drive that instance: do not start your own server or hard-code a port.` : '';
   return `You drive the real ${run.app} app the way a user does, to capture proof of one outcome. Someone else judges your captures.
 
 Outcome to prove: ${run.claim}
-
+${inst}
 1. Read the verify skill ${join(skill, 'SKILL.md')} (how to launch, check, drive, capture and clean up this app) and ${recipe}.
-2. Launch the app as the skill says, then drive that feature through the real user path, step by step as its recipe says.
+2. ${cfg.instance ? 'Drive that running instance' : 'Launch the app as the skill says, then drive'} that feature through the real user path, step by step as its recipe says.
    Never add steps or data to make the outcome look true: capture what that path shows, even when it contradicts the outcome.
 3. Save PNG screenshots of what a user sees once the path is done (the resulting state the outcome is about) into ${evidence} (also in $DONE_DONE_EVIDENCE_ROOT).
    The judge checks every screenshot there against the outcome, so a screenshot of an earlier step (such as an empty or half-filled form) fails the drive: keep those in ${scratch}. Save nothing else there, and never edit a capture.
@@ -1094,11 +1121,26 @@ async function runSteps(dir: string): Promise<void> {
       const before = tracked();
       const scratch = join(dir, 'tmp');
       mkdirSync(scratch, { recursive: true });
+      // With an instance block the app is already running at $DONE_DONE_BASE_URL; the drive uses it, never a fixed port.
+      // The agent keeps its own HOME and XDG folders (its login lives there); only the app runs isolated.
+      let instPort: Record<string, string> = {};
+      if (cfg.instance) {
+        try {
+          const inst = await startInstance(at, cfg.instance, rec.run_id, scratch, process.env, join(dir, 'logs', `${fix}instance.log`));
+          run.runner!.instance_pgid = inst.pgid;
+          saveRun(dir, run);
+          instPort = inst.env;
+        } catch (e) {
+          set(step!, 'failed');
+          return fail(`instance: ${(e as Error).message}`);
+        }
+      }
       const a = await askAgent({
         ...agentRun(cfg, author.agent, author.model), prompt: drivePrompt(run, at, cfg, evidence, scratch), schema: DRIVE_SCHEMA, cwd: at, tools: 'edit',
-        record: join(dir, 'agents', `${fix}drive.json`), dirs: [evidence, scratch], env: { DONE_DONE_RUN_ID: rec.run_id, DONE_DONE_DRIVE: rec.run_id, DONE_DONE_EVIDENCE_ROOT: evidence, TMPDIR: scratch },
+        record: join(dir, 'agents', `${fix}drive.json`), dirs: [evidence, scratch], env: { DONE_DONE_RUN_ID: rec.run_id, DONE_DONE_DRIVE: rec.run_id, DONE_DONE_EVIDENCE_ROOT: evidence, TMPDIR: scratch, ...instPort },
         onSpawn: spawned,
       });
+      if (run.runner?.instance_pgid) stopInstance(run.runner.instance_pgid);
       const answer = a.answer as { feature?: unknown; captures?: unknown; blocker?: unknown } | undefined;
       const blocker = String(answer?.blocker ?? '').trim();
       rec.exit = a.ok && !blocker ? 0 : 1;
@@ -1118,9 +1160,24 @@ async function runSteps(dir: string): Promise<void> {
       begin('drive');
       rec = openRun(at, cfg, run.journey!, command!.replaceAll('${RUN_ID}', id), id);
       const fd = openSync(join(dir, 'logs', `${fix}drive.log`), 'a');
+      // With an instance block the app starts first on its own port; the journey talks to $DONE_DONE_BASE_URL.
+      let instEnv: Record<string, string> = {};
+      if (cfg.instance) {
+        try {
+          const scratch = join(dir, 'tmp');
+          mkdirSync(scratch, { recursive: true });
+          const inst = await startInstance(at, cfg.instance, rec.run_id, scratch, process.env, join(dir, 'logs', `${fix}instance.log`));
+          run.runner!.instance_pgid = inst.pgid;
+          instEnv = inst.env;
+        } catch (e) {
+          closeSync(fd);
+          set(step!, 'failed');
+          return fail(`instance: ${(e as Error).message}`);
+        }
+      }
     // An async child keeps the heartbeat going while the journey runs. The journey gets its own process group, so a
     // timeout or a dead runner can kill it and everything it started.
-    const child = spawn(rec.command!, { cwd: at, shell: true, detached: true, stdio: ['ignore', fd, fd], env: { ...process.env, DONE_DONE_RUN_ID: rec.run_id, DONE_DONE_EVIDENCE_ROOT: runDir(cfg, rec.run_id) } });
+    const child = spawn(rec.command!, { cwd: at, shell: true, detached: true, stdio: ['ignore', fd, fd], env: { ...process.env, DONE_DONE_RUN_ID: rec.run_id, DONE_DONE_EVIDENCE_ROOT: runDir(cfg, rec.run_id), ...instEnv } });
     run.runner!.journey_pgid = child.pid;
     saveRun(dir, run);
     let timedOut = false;
@@ -1131,6 +1188,7 @@ async function runSteps(dir: string): Promise<void> {
     rec.exit = await new Promise<number>((done) => child.on('close', (code) => done(code ?? 1)));
     clearTimeout(timer);
     closeSync(fd);
+    if (run.runner?.instance_pgid) stopInstance(run.runner.instance_pgid);
     const sealed = closeRun(at, cfg, rec);
     if (!fix) run.record = join(recordsDir(cfg), `${rec.run_id}.json`);
     set(step!, sealed.code === PASS ? 'completed' : 'failed', { exit: rec.exit, outputs: evidenceOf(run.repo, cfg, rec) });
@@ -1225,6 +1283,7 @@ const isOurRunner = (pid: number, dir: string) => {
 const shownStatus = (run: Run): Run['status'] => ((run.status === 'pending' || run.status === 'running') && runnerGone(run) ? 'failed' : run.status);
 const reapJourney = (dir: string, run: Run) => {
   if (run.runner?.journey_pgid && createOnce(join(dir, 'journey.killed'))) killGroup(run.runner.journey_pgid);
+  if (run.runner?.instance_pgid && createOnce(join(dir, 'instance.killed'))) killGroup(run.runner.instance_pgid);
 };
 
 // One run as status shows it. A run still marked running whose runner is gone is shown as failed at its step.
@@ -1462,7 +1521,7 @@ async function cmdRerun(argv: string[]): Promise<number> {
   if (src.kind === 'maintain') throw new UsageError(`run ${srcId} is a maintain run, which cannot be rerun`, 'Start a new one: done-done maintain');
   const open = shownStatus(src);
   if (open === 'pending' || open === 'running') throw new UsageError(`run ${srcId} is still ${open}, so it cannot be rerun while its runner lives`, `Read it: done-done status --run ${srcId}; stop it first: done-done abort --run ${srcId}`);
-  const group = src.runner?.journey_pgid;
+  const group = src.runner?.journey_pgid ?? src.runner?.instance_pgid;
   if (['pending', 'running'].includes(src.status) && group && alive(-group)) throw new UsageError(`the journey of run ${srcId} is still running, so it cannot be rerun yet`, `Read it: done-done status --run ${srcId}`);
   // The rerun keeps its source's claim and branch, so the gate it is checked against is the source's.
   refuseParked(cfg, src.repo, src.claim_id ?? src.branch);
@@ -1761,6 +1820,7 @@ Scaffolded by \`done-done init\` from this repo's own files (surface: ${d.surfac
 ${d.launch}
 
 Ready when ${d.ready}. Tear down what you started; never kill by process name.
+When the repo's .done-done.yaml has an instance block, done-done already runs the app at $DONE_DONE_BASE_URL (its own port and HOME): drive that URL, never a hard-coded port.
 
 ## Doctor
 
@@ -2587,7 +2647,7 @@ async function main(argv: string[]): Promise<number> {
     if (process.env.DONE_DONE_DRIVE && DRIVE_REFUSED.includes(cmd)) throw new UsageError(`${cmd} refuses to run inside an agent drive (DONE_DONE_DRIVE is set), so the agent does not answer its own gate, write a receipt or start a run by accident; this guards against accidents and is not a sandbox`, 'Stop the drive and report what you captured; done-done answers the run and writes the receipt');
     if (cmd === 'init') return await cmdInit(rest);
     if (cmd === 'doctor') return await cmdDoctor(rest);
-    if (cmd === 'run') return cmdRun(rest);
+    if (cmd === 'run') return await cmdRun(rest);
     if (cmd === 'check') return await cmdCheck(rest);
     if (cmd === 'receipt') return await cmdReceipt(rest);
     if (cmd === 'verify') return await cmdVerify(rest);

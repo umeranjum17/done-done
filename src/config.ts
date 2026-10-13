@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, isAbsolute, join, resolve } from 'node:path';
 import { parse } from 'yaml';
+import type { Instance } from './instance.js';
 
 export class UsageError extends Error {
   // The exact next command, when the error has one.
@@ -21,6 +22,8 @@ export type Config = {
   app: string;
   skill: string;
   journeys: Record<string, { command: string; timeout?: string }>;
+  // Primitive 1 (run-instance harness): start the app under test on its own port per run. Null when unset: today's behaviour.
+  instance: Instance | null;
   evidence: { local_root: string; root: string; allow_dirty: boolean; ignore_paths: string[] };
   checks: { not_proven: 'inconclusive' | 'allow'; fix_title: string };
   // enabled: verify judges unless false (--judge turns it on for a run); check and receipt judge with --judge or true; rerun repeats its source run.
@@ -62,7 +65,7 @@ export const EFFORT_FLAGS: Record<string, (level: string) => string[]> = {
 const AGENT_TIMEOUT = '30m';
 
 // Where each key may be set. Global-only keys describe the machine; repo-only keys describe the project; `any` may be in either.
-const KEYS: Record<string, { scope: 'global' | 'repo' | 'any'; type: 'string' | 'boolean' | 'string[]' | 'journeys' | 'agent' | 'agent_config' | 'route' | 'claude_code' | 'args' | 'paths' | 'bin' | 'duration' | 'auto_fix' }> = {
+const KEYS: Record<string, { scope: 'global' | 'repo' | 'any'; type: 'string' | 'boolean' | 'string[]' | 'journeys' | 'instance' | 'agent' | 'agent_config' | 'route' | 'claude_code' | 'args' | 'paths' | 'bin' | 'duration' | 'auto_fix' }> = {
   agent: { scope: 'any', type: 'agent' },
   auto_fix: { scope: 'any', type: 'auto_fix' },
   agent_config: { scope: 'global', type: 'agent_config' },
@@ -74,6 +77,7 @@ const KEYS: Record<string, { scope: 'global' | 'repo' | 'any'; type: 'string' | 
   app: { scope: 'repo', type: 'string' },
   skill: { scope: 'repo', type: 'string' },
   journeys: { scope: 'repo', type: 'journeys' },
+  instance: { scope: 'repo', type: 'instance' },
   'evidence.root': { scope: 'repo', type: 'string' },
   'evidence.allow_dirty': { scope: 'repo', type: 'boolean' },
   'evidence.ignore_paths': { scope: 'repo', type: 'string[]' },
@@ -144,6 +148,7 @@ function apply(target: Config, text: string | undefined, file: string, scope: 'g
       : isMap(value) && Object.values(value).every((j: any) => j && typeof j.command === 'string');
     const want = {
       journeys: 'a map of name: {command: <string>}',
+      instance: '{command: <string>, ready: {url: <http url>} or {command: <shell command>}, ready_timeout: <duration>}',
       agent: `one of ${AGENTS.join(', ')}, or acp:<target>`,
       agent_config: `a map of <agent>: {model: <string>, effort: <string>} for ${AGENTS.join(', ')}, acp:<target>`,
       args: `a map of <agent>: [<flag>, ...] for ${AGENTS.join(', ')}`,
@@ -156,6 +161,21 @@ function apply(target: Config, text: string | undefined, file: string, scope: 'g
     } as Record<string, string>;
     if (key === 'judge.route' && (value === 'auto' || value === '')) throw new UsageError(`${file}: judge.route ${value === '' ? 'must not be empty; to leave it unset, remove the key' : 'auto is gone: done-done never picks the judge, the user sets it'}`, `Delete the judge.route line in ${file}, then run: done-done init --judge <agent> --judge-model <model>`);
     if (key === 'agent' && value === '') throw new UsageError(`${file}: agent must not be empty; to leave it unset, remove the key`);
+    if (key === 'instance') {
+      // instance: {command, ready: {url} or {command}, ready_timeout}. Validated here; the harness owns the port.
+      const v = value as { command?: unknown; ready?: unknown; ready_timeout?: unknown };
+      const fail = (why: string) => { throw new UsageError(`${file}: instance ${why}`); };
+      if (!isMap(value) || typeof v.command !== 'string' || !v.command) fail('needs a command string');
+      if (!isMap(v.ready)) fail('needs ready: {url: <http url>} or ready: {command: <shell command>}');
+      const r = v.ready as Record<string, unknown>;
+      const has = (x: unknown): x is string => typeof x === 'string' && x !== '';
+      if (has(r.url) === has(r.command)) fail('needs exactly one of ready.url and ready.command');
+      if (v.ready_timeout !== undefined && (typeof v.ready_timeout !== 'string' || parseDuration(v.ready_timeout) === null))
+        fail('ready_timeout must be a duration such as 30s, 2m or 1h');
+      target.from[key] = scope;
+      (target as Record<string, unknown>)[key] = { command: v.command, ready: has(r.url) ? { url: r.url } : { command: r.command }, ready_timeout: (v.ready_timeout as string) ?? '30s' };
+      continue;
+    }
     if (!ok) throw new UsageError(`${file}: ${key} must be ${want[spec.type] ?? `a ${spec.type}`}`);
     if (key === 'checks.not_proven' && value !== 'inconclusive' && value !== 'allow') throw new UsageError(`${file}: checks.not_proven must be inconclusive or allow`);
     if (key === 'agent_config')
@@ -204,6 +224,7 @@ function defaultConfig(repo: string): Config {
     app: basename(repo),
     skill: '',
     journeys: {},
+    instance: null,
     evidence: { local_root: join(home(), 'evidence'), root: '', allow_dirty: false, ignore_paths: [] },
     checks: { not_proven: 'inconclusive', fix_title: '^(fix|bugfix|hotfix)\\b' },
     judge: { route: '', model: '', allow_same: false, claude_code: { config_dir: join(home(), 'claude') } },

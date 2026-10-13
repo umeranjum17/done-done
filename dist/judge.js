@@ -25,7 +25,7 @@ const QUESTION = {
 // The answer the answerer asks its agent for: the kit's reply shape for each choice question.
 const answerSchema = (questions) => ({
     type: 'object',
-    properties: Object.fromEntries(Object.entries(questions).map(([k, q]) => [k, { type: 'object', properties: { probabilities: { type: 'object', properties: Object.fromEntries(Object.keys(q.kind === 'choice' ? q.options : {}).map((o) => [o, { type: 'number', minimum: 0, maximum: 1 }])), required: Object.keys(q.kind === 'choice' ? q.options : {}) }, rationale: { type: 'string' }, personReason: { type: 'string' } }, required: ['probabilities'] }])),
+    properties: Object.fromEntries(Object.entries(questions).map(([k, q]) => [k, { type: 'object', properties: { probabilities: { type: 'object', properties: Object.fromEntries(Object.keys(q.kind === 'choice' ? q.options : {}).map((o) => [o, { type: 'number' }])) }, rationale: { type: 'string' }, personReason: { type: 'string' } }, required: ['probabilities'] }])),
     required: Object.keys(questions),
 });
 export function isExecutable(path) {
@@ -104,15 +104,17 @@ export async function backend(cfg, choice, record = () => '', questions = { rele
         const { answerer, resolve } = await kit();
         let lastError = '';
         // The kit hides a failed call's message from the verdict, so the real cause is kept here for the result.
+        let requests = 0;
         const ask = answerer({
             name: choice.route,
             leaves: true,
             supportsImages: true,
             ask: async (prompt, _signal, images) => {
                 lastError = '';
+                requests++;
                 const attached = images.map((img) => ({ name: `${img.id}.${img.mime.split('/')[1]}`, bytes: Buffer.from(img.dataUrl.slice(img.dataUrl.indexOf(',') + 1), 'base64') }));
                 // A tool-less call runs in its own scratch folder, so the CLI sees the attached capture and nothing else.
-                const a = await askAgent({ ...run, prompt, schema: answerSchema(questions), cwd: tmpdir(), tools: 'none', attempts, record: record(), images: attached });
+                const a = await askAgent({ ...run, prompt, schema: answerSchema(questions), cwd: tmpdir(), tools: 'none', attempts, record: record(requests), images: attached });
                 lastError = a.ok ? '' : a.error ?? 'no answer';
                 if (!a.ok)
                     throw new Error(lastError);
@@ -197,7 +199,7 @@ export function writeCache(dir, key, value) {
     catch { }
 }
 // Verdicts are cached in the run store, per app, so a re-run or a later run of the same capture and claim asks no model.
-// The answerer's agent call leaves a record in `records` (judge-<stamp>-<n>.agent.json), never the prompt.
+// The answerer's agent call leaves a record in `records` (judge-<stamp>-<n>-<request>.agent.json), never the prompt.
 export async function judge(cfg, choose, outcome, captures, records) {
     const dir = join(home(), 'runs', cfg.app, 'judge');
     const stamp = new Date().toISOString().replace(/[:.]/g, '-');
@@ -230,7 +232,7 @@ export async function judge(cfg, choose, outcome, captures, records) {
             continue;
         }
         call = join(records, `judge-${stamp}-${calls}`);
-        be ??= await backend(cfg, choice, () => `${call}.agent.json`);
+        be ??= await backend(cfg, choice, (request) => `${call}-${request}.agent.json`);
         const answers = await askJudge(cfg, be, choice, { outcome }, { relevance: QUESTION }, { capture: image });
         if (typeof answers === 'string') {
             judged.push({ path: c.name, sha256: c.sha256, verdict: 'unsure', reason: answers, cached: false });

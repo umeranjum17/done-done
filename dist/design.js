@@ -134,7 +134,7 @@ function image(c) {
     const i = prepare(c);
     return typeof i === 'string' ? `${c.name}: ${i}` : i;
 }
-// records: where each answerer call leaves its record (design-<stamp>-<n>.agent.json), never the prompt.
+// records: where each answerer call leaves its record (design-<stamp>-<n>-<request>.agent.json), never the prompt.
 // The judge's answer is cached in the run store per exact input (screen and mock bytes, questions, route and model), so
 // the same input gets the same verdict on every run: one request per new input, none for a repeat. An answer that never
 // came or cannot be read is not kept.
@@ -163,12 +163,13 @@ export async function design(cfg, choice, screens, records) {
         else {
             const withMock = !!mock;
             const key = createHash('sha256').update(JSON.stringify([s.sha256, s.mock?.sha256 ?? null, questions(withMock), choice.route, choice.model])).digest('hex');
-            let judge = readCache(dir, key);
-            cached = Array.isArray(judge?.defects) && Array.isArray(judge?.unsure);
+            const hit = readCache(dir, key);
+            cached = Array.isArray(hit?.defects) && Array.isArray(hit?.unsure);
+            let judge = cached ? hit : undefined;
             if (!cached) {
                 call = `${records}/design-${stamp}-${n + 1}`;
                 if (!backends.has(withMock))
-                    backends.set(withMock, await backend(cfg, choice, () => `${call}.agent.json`, questions(withMock), ASK_ATTEMPTS));
+                    backends.set(withMock, await backend(cfg, choice, (request) => `${call}-${request}.agent.json`, questions(withMock), ASK_ATTEMPTS));
                 const answers = await askJudge(cfg, backends.get(withMock), choice, { screen: withMock ? 'a screenshot next to its approved mock' : 'a screenshot' }, questions(withMock), { screen: shot, ...(mock && { mock }) });
                 if (typeof answers === 'string')
                     reason = answers;

@@ -2426,6 +2426,10 @@ test('design fails an overlay the approved mock does not draw in that place', ()
   assert.equal(r.code, 1, r.out);
   assert.deepEqual(toon(r).screens[0].defects, [{ kind: 'overlap', where: 'toast over the save button' }]);
   assert.equal(r.calls.length, 1, 'the overlay is judged, not passed without a request');
+  assert.match(r.calls[0].file, /only where the mock draws that same overlay in the same place/, 'the mock is asked to approve an overlay only where it draws it');
+  const alone = spawnSync(process.execPath, [CLI, 'design', 'screen2.png'], { cwd: t.dir, env: s.env, encoding: 'utf8' });
+  assert.equal(alone.status, 1, alone.stdout + alone.stderr);
+  assert.doesNotMatch(s.calls()[1].file, /dialog, sheet, menu, popover or toast/, 'alone, an overlay is judged as any element');
 });
 
 test('design measures a blank strip along an edge, but not a nav rail with icons or a uniform frame', () => {

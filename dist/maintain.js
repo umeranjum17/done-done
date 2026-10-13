@@ -419,17 +419,18 @@ Recently changed files (git log since ${CHURN_SINCE}, most recent first${churnAl
 // Triage: the judge (the user's, never the author or the fixer) decides for each drift finding whether the skill is out of
 // date or the product may be wrong. Plain-code findings (links, index, citations) and unmapped surfaces are skill gaps.
 const TRIAGE = {
-    skill: 'The skill is out of date: the source shows a deliberate change, so the skill should be rewritten to match the source.',
-    product: 'The source looks like a bug or a regression against what the skill describes, so the product may need a fix and a person must decide.',
+    skill: 'The skill is out of date: it should be rewritten to match what the source does now.',
+    product: 'The source looks broken or regressed against what the skill describes (a crash, a lost step, a typo, a half-done change), so the product may need a fix and a person must decide.',
     unclear: 'The text cannot settle which side is wrong.',
 };
 const TRIAGE_ATTEMPTS = 3;
 const EXCERPT_LINES = 20;
 const FIX_SCHEMA = { type: 'object', properties: { summary: { type: 'string' }, blocker: { type: 'string' } }, required: ['summary', 'blocker'] };
-// The lines around a cited source line, numbered, for the judge.
-const excerpt = (repo, s) => {
-    const text = s && citedText(repo, relative(repo, resolve(repo, s.file)));
-    if (!s || text === undefined)
+// The lines around a cited source line (a repo path or a bare file name, as a reader cites it), numbered, for the judge.
+const excerpt = (repo, tracked, s) => {
+    const file = s && citedFiles(repo, tracked, s.file)[0];
+    const text = file && citedText(repo, file);
+    if (!s || !text)
         return '';
     return text.split('\n').slice(Math.max(0, s.line - 1 - EXCERPT_LINES), s.line + EXCERPT_LINES).map((l, i) => `${Math.max(1, s.line - EXCERPT_LINES) + i}: ${l}`).join('\n');
 };
@@ -438,8 +439,9 @@ async function triage(cfg, choice, repo, findings, sources, record) {
     const drift = findings.filter((f) => f.kind === 'drift');
     if (!drift.length)
         return [];
-    const questions = Object.fromEntries(drift.map((f) => [f.id, { kind: 'choice', instructions: `Finding ${f.id} in the state is a statement in a verification skill (the steps a coding agent follows to drive and prove the real app) that the product's source no longer supports. Which side is wrong?`, options: TRIAGE, floor: 0.8, personReason: true }]));
-    const state = { app: cfg.app, findings: Object.fromEntries(drift.map((f) => [f.id, { feature_file: f.file, finding: f.what, feature_text: tryText(join(repo, f.file)).slice(0, FEATURE_CHARS), source: excerpt(repo, sources.get(f.id)) }])) };
+    const questions = Object.fromEntries(drift.map((f) => [f.id, { kind: 'choice', instructions: `Finding ${f.id} in the state is a statement in a verification skill (the steps a coding agent follows to drive and prove the real app) that the product's source no longer supports. Which side should change? The source is the truth for the skill unless the source looks broken.`, options: TRIAGE, floor: 0.8, personReason: true }]));
+    const tracked = git(repo, 'ls-files', '-z').split('\0').filter(Boolean);
+    const state = { app: cfg.app, findings: Object.fromEntries(drift.map((f) => [f.id, { feature_file: f.file, finding: f.what, feature_text: tryText(join(repo, f.file)).slice(0, FEATURE_CHARS), source: excerpt(repo, tracked, sources.get(f.id)) }])) };
     const answers = await askJudge(cfg, await backend(cfg, choice, () => record, questions, TRIAGE_ATTEMPTS), choice, state, questions, {});
     if (typeof answers === 'string')
         return answers;
@@ -473,6 +475,7 @@ async function fix(run, dir, cfg, h, tries, sources) {
     const wt = join(dir, 'fix');
     const scratch = join(dir, 'tmp');
     const rounds = [];
+    const judged = [];
     let open = (run.findings ?? []).filter((f) => !NOTICE.has(f.kind));
     // ponytail: a runner killed mid-fix leaves the worktree registered; `git worktree prune` clears it once the run folder is gone.
     git(repo, 'worktree', 'add', '-q', '--detach', wt, 'HEAD');
@@ -481,13 +484,14 @@ async function fix(run, dir, cfg, h, tries, sources) {
         for (let k = 1; k <= tries; k++) {
             let step = h.begin('triage');
             const asks = await triage(cfg, choice, wt, open, sources, join(dir, 'agents', `triage-${k}.json`));
-            h.log('triage', { judge: { route: choice.route, model: choice.model, independence: choice.independence }, rounds: [...rounds, { attempt: k, ask_user: asks }] });
+            judged.push({ attempt: k, ask_user: asks });
+            h.log('triage', { judge: { route: choice.route, model: choice.model, independence: choice.independence }, rounds: judged });
             h.set(step, typeof asks === 'string' ? 'failed' : 'completed');
             if (typeof asks === 'string')
                 return { result: 'blocked', reason: `triage: ${asks}` };
             if (asks.length) {
                 run.findings = open.map((f) => asks.find((a) => a.id === f.id) ?? f);
-                return { result: 'blocked', reason: `ask-user: the judge says the product, not the skill, may be wrong in ${asks.length} findings (${asks.map((a) => a.id).join(', ')}), so the user decides` };
+                return { result: 'blocked', reason: `ask-user: the judge did not call ${asks.length} ${asks.length === 1 ? 'finding' : 'findings'} (${asks.map((a) => a.id).join(', ')}) a skill that is out of date, so the user decides` };
             }
             step = h.begin('fix');
             const round = { attempt: k, findings: open.map((f) => f.id) };
@@ -518,15 +522,15 @@ Answer with summary (what you changed, in one line) and blocker ("" when you fix
                 return blocked(`${agent.agent} made a commit; done-done makes the only commit, so the attempt is dropped`);
             if (outside.length)
                 return blocked(`${agent.agent} changed files outside ${skill}/ (${outside.slice(0, LEFT_NAMED).join(', ')}${outside.length > LEFT_NAMED ? `, +${outside.length - LEFT_NAMED} more` : ''}), so the attempt is dropped with the done-done worktree; your branch is untouched`);
-            if (!a.ok)
+            // A lost answer after skill edits still gets the re-run: the re-run, not the agent's word, says whether the skill is fixed.
+            if (!a.ok && !changed.length)
                 return blocked(`${agent.agent} did not finish the fix: ${a.error}`);
-            const blocker = String(a.answer?.blocker ?? '').trim();
+            const blocker = a.ok ? String(a.answer?.blocker ?? '').trim() : '';
             if (blocker)
                 return blocked(`${agent.agent} could not fix the skill: ${blocker}`);
             // Re-run maintain on the fixed skill in the worktree; its steps are this fix step, and its records are named fix<k>-.
             const again = { repo: wt };
-            const logs = {};
-            const rerun = await pass(again, dir, cfg, { begin: () => null, set: () => { }, log: (name, value) => (logs[name] = value) }, `fix${k}-`);
+            const rerun = await pass(again, dir, cfg, { begin: () => null, set: () => { }, log: () => { } }, `fix${k}-`);
             round.rerun = { result: rerun.result, reason: rerun.reason, findings: again.findings, unverified: again.unverified };
             if (rerun.result === 'blocked')
                 return blocked(`the re-run after attempt ${k} is blocked: ${rerun.reason}`);
@@ -550,7 +554,7 @@ Answer with summary (what you changed, in one line) and blocker ("" when you fix
                 round.commit = commit;
                 h.log('fix', { agent: agent.agent, model: agent.model, worktree: wt, rounds });
                 h.set(step, 'completed', { outputs: files });
-                return { result: 'changed', reason: `${open.length} findings fixed on ${branch} in ${k} ${k === 1 ? 'attempt' : 'attempts'}` };
+                return { result: 'changed', reason: `the skill is clean after ${k} fix ${k === 1 ? 'attempt' : 'attempts'}, in one commit on ${branch}` };
             }
             open = (again.findings ?? []).filter((f) => !NOTICE.has(f.kind));
             sources = rerun.sources ?? new Map();

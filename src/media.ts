@@ -1,6 +1,9 @@
 import { spawnSync } from 'node:child_process';
 import { extname } from 'node:path';
+import jpegJs from 'jpeg-js';
 import { crc32, deflateSync, inflateSync } from 'node:zlib';
+
+export type Pixels = { w: number; h: number; rgb: Uint8Array; clear: Uint8Array };
 
 // Result of validating one evidence file: ok, fail (the file is bad) or unverified (could not tell).
 export type Verdict = { status: 'ok' | 'fail' | 'unverified'; type: string; why?: string; w?: number; h?: number };
@@ -66,9 +69,9 @@ function png(b: Buffer): Verdict {
   return { status: 'ok', type: 'png', w, h };
 }
 
-// Decodes an 8-bit non-interlaced PNG to RGB, with alpha composited over white.
+// Decodes an 8-bit non-interlaced PNG to RGB, with alpha composited over white; clear marks the fully transparent pixels.
 // Other variants return undefined: callers skip what needs pixels and keep the structural checks.
-export function pngPixels(b: Buffer): { w: number; h: number; rgb: Uint8Array } | undefined {
+export function pngPixels(b: Buffer): Pixels | undefined {
   const w = b.readUInt32BE(16), h = b.readUInt32BE(20);
   const depth = b[24], colour = b[25], interlace = b[28];
   const channels = ({ 0: 1, 2: 3, 3: 1, 4: 2, 6: 4 } as Record<number, number>)[colour];
@@ -90,7 +93,7 @@ export function pngPixels(b: Buffer): { w: number; h: number; rgb: Uint8Array } 
   }
   const stride = w * channels;
   if (raw.length < h * (stride + 1)) return undefined;
-  const rgb = new Uint8Array(w * h * 3);
+  const rgb = new Uint8Array(w * h * 3), clear = new Uint8Array(w * h);
   let prev = new Uint8Array(stride), cur = new Uint8Array(stride);
   for (let y = 0; y < h; y++) {
     const filter = raw[y * (stride + 1)], row = raw.subarray(y * (stride + 1) + 1, (y + 1) * (stride + 1));
@@ -119,10 +122,23 @@ export function pngPixels(b: Buffer): { w: number; h: number; rgb: Uint8Array } 
       rgb[o] = over(r);
       rgb[o + 1] = over(g);
       rgb[o + 2] = over(bl);
+      if (a === 0) clear[y * w + x] = 1;
     }
     [prev, cur] = [cur, prev];
   }
-  return { w, h, rgb };
+  return { w, h, rgb, clear };
+}
+
+// The pixels of a PNG or JPEG (the types the design check measures); other types have none.
+export function decodePixels(b: Buffer, type: string): Pixels | undefined {
+  if (type === 'png') return pngPixels(b);
+  if (type !== 'jpeg') return undefined;
+  try {
+    const { width, height, data } = jpegJs.decode(b, { useTArray: true, formatAsRGBA: false });
+    return { w: width, h: height, rgb: data, clear: new Uint8Array(width * height) };
+  } catch {
+    return undefined; // a JPEG this decoder cannot read is left to the judge
+  }
 }
 
 // Standard deviation of luminance (0..1), sampled across each row.
@@ -144,9 +160,9 @@ function pngLumaStd(b: Buffer): number | undefined {
   return Math.sqrt(Math.max(0, sq / n - mean * mean));
 }
 
-// Shrinks a PNG by a whole box factor until its long side fits `max`, and re-encodes it as 8-bit RGB.
-export function downscalePng(b: Buffer, max: number): Buffer | undefined {
-  const px = pngPixels(b);
+// Shrinks a PNG or JPEG by a whole box factor until its long side fits `max`, and re-encodes it as 8-bit RGB PNG.
+export function downscaleToPng(b: Buffer, type: string, max: number): Buffer | undefined {
+  const px = decodePixels(b, type);
   if (!px) return undefined;
   const k = Math.ceil(Math.max(px.w, px.h) / max);
   const w = Math.floor(px.w / k), h = Math.floor(px.h / k);

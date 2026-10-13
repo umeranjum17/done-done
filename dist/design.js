@@ -1,6 +1,5 @@
-import jpeg from 'jpeg-js';
 import { askJudge, backend, judgeable, prepare } from './judge.js';
-import { pngPixels } from './media.js';
+import { decodePixels } from './media.js';
 // The defect kinds, each its own question. Each asks for something the judge can see and measure, not whether it was
 // meant that way: a cheap model talks itself out of a judgment ("an intentional style", "the viewer's border"), not out of
 // a measurement. look is what the judge writes in its rationale before it answers.
@@ -34,27 +33,18 @@ const questions = (mock) => Object.fromEntries(Object.entries(KINDS).map(([kind,
 // is approved design and is not reported.
 // ponytail: one fixed threshold set; it misses a strip close to the main colour (a black bar on a near-black dark screen).
 // The judge's blank-strip question stays the second signal; tune STRIP when that shows up.
+// A fully transparent pixel is never part of a band or the main colour, so a transparent margin is not a strip.
 const STRIP = { min: 0.02, tolerance: 24, contrast: 64, content: 0.005, alike: 0.03 };
-function pixels(c) {
-    if (c.media.type === 'png')
-        return pngPixels(c.bytes);
-    try {
-        const { width, height, data } = jpeg.decode(c.bytes, { useTArray: true, formatAsRGBA: false });
-        return { w: width, h: height, rgb: data };
-    }
-    catch {
-        return undefined; // a JPEG this decoder cannot read is left to the judge
-    }
-}
 function bands(c) {
-    const p = c.media.status === 'ok' && judgeable(c) ? pixels(c) : undefined;
+    const p = c.media.status === 'ok' && judgeable(c) ? decodePixels(c.bytes, c.media.type) : undefined;
     if (!p)
         return undefined;
-    const { w, h, rgb } = p;
+    const { w, h, rgb, clear } = p;
     // The screen's main colour: its most common colour, at 16 levels per channel.
     const counts = new Uint32Array(4096);
     for (let i = 0; i < rgb.length; i += 3)
-        counts[((rgb[i] >> 4) << 8) | ((rgb[i + 1] >> 4) << 4) | (rgb[i + 2] >> 4)]++;
+        if (!clear[i / 3])
+            counts[((rgb[i] >> 4) << 8) | ((rgb[i + 1] >> 4) << 4) | (rgb[i + 2] >> 4)]++;
     const top = counts.indexOf(Math.max(...counts));
     const main = [(top >> 8) * 16 + 8, ((top >> 4) & 15) * 16 + 8, (top & 15) * 16 + 8];
     const out = [];
@@ -70,7 +60,7 @@ function bands(c) {
                 sum += rgb[at(0, s) + k];
             return Math.round(sum / span);
         });
-        const off = (i) => colour.some((v, k) => Math.abs(rgb[i + k] - v) > STRIP.tolerance);
+        const off = (i) => clear[i / 3] === 1 || colour.some((v, k) => Math.abs(rgb[i + k] - v) > STRIP.tolerance);
         let deep = 0;
         let stray = 0;
         for (; deep < depth / 2; deep++) {

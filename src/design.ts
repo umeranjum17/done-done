@@ -1,9 +1,8 @@
 import type { Question } from '@byokit/decide';
-import jpeg from 'jpeg-js';
 import type { JudgeChoice } from './agents.js';
 import type { Config } from './config.js';
 import { askJudge, backend, type Capture, type Judge, judgeable, prepare } from './judge.js';
-import { pngPixels } from './media.js';
+import { decodePixels } from './media.js';
 
 // The design check: one judge request per screen, alone or next to its approved mock, with one question per defect
 // kind. It goes through the same BYOKit routes and judge choice as the relevance judge, so the judge is never the author.
@@ -49,27 +48,18 @@ const questions = (mock: boolean): Record<string, Question> =>
 // is approved design and is not reported.
 // ponytail: one fixed threshold set; it misses a strip close to the main colour (a black bar on a near-black dark screen).
 // The judge's blank-strip question stays the second signal; tune STRIP when that shows up.
+// A fully transparent pixel is never part of a band or the main colour, so a transparent margin is not a strip.
 const STRIP = { min: 0.02, tolerance: 24, contrast: 64, content: 0.005, alike: 0.03 };
 
 type Band = { edge: 'left' | 'right' | 'top' | 'bottom'; colour: number[]; deep: number; share: number };
 
-function pixels(c: Capture): { w: number; h: number; rgb: Uint8Array } | undefined {
-  if (c.media.type === 'png') return pngPixels(c.bytes);
-  try {
-    const { width, height, data } = jpeg.decode(c.bytes, { useTArray: true, formatAsRGBA: false });
-    return { w: width, h: height, rgb: data };
-  } catch {
-    return undefined; // a JPEG this decoder cannot read is left to the judge
-  }
-}
-
 function bands(c: Capture): Band[] | undefined {
-  const p = c.media.status === 'ok' && judgeable(c) ? pixels(c) : undefined;
+  const p = c.media.status === 'ok' && judgeable(c) ? decodePixels(c.bytes, c.media.type) : undefined;
   if (!p) return undefined;
-  const { w, h, rgb } = p;
+  const { w, h, rgb, clear } = p;
   // The screen's main colour: its most common colour, at 16 levels per channel.
   const counts = new Uint32Array(4096);
-  for (let i = 0; i < rgb.length; i += 3) counts[((rgb[i] >> 4) << 8) | ((rgb[i + 1] >> 4) << 4) | (rgb[i + 2] >> 4)]++;
+  for (let i = 0; i < rgb.length; i += 3) if (!clear[i / 3]) counts[((rgb[i] >> 4) << 8) | ((rgb[i + 1] >> 4) << 4) | (rgb[i + 2] >> 4)]++;
   const top = counts.indexOf(Math.max(...counts));
   const main = [(top >> 8) * 16 + 8, ((top >> 4) & 15) * 16 + 8, (top & 15) * 16 + 8];
   const out: Band[] = [];
@@ -84,7 +74,7 @@ function bands(c: Capture): Band[] | undefined {
       for (let s = 0; s < span; s++) sum += rgb[at(0, s) + k];
       return Math.round(sum / span);
     });
-    const off = (i: number) => colour.some((v, k) => Math.abs(rgb[i + k] - v) > STRIP.tolerance);
+    const off = (i: number) => clear[i / 3] === 1 || colour.some((v, k) => Math.abs(rgb[i + k] - v) > STRIP.tolerance);
     let deep = 0;
     let stray = 0;
     for (; deep < depth / 2; deep++) {

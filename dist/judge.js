@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { delimiter, isAbsolute, join } from 'node:path';
 import { askAgent, claudeBin } from './agents.js';
 import { home, UsageError } from './config.js';
-import { downscalePng } from './media.js';
+import { downscaleToPng } from './media.js';
 const MAX_SIDE = 1280; // long edge sent to the model, in pixels
 const TIMEOUT_MS = 120_000; // one model request per capture, no retry
 const MAX_CALLS = 10; // model requests per check; later captures are unsure
@@ -143,8 +143,8 @@ export function prepare(c) {
     const mime = `image/${c.media.type}`;
     if (Math.max(c.media.w ?? 0, c.media.h ?? 0) <= MAX_SIDE)
         return { mime, bytes: c.bytes };
-    const small = c.media.type === 'png' ? downscalePng(c.bytes, MAX_SIDE) : undefined;
-    return small ? { mime: 'image/png', bytes: small } : `${c.media.type} is ${c.media.w}x${c.media.h} and cannot be downscaled (only 8-bit PNGs that are not extremely long are), so capture a PNG or an image at most ${MAX_SIDE}px on its long side`;
+    const small = downscaleToPng(c.bytes, c.media.type, MAX_SIDE);
+    return small ? { mime: 'image/png', bytes: small } : `${c.media.type} is ${c.media.w}x${c.media.h} and cannot be downscaled (only 8-bit PNG and JPEG that are not extremely long are), so capture a PNG or JPEG at most ${MAX_SIDE}px on its long side`;
 }
 // One request about the named images: each question's answer after the floors, or why the judge did not answer.
 // A signed-out or non-subscription claude-code sign-in is a usage error, since no later request can do better.

@@ -6,7 +6,7 @@ import { delimiter, isAbsolute, join } from 'node:path';
 import type { Backend, Question } from '@byokit/decide';
 import { askAgent, claudeBin, type JudgeChoice } from './agents.js';
 import { type Config, home, UsageError } from './config.js';
-import { downscalePng, type Verdict } from './media.js';
+import { downscaleToPng, type Verdict } from './media.js';
 
 // The relevance judge: one question about one downscaled capture and the claim's outcome line, asked through a
 // BYOKit decide backend on the user's own plan: the claude-code route, or the answerer backend over another agent's CLI.
@@ -146,8 +146,8 @@ export async function backend(cfg: Config, choice: JudgeChoice, record = () => '
 export function prepare(c: Capture): { mime: string; bytes: Buffer } | string {
   const mime = `image/${c.media.type}`;
   if (Math.max(c.media.w ?? 0, c.media.h ?? 0) <= MAX_SIDE) return { mime, bytes: c.bytes };
-  const small = c.media.type === 'png' ? downscalePng(c.bytes, MAX_SIDE) : undefined;
-  return small ? { mime: 'image/png', bytes: small } : `${c.media.type} is ${c.media.w}x${c.media.h} and cannot be downscaled (only 8-bit PNGs that are not extremely long are), so capture a PNG or an image at most ${MAX_SIDE}px on its long side`;
+  const small = downscaleToPng(c.bytes, c.media.type, MAX_SIDE);
+  return small ? { mime: 'image/png', bytes: small } : `${c.media.type} is ${c.media.w}x${c.media.h} and cannot be downscaled (only 8-bit PNG and JPEG that are not extremely long are), so capture a PNG or JPEG at most ${MAX_SIDE}px on its long side`;
 }
 
 // One request about the named images: each question's answer after the floors, or why the judge did not answer.

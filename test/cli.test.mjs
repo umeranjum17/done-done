@@ -8,6 +8,7 @@ import { basename, dirname, join } from 'node:path';
 import { after, test } from 'node:test';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { crc32, deflateSync } from 'node:zlib';
+import jpeg from 'jpeg-js';
 import { parse } from 'yaml';
 import { decode } from '@toon-format/toon';
 
@@ -2045,18 +2046,39 @@ test('design does not report a strip its approved mock has too, but reports one 
   assert.deepEqual([toon(unmeasurable).screens[0].verdict, toon(unmeasurable).screens[0].reason], ['unsure', 'approved mock could not be measured; give a PNG or JPEG mock']);
 });
 
-test('design does not read a transparent margin as a black strip', () => {
+test('design does not read a transparent margin as a strip, on a dark screen either', () => {
   const t = setup();
   mkdirSync(t.env.DONE_DONE_HOME, { recursive: true });
   writeFileSync(join(t.env.DONE_DONE_HOME, 'config.yaml'), 'agent: claude\n');
-  // An RGBA capture whose left tenth is fully transparent with stored RGB of black, as a window capture's shadow margin is.
-  writeFileSync(join(t.dir, 'margin.png'), png(240, 160, (x) => (x < 24 ? [0, 0, 0, 0] : [245, 240, 230, 255]), 6));
+  // An RGBA capture on a near-black screen whose left tenth is fully transparent, as a window capture's shadow margin is.
+  writeFileSync(join(t.dir, 'margin.png'), png(240, 160, (x) => (x < 24 ? [0, 0, 0, 0] : [16, 18, 20, 255]), 6));
   const clean = JSON.stringify(Object.fromEntries(['aspect', 'clipped-text', 'overlap', 'off-screen', 'blank-strip', 'layout'].map((k) => [k, { probabilities: { defect: 0.02, none: 0.98 }, rationale: 'Looked.', personReason: 'Nothing of this kind.' }])));
   const s = stubAgents(t.env, clean);
   symlinkSync(process.execPath, join(s.bin, 'node'));
   const r = spawnSync(process.execPath, [CLI, 'design', '--full', 'margin.png'], { cwd: t.dir, env: s.env, encoding: 'utf8' });
   assert.equal(r.status, 0, r.stdout + r.stderr);
-  assert.deepEqual(toon({ out: r.stdout + r.stderr }).screens[0].defects, [], 'the margin is transparent, not a black band');
+  assert.deepEqual(toon({ out: r.stdout + r.stderr }).screens[0].defects, [], 'the margin is transparent, not a band');
+});
+
+test('design judges a JPEG longer than the judge size, downscaled to a PNG', () => {
+  const t = setup();
+  mkdirSync(t.env.DONE_DONE_HOME, { recursive: true });
+  writeFileSync(join(t.env.DONE_DONE_HOME, 'config.yaml'), 'agent: claude\n');
+  const data = Buffer.alloc(1300 * 90 * 4);
+  for (let i = 0; i < data.length; i += 4) {
+    const p = i / 4, x = p % 1300, y = Math.floor(p / 1300);
+    data.set([(x * 7) % 256, (y * 11) % 256, (x + y) % 256, 255], i);
+  }
+  writeFileSync(join(t.dir, 'long.jpg'), jpeg.encode({ width: 1300, height: 90, data }, 90).data);
+  const clean = JSON.stringify(Object.fromEntries(['aspect', 'clipped-text', 'overlap', 'off-screen', 'blank-strip', 'layout'].map((k) => [k, { probabilities: { defect: 0.02, none: 0.98 }, rationale: 'Looked.', personReason: 'Nothing of this kind.' }])));
+  const s = stubAgents(t.env, clean);
+  symlinkSync(process.execPath, join(s.bin, 'node'));
+  const r = spawnSync(process.execPath, [CLI, 'design', '--full', 'long.jpg'], { cwd: t.dir, env: s.env, encoding: 'utf8' });
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  assert.equal(toon({ out: r.stdout + r.stderr }).screens[0].verdict, 'pass');
+  const calls = s.calls();
+  assert.equal(calls.length, 1, 'one request for the screen');
+  assert.deepEqual(calls[0].attached, ['PNG'], 'the judge is sent the downscaled screen');
 });
 
 // doctor: read-only health check. Required items (git, config, evidence root) gate

@@ -106,7 +106,7 @@ done-done run review
 `run` does five things:
 - records HEAD, its tree, and whether tracked files were dirty;
 - creates a new folder for the run, `<root>/<run-id>/`. The run id is the time, the commit and a random suffix, so two runs never share one;
-- runs the command, with `${RUN_ID}` substituted, `DONE_DONE_RUN_ID` exported, and `DONE_DONE_EVIDENCE_ROOT` set to the run's folder (once per cell when a `matrix` block is set, see [Capture matrix](#capture-matrix)). The command's own stdout goes to stderr, so stdout carries only the result document;
+- runs the command, with `${RUN_ID}` substituted, `DONE_DONE_RUN_ID` exported, and `DONE_DONE_EVIDENCE_ROOT` set to the run's folder. The command's own stdout goes to stderr, so stdout carries only the result document;
 - hashes every file in the run's folder. Every checkout of a repo shares the evidence root, so a run records only its own folder and never another run's files;
 - writes a run record to `<root>/.done-done/runs/<run-id>.json`.
 
@@ -139,7 +139,7 @@ matrix:
 
 Each axis is optional; done-done expands the set axes into cells and drops skipped ones. Theme and form names use letters, digits, `-` and `_` (a dot would blur the capture names); widths are CSS pixels. A skip entry is a partial cell (any of `theme`, `width`, `form`) plus a `reason`: it drops every cell agreeing on each axis it names; a skip that matches no cell, or a matrix that skips every cell, is a config error. With no `matrix` block, journeys run once, as before.
 
-Each journey runs once per required cell, with `DONE_DONE_THEME`, `DONE_DONE_WIDTH`, `DONE_DONE_FORM` and `DONE_DONE_CELL` (the capture name suffix: `dark.390w.phone` for that cell) set. The recipe sets the app's theme and width from those values - done-done never knows how - and names each capture with its suffix. An agent drive instead names every cell and suffix in its prompt. The run record and `status` carry the manifest: every required cell with its captures, every skipped cell with its reason. Verify's check, `done-done check` and `receipt` all fail naming the missing cell when a non-skipped cell has no capture, so every proof of HEAD covers every cell: captured or skipped with a reason, never silently missing.
+Each journey runs once per required cell, with `DONE_DONE_THEME`, `DONE_DONE_WIDTH`, `DONE_DONE_FORM` and `DONE_DONE_CELL` (the capture name suffix: `dark.390w.phone` for that cell) set. The recipe sets the app's theme and width from those values - done-done never knows how - and names each capture with its suffix. An agent drive instead names every cell and suffix in its prompt. The run record and `status` carry the manifest: every required cell with its captures, every skipped cell with its reason. Verify's check, `done-done check` and `receipt` all fail naming the missing cell when a non-skipped cell has no capture, so every proof of HEAD must cover every non-skipped cell: captured or skipped with a reason, never silently missing.
 
 ### Check a claim
 

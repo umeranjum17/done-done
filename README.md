@@ -192,7 +192,7 @@ Another fleet works the same way: add the include text to whatever your workers 
 
 ## What's next
 
-So far: `init`, `doctor`, `run`, `check`, `receipt`, the opt-in screenshot judge and the opt-in session hooks for Claude Code, Codex, opencode, Gemini CLI and pi. Coming next: help writing the proof steps for your app.
+So far: `init`, `doctor`, `run`, `check`, `receipt`, the opt-in screenshot judge, the `design` visual check and the opt-in session hooks for Claude Code, Codex, opencode, Gemini CLI and pi. Coming next: help writing the proof steps for your app.
 
 ## Develop
 

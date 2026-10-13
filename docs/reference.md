@@ -208,7 +208,7 @@ done-done design shots/home.png shots/home.dark.png shots/home.small.png shots/h
 done-done design shots/home.png --mock shots/home.png=design/home.png
 ```
 
-- **One request per screen, the judge's route.** Each screen goes to the judge that `--judge` uses (`judge.route` and `judge.model`, or under `auto` the first installed agent that can judge and is not the author; opencode's cheap default is `opencode-go/muse-spark-1.3-contributor`), as one fresh, tools-off call through BYOKit with the screen and nothing else: no paths, no repo. The judge is never the author's own agent and model unless `judge.allow_same: true`. It needs no `judge.enabled`: running `design` is the opt-in. Each answerer call writes its 0600 call record to `$DONE_DONE_HOME/agents/` (`design-<stamp>-<n>.agent.json`), never the prompt.
+- **One request per screen, the judge's route.** Each screen goes to the judge that `--judge` uses (`judge.route` and `judge.model`, or under `auto` the first installed agent that can judge and is not the author, at its cheap model from [Agents](#agents)), as one fresh, tools-off call through BYOKit with the screen and nothing else: no paths, no repo. The judge is never the author's own agent and model unless `judge.allow_same: true`. It needs no `judge.enabled`: running `design` is the opt-in. Each answerer call writes its 0600 call record to `$DONE_DONE_HOME/agents/` (`design-<stamp>-<n>.agent.json`), never the prompt.
 - **The defect kinds.** The judge answers one question per kind, and a screen fails on any kind it names:
 
   | Kind | Fails when |

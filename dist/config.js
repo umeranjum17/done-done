@@ -14,10 +14,12 @@ export class UsageError extends Error {
 export const AGENTS = ['claude', 'codex', 'opencode', 'pi', 'gemini'];
 // The agents whose CLI can read an attached image, so they judge through the answerer route; claude judges through claude-code.
 export const ANSWERER_JUDGES = ['opencode'];
-// The cost guard is this table: a default model is always the agent's cheap one, never a flagship,
+// Or acp:<target>, any agent the user's acpx bridge can start; the target is one argv word, so it never reads as a flag.
+const isAgent = (v) => AGENTS.includes(v) || (typeof v === 'string' && /^acp:[A-Za-z0-9][\w.-]*$/.test(v));
+// The cost guard is this table: a default model for an agent here is always its cheap one, never a flagship,
 // whatever the vendor; any other model runs only when the user names it. gemini's is the CLI's own
-// `flash-lite` alias (its cli-reference.md: the fastest model for simple tasks). pi has no default here:
-// it runs its own configured model unless agent_config.pi.model names one.
+// `flash-lite` alias (its cli-reference.md: the fastest model for simple tasks). pi and acp:<target> have no public
+// cheap alias, so they run their own configured default model, and agent_config.<agent>.model caps their cost.
 export const CHEAP_MODELS = { claude: 'claude-haiku-5-5', opencode: 'opencode-go/muse-spark-1.3-contributor', gemini: 'flash-lite' };
 // Where each key may be set. Global-only keys describe the machine; repo-only keys describe the project; `any` may be in either.
 const KEYS = {
@@ -85,12 +87,12 @@ function apply(target, text, file, scope) {
         const ok = spec.type === 'string' ? typeof value === 'string'
             : spec.type === 'boolean' ? typeof value === 'boolean'
                 : spec.type === 'string[]' ? Array.isArray(value) && value.every((v) => typeof v === 'string')
-                    : spec.type === 'agent' ? value === 'auto' || [value].flat().every((v) => AGENTS.includes(v)) && [value].flat().length > 0
+                    : spec.type === 'agent' ? value === 'auto' || [value].flat().every(isAgent) && [value].flat().length > 0
                         : spec.type === 'route' ? typeof value === 'string' && (['', 'auto', 'claude-code'].includes(value) || ANSWERER_JUDGES.some((a) => value === `answerer:${a}`))
                             : spec.type === 'claude_code' ? !!value && typeof value === 'object' && !Array.isArray(value) && Object.entries(value).every(([k, v]) => ['bin', 'config_dir'].includes(k) && typeof v === 'string')
-                                : spec.type === 'agent_config' ? !!value && typeof value === 'object' && Object.entries(value).every(([a, c]) => AGENTS.includes(a) && !!c && typeof c === 'object' && Object.entries(c).every(([k, m]) => k === 'model' && typeof m === 'string'))
+                                : spec.type === 'agent_config' ? !!value && typeof value === 'object' && Object.entries(value).every(([a, c]) => isAgent(a) && !!c && typeof c === 'object' && Object.entries(c).every(([k, m]) => k === 'model' && typeof m === 'string'))
                                     : !!value && typeof value === 'object' && Object.values(value).every((j) => j && typeof j.command === 'string');
-        const want = { journeys: 'a map of name: {command: <string>}', agent: `auto, or one or a list of ${AGENTS.join(', ')}`, agent_config: `a map of <agent>: {model: <string>} for ${AGENTS.join(', ')}`, route: `auto, claude-code (for claude), or answerer:<agent> for one of ${ANSWERER_JUDGES.join(', ')}`, claude_code: 'a map with bin and config_dir, each a string' };
+        const want = { journeys: 'a map of name: {command: <string>}', agent: `auto, or one or a list of ${AGENTS.join(', ')}, acp:<target>`, agent_config: `a map of <agent>: {model: <string>} for ${AGENTS.join(', ')}, acp:<target>`, route: `auto, claude-code (for claude), or answerer:<agent> for one of ${ANSWERER_JUDGES.join(', ')}`, claude_code: 'a map with bin and config_dir, each a string' };
         if (!ok)
             throw new UsageError(`${file}: ${key} must be ${want[spec.type] ?? `a ${spec.type}`}`);
         if (key === 'checks.not_proven' && value !== 'inconclusive' && value !== 'allow')

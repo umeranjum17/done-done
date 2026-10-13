@@ -716,6 +716,13 @@ test('init --agent claude adds a SessionStart hook that shows the bare state, me
   assert.equal(broken.code, 2, broken.out);
   assert.match(toon(broken).help[0], /Fix \.claude\/settings\.json/);
   assert.equal(readFileSync(join(two.repo, '.claude', 'settings.json'), 'utf8'), '{ nope');
+  // --agent with --journey records the journey and still adds the hook.
+  const three = bareRepo();
+  const both = three.dd('init', '--journey', 'smoke', '--agent', 'claude', '--', 'echo hi');
+  assert.equal(both.code, 0, both.out);
+  assert.deepEqual([toon(both).journey, toon(both).claude_hook], ['smoke', 'added to .claude/settings.json']);
+  assert.match(toon(both).help.join('\n'), /Commit \.claude\/settings\.json/);
+  assert.deepEqual(JSON.parse(readFileSync(join(three.repo, '.claude', 'settings.json'), 'utf8')).hooks.SessionStart, hooks);
 });
 
 test('init --agent codex adds a SessionStart hook that shows the bare state, merges, and never duplicates', () => {
@@ -939,6 +946,57 @@ test('init --agent opencode refuses to overwrite a plugin file with other conten
   assert.equal(r.code, 2, r.out);
   assert.match(toon(r).error, /\.opencode\/plugins\/done-done\.js already exists/);
   assert.equal(readFileSync(plugin, 'utf8'), 'export const Mine = async () => ({});\n', 'the existing file is kept');
+});
+
+test('init --agent gemini and --agent pi give the model the bare state at the start of each session', async () => {
+  const { dir, repo, env, dd } = bareRepo();
+  const bin = join(dir, 'bin');
+  mkdirSync(bin);
+  writeFileSync(join(bin, 'done-done'), `#!/bin/sh\nexec ${JSON.stringify(process.execPath)} ${JSON.stringify(CLI)} "$@"\n`, { mode: 0o755 });
+  const g = dd('init', '--agent', 'gemini');
+  assert.equal(g.code, 0, g.out);
+  assert.equal(toon(g).gemini_hook, 'added to .gemini/settings.json');
+  assert.match(toon(g).help.join('\n'), /Commit \.gemini\/settings\.json/);
+  const settings = join(repo, '.gemini', 'settings.json');
+  const [{ hooks: [{ type, command }] }] = JSON.parse(readFileSync(settings, 'utf8')).hooks.SessionStart;
+  assert.equal(type, 'command');
+  // Run the hook as Gemini CLI does: through a shell from the project dir, the event JSON on stdin; it parses stdout as JSON.
+  const hook = (path) => spawnSync('/bin/sh', ['-c', command], { cwd: repo, env: { ...env, PATH: path }, encoding: 'utf8', input: '{"hook_event_name":"SessionStart","source":"startup"}' });
+  const on = hook(`${bin}:${env.PATH}`);
+  assert.equal(on.status, 0, on.stderr);
+  assert.deepEqual(JSON.parse(on.stdout), { hookSpecificOutput: { additionalContext: dd().out.trim() } }, 'the bare state goes to the model as additionalContext');
+  const off = hook(join(dir, 'empty'));
+  assert.deepEqual([off.status, off.stdout, off.stderr], [0, '', ''], 'without done-done on PATH the hook is silent and exits 0');
+  assert.equal(toon(dd('init', '--agent', 'gemini')).gemini_hook, 'unchanged');
+  const p = dd('init', '--agent', 'pi');
+  assert.equal(p.code, 0, p.out);
+  assert.equal(toon(p).pi_extension, 'added to .pi/extensions/done-done.js');
+  assert.match(toon(p).help.join('\n'), /Commit \.pi\/extensions\/done-done\.js/);
+  assert.equal(toon(dd('init', '--agent', 'pi')).pi_extension, 'unchanged');
+  // Drive the written extension as pi does: its default export registers handlers; the first prompt of a session gains the state.
+  const prevPath = process.env.PATH;
+  const prevHome = process.env.DONE_DONE_HOME;
+  process.env.PATH = `${bin}:${prevPath}`;
+  process.env.DONE_DONE_HOME = env.DONE_DONE_HOME;
+  try {
+    const { default: register } = await import(pathToFileURL(join(repo, '.pi', 'extensions', 'done-done.js')).href);
+    const handlers = {};
+    register({ on: (event, handler) => (handlers[event] = handler) });
+    const ctx = { cwd: repo };
+    await handlers.session_start({ type: 'session_start' }, ctx);
+    const first = await handlers.before_agent_start({ type: 'before_agent_start', prompt: 'hi' }, ctx);
+    assert.deepEqual(first, { message: { customType: 'done-done', content: dd().out.trim(), display: true } }, 'the first prompt gains the bare state as a message');
+    assert.equal(await handlers.before_agent_start({ type: 'before_agent_start', prompt: 'again' }, ctx), undefined, 'later prompts in the session gain nothing');
+    await handlers.session_start({ type: 'session_start' }, ctx);
+    assert.equal((await handlers.before_agent_start({ type: 'before_agent_start', prompt: 'new' }, ctx)).message.content, dd().out.trim(), 'a new session gains it again');
+    process.env.PATH = join(dir, 'empty');
+    await handlers.session_start({ type: 'session_start' }, ctx);
+    assert.equal(await handlers.before_agent_start({ type: 'before_agent_start', prompt: 'hi' }, ctx), undefined, 'without done-done on PATH it adds nothing and never throws');
+  } finally {
+    process.env.PATH = prevPath;
+    if (prevHome === undefined) delete process.env.DONE_DONE_HOME;
+    else process.env.DONE_DONE_HOME = prevHome;
+  }
 });
 
 // Fixture repos of two shapes for init's verify-skill scaffold: a web app and a CLI tool.
@@ -2231,6 +2289,72 @@ test('the agent comes from config (a fallback list moves past missing agents), a
   const broken = toon(doctorIn(repo, s.env, 'doctor'));
   assert.equal(broken.checks.find((x) => x.check === 'agent').status, 'missing');
   assert.match(broken.checks.find((x) => x.check === 'agent').detail, /unknown key judge\.modle/, 'a broken global config is named, never replaced by built-in defaults');
+});
+
+test('an acp:<target> agent runs through acpx, and doctor names acpx with its install step when it does not start', () => {
+  const { repo, env } = setup();
+  const s = stubAgents(env);
+  mkdirSync(env.DONE_DONE_HOME, { recursive: true });
+  const yaml = readFileSync(join(repo, '.done-done.yaml'), 'utf8');
+  const log = join(s.bin, 'acpx.jsonl');
+  // A stub acpx: --version exits with `version`; exec logs how it was started and prints `events` as ACP JSON-RPC lines.
+  const acpx = (version, events, exit = 0) => writeFileSync(join(s.bin, 'acpx'), `#!${process.execPath}
+const { appendFileSync, readFileSync } = require('node:fs');
+const argv = process.argv.slice(2);
+if (argv[0] === '--version') process.exit(${version});
+appendFileSync(${JSON.stringify(log)}, JSON.stringify({ argv, stdin: readFileSync(0, 'utf8'), cwd: process.cwd() }) + '\\n');
+for (const e of ${JSON.stringify(events)}) console.log(JSON.stringify(e));
+process.exitCode = ${exit};
+`, { mode: 0o755 });
+  const chunk = (text) => ({ jsonrpc: '2.0', method: 'session/update', params: { sessionId: 's1', update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text } } } });
+  const calls = () => readFileSync(log, 'utf8').trim().split('\n').map((l) => JSON.parse(l));
+  const doctor = (extra, ...args) => {
+    writeFileSync(join(repo, '.done-done.yaml'), yaml + extra);
+    const r = doctorIn(repo, s.env, 'doctor', ...args);
+    return { ...r, by: (n) => toon(r).checks.find((c) => c.check === n) };
+  };
+  // The answer arrives in message chunks after narration with braces, around a refused side request, fenced as models often do.
+  acpx(0, [{ jsonrpc: '2.0', id: 0, result: {} }, chunk('I will check {config} and answer {}.\n'), chunk('Notes 🚀 {"note": "a longer narrated object than the answer", "a": 1, "b": 2, "c": 3}. '), chunk('I replaced the opening { with (. '), chunk('```json\n{"ok":'),{ jsonrpc: '2.0', id: 3, error: { code: -32601, message: 'Method not found' } }, chunk('true}\n```'), chunk(' For example {"note": "a narrated object without the required key"}.')]);
+  const ok = doctor('agent: acp:gemini\n', '--probe');
+  assert.equal(ok.code, 0, ok.out);
+  assert.match(ok.by('agent').detail, /^acp:gemini \(its own default model; set agent_config\.acp:gemini\.model to choose one; from config\) at .*acpx$/);
+  assert.match(ok.by('probe').detail, /^acp:gemini \(its own default model; set agent_config\.acp:gemini\.model to choose one\) answered the schema question/);
+  const [call] = calls();
+  assert.notEqual(call.cwd, repo, 'a tool-less probe runs in a scratch dir, never the repo');
+  assert.deepEqual(call.argv, ['--cwd', call.cwd, '--format', 'json', '--json-strict', '--deny-all', '--non-interactive-permissions', 'deny', 'gemini', 'exec', '--file', '-'], 'every tool is denied, and a permission prompt is denied too');
+  assert.match(call.stdin, /connectivity probe[\s\S]*JSON schema[\s\S]*"required":\["ok"\]/, 'the prompt and the schema go on stdin');
+  assert.ok(!call.argv.some((a) => a.includes('connectivity probe')), 'never in argv');
+  const rec = JSON.parse(readFileSync(ok.by('probe').detail.match(/record (\S+)$/)[1], 'utf8'));
+  assert.deepEqual([rec.agent, rec.model, rec.ok, rec.answer], ['acp:gemini', '', true, { ok: true }]);
+  // claude through acpx is still claude: auto judges it with another agent, and the claude-code route is not independent of it.
+  const auto = doctor('agent: acp:claude-code\n').by('judge_choice');
+  assert.equal(auto.status, 'ok', auto.detail);
+  assert.match(auto.detail, /^answerer:opencode \(.*\) judges the author acp:claude-code \(model none\): a different agent from the author/);
+  writeFileSync(join(env.DONE_DONE_HOME, 'config.yaml'), 'judge:\n  route: claude-code\n');
+  assert.equal(doctor('agent: acp:claude\n').by('judge_choice').status, 'missing');
+  assert.equal(doctor('agent: acp:claude-code\n').by('judge_choice').status, 'missing');
+  // A model named in the global config goes to acpx ahead of the target.
+  writeFileSync(join(env.DONE_DONE_HOME, 'config.yaml'), 'agent_config:\n  acp:gemini: { model: flash-lite }\n');
+  assert.equal(doctor('agent: acp:gemini\n', '--probe').code, 0);
+  assert.deepEqual(calls()[1].argv.slice(8, 11), ['--model', 'flash-lite', 'gemini']);
+  // An error with no answer fails the probe with the agent's own words.
+  acpx(0, [{ jsonrpc: '2.0', id: 1, error: { code: -32000, message: 'Authentication required' } }], 1);
+  const failed = doctor('agent: acp:gemini\n', '--probe');
+  assert.equal(failed.code, 2, failed.out);
+  assert.match(failed.by('probe').detail, /acp:gemini did not answer: acp:gemini exited 1: Authentication required/);
+  // acpx on PATH that does not start (a version-manager shim with no version set) is not installed: a list moves on, and alone it is missing with the install step.
+  acpx(1, []);
+  assert.match(doctor('agent: [acp:gemini, claude]\n').by('agent').detail, /^claude \(model claude-haiku-5-5; from config\) at /);
+  const shim = doctor('agent: acp:gemini\n', '--probe');
+  assert.equal(shim.code, 2, shim.out);
+  assert.match(shim.by('agent').detail, /^acp:gemini \(model flash-lite; from config\) needs acpx, the ACP bridge, which is not startable \(.*acpx does not run\)$/);
+  assert.match(shim.by('agent').fix, /npm install -g acpx/);
+  assert.deepEqual([shim.by('probe').status, shim.by('probe').fix], ['missing', shim.by('agent').fix], 'a probe that never ran points at the install step');
+  rmSync(join(s.bin, 'acpx'));
+  assert.match(doctor('agent: acp:gemini\n').by('agent').detail, /which is not startable \(not on PATH\)$/);
+  assert.equal(calls().length, 3, 'acpx is started only by --probe, beyond --version');
+  // A target is one plain word, never a flag.
+  assert.match(doctor('agent: acp:--help\n').out, /agent must be auto, or one or a list of claude, codex, opencode, pi, gemini, acp:<target>/);
 });
 
 test('history lists newest first and logs tails the step log', () => {

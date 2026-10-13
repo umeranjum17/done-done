@@ -474,7 +474,7 @@ const tryText = (p) => {
         return '';
     }
 };
-// The judge on a fix path (auto_fix) is never the fixer's own agent and model, even when judge.allow_same accepts it for a plain verify.
+// The judge on a fix path (auto_fix) is never the fixer's own agent, at any model, even when judge.allow_same accepts it for a plain verify.
 export function refuseSameSession(choice) {
     if (choice.independence !== 'agent')
         throw new UsageError(`judge: the judge ${choice.agent} (model ${choice.model}) is the fixer's own agent (${choice.author.agent}) at any model, and the judge is never the agent that did the work; judge.allow_same does not apply to auto_fix`, 'Ask the user for another judge agent and save it: done-done init --judge <agent> --judge-model <model>');

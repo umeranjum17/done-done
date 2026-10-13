@@ -45,10 +45,13 @@ const questions = (mock: boolean): Record<string, Question> =>
 // colour), and at least STRIP.contrast apart from the screen's main colour on some channel. The band grows inward while
 // at least half of each line is its colour, so a nav rail or a bar holds its icons or title and counts as content; a
 // band that reaches halfway in is the screen's own background (a whole uniform screen is the blank-frame check's).
-// ponytail: one fixed threshold set; it misses a strip close to the main colour (a black bar on a near-black dark screen)
-// and fails a deliberately empty side panel. The judge's blank-strip question stays the second signal; tune STRIP, or
-// let a mock exempt a band, when that shows up.
-const STRIP = { min: 0.02, tolerance: 24, contrast: 64, content: 0.005 };
+// A band the mock has too (same edge, depth within STRIP.alike of that side, colour within STRIP.contrast per channel)
+// is approved design and is not reported.
+// ponytail: one fixed threshold set; it misses a strip close to the main colour (a black bar on a near-black dark screen).
+// The judge's blank-strip question stays the second signal; tune STRIP when that shows up.
+const STRIP = { min: 0.02, tolerance: 24, contrast: 64, content: 0.005, alike: 0.03 };
+
+type Band = { edge: 'left' | 'right' | 'top' | 'bottom'; colour: number[]; deep: number; share: number };
 
 function pixels(c: Capture): { w: number; h: number; rgb: Uint8Array } | undefined {
   if (c.media.type === 'png') return pngPixels(c.bytes);
@@ -60,7 +63,7 @@ function pixels(c: Capture): { w: number; h: number; rgb: Uint8Array } | undefin
   }
 }
 
-export function edgeStrips(c: Capture): Defect[] {
+function bands(c: Capture): Band[] {
   const p = c.media.status === 'ok' && judgeable(c) ? pixels(c) : undefined;
   if (!p) return [];
   const { w, h, rgb } = p;
@@ -69,7 +72,7 @@ export function edgeStrips(c: Capture): Defect[] {
   for (let i = 0; i < rgb.length; i += 3) counts[((rgb[i] >> 4) << 8) | ((rgb[i + 1] >> 4) << 4) | (rgb[i + 2] >> 4)]++;
   const top = counts.indexOf(Math.max(...counts));
   const main = [(top >> 8) * 16 + 8, ((top >> 4) & 15) * 16 + 8, (top & 15) * 16 + 8];
-  const out: Defect[] = [];
+  const out: Band[] = [];
   for (const edge of ['left', 'right', 'top', 'bottom'] as const) {
     const side = edge === 'left' || edge === 'right';
     const depth = side ? w : h; // how far in a band can reach
@@ -92,10 +95,22 @@ export function edgeStrips(c: Capture): Defect[] {
     }
     if (deep >= depth / 2 || deep < depth * STRIP.min || stray > deep * span * STRIP.content) continue;
     if (colour.every((v, k) => Math.abs(v - main[k]) < STRIP.contrast)) continue;
-    const hex = `#${colour.map((v) => v.toString(16).padStart(2, '0')).join('')}`;
-    out.push({ kind: 'blank-strip', where: `${edge} edge: a plain ${hex} band ${deep} px deep (${Math.round((100 * deep) / depth)}% of the ${side ? 'width' : 'height'}), full ${side ? 'height' : 'width'}, with nothing in it` });
+    out.push({ edge, colour, deep, share: deep / depth });
   }
   return out;
+}
+
+// The screen's blank strips, less any band its approved mock has too.
+export function blankStrips(s: Screen): Defect[] {
+  const approved = s.mock ? bands(s.mock) : [];
+  const alike = (b: Band, m: Band) => b.edge === m.edge && Math.abs(b.share - m.share) <= STRIP.alike && b.colour.every((v, k) => Math.abs(v - m.colour[k]) < STRIP.contrast);
+  return bands(s)
+    .filter((b) => !approved.some((m) => alike(b, m)))
+    .map(({ edge, colour, deep, share }) => {
+      const side = edge === 'left' || edge === 'right';
+      const hex = `#${colour.map((v) => v.toString(16).padStart(2, '0')).join('')}`;
+      return { kind: 'blank-strip', where: `${edge} edge: a plain ${hex} band ${deep} px deep (${Math.round(100 * share)}% of the ${side ? 'width' : 'height'}), full ${side ? 'height' : 'width'}, with nothing in it` };
+    });
 }
 
 // Why a file cannot be judged, or its image as sent.
@@ -120,7 +135,7 @@ export async function design(cfg: Config, choice: JudgeChoice, screens: Screen[]
       continue;
     }
     // A measured strip fails the screen even when the judge cannot be asked or does not answer.
-    const defects = edgeStrips(s);
+    const defects = blankStrips(s);
     let reason: string | undefined;
     const shot = image(s);
     const mock = s.mock && image(s.mock);

@@ -2017,6 +2017,29 @@ test('design measures a blank strip along an edge, but not a nav rail with icons
   assert.deepEqual(toon(uniform).screens[0].defects, [], 'a whole uniform screen is the blank-frame check, not a strip');
 });
 
+test('design does not report a strip its approved mock has too, but reports one the mock lacks', () => {
+  const t = setup();
+  mkdirSync(t.env.DONE_DONE_HOME, { recursive: true });
+  writeFileSync(join(t.env.DONE_DONE_HOME, 'config.yaml'), 'agent: claude\n');
+  const light = [245, 240, 230];
+  writeFileSync(join(t.dir, 'strip.png'), png(240, 160, (x) => (x < 24 ? [20, 22, 20] : light)));
+  writeFileSync(join(t.dir, 'band-mock.png'), png(240, 160, (x) => (x < 24 ? [20, 22, 20] : light)));
+  writeFileSync(join(t.dir, 'plain-mock.png'), png(240, 160, () => light));
+  const clean = JSON.stringify(Object.fromEntries(['aspect', 'clipped-text', 'overlap', 'off-screen', 'blank-strip', 'layout'].map((k) => [k, { probabilities: { defect: 0.02, none: 0.98 }, rationale: 'Looked.', personReason: 'Nothing of this kind.' }])));
+  const s = stubAgents(t.env, clean);
+  symlinkSync(process.execPath, join(s.bin, 'node'));
+  const design = (...args) => {
+    const r = spawnSync(process.execPath, [CLI, 'design', '--full', ...args], { cwd: t.dir, env: s.env, encoding: 'utf8' });
+    return { code: r.status, out: r.stdout + r.stderr };
+  };
+  const matched = design('strip.png', '--mock', 'strip.png=band-mock.png');
+  assert.equal(matched.code, 0, matched.out);
+  assert.deepEqual(toon(matched).screens[0].defects, [], 'a band the approved mock has too is approved design');
+  const unmatched = design('strip.png', '--mock', 'strip.png=plain-mock.png');
+  assert.equal(unmatched.code, 1, unmatched.out);
+  assert.deepEqual(toon(unmatched).screens[0].defects, [{ kind: 'blank-strip', where: 'left edge: a plain #141614 band 24 px deep (10% of the width), full height, with nothing in it' }]);
+});
+
 // doctor: read-only health check. Required items (git, config, evidence root) gate
 // exit 0/2; the skill, agent, judge and ffprobe items are optional and never fail it.
 // An isolated PATH holding only git plus the named stub binaries, so agent/judge/ffprobe

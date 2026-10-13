@@ -23,7 +23,8 @@ const PASS = 0, FAIL = 1, USAGE = 2, INCONCLUSIVE = 3, WAITING = 4;
 const journeyExample = 'journeys: { smoke: { command: "<drive the real app> > $DONE_DONE_EVIDENCE_ROOT/${RUN_ID}.log" } }';
 
 const JOURNEYS_TEXT = `journeys (.done-done.yaml): the command runs with DONE_DONE_EVIDENCE_ROOT (this run's own new folder in the evidence
-  root) and DONE_DONE_RUN_ID set, and \${RUN_ID} in it is replaced; it must write its files into that folder, e.g.
+  root) and DONE_DONE_RUN_ID set, and \${RUN_ID} in it is replaced; it must write its files into that folder (the judge checks
+  every PNG/JPEG there against the outcome, so write screenshots of earlier steps elsewhere), e.g.
   ${journeyExample}
   timeout (journeys.<name>.timeout): how long a verify run may drive the journey, e.g. 90s or 30m (default 30m); past it the journey is killed and the run is inconclusive`;
 const CHECKS_TEXT = `Checks block (--from): the newest "## Checks" heading, then these four keys, each at the start of a line:
@@ -867,7 +868,7 @@ type Step = { name: string; status: StepState; started?: string; ended?: string;
 type Run = {
   // journey null: the author agent drives `feature` (features/<name>.md of the verify skill; unset until the agent picks one); a maintain run has no journey or claim.
   schema: 2; run_id: string; kind: 'verify' | 'maintain'; app: string; repo: string; journey?: string | null; feature?: string; author?: { agent: string; model: string };
-  claim?: string; claim_id: string | null; judge?: boolean;
+  claim?: string; claim_id: string | null; judge?: boolean; branch?: string; // the branch it started on, which names the claim when claim_id is null
   status: 'pending' | 'running' | 'awaiting_approval' | 'completed' | 'failed' | 'cancelled';
   runner?: { pid: number; started: string; heartbeat: string; journey_pgid?: number }; steps: Step[];
   result?: 'pass' | 'fail' | 'inconclusive' | 'overridden' | MaintainResult; reason?: string; findings?: MaintainFinding[]; unverified?: string[]; git_status?: string;
@@ -912,9 +913,12 @@ const createOnce = (path: string) => {
 };
 const evidenceOf = (repo: string, cfg: Config, rec: RunRecord) => rec.files.map((f) => citable(repo, join(cfg.evidence.root, f.path)));
 
+// Every run of an app, from any checkout of it.
+const runsIn = (root: string): Run[] => (existsSync(root) ? readdirSync(root).filter((n) => existsSync(join(root, n, 'run.json'))).map((n) => loadRun(join(root, n))) : []);
+
 // Default run: the newest run of this checkout, as status does.
 function pickId(root: string, repo: string, cmd: string, cfg: Config, id?: string): string {
-  const mine = existsSync(root) ? readdirSync(root).filter((n) => existsSync(join(root, n, 'run.json'))).map((n) => loadRun(join(root, n))).filter((r) => r.repo === repo) : [];
+  const mine = runsIn(root).filter((r) => r.repo === repo);
   const found = id ?? mine.sort((a, b) => a.created.localeCompare(b.created)).pop()?.run_id;
   if (!found) throw new UsageError(`no runs for ${cfg.app} in this checkout yet`, `Start one: done-done verify ${Object.keys(cfg.journeys).length > 1 ? '<journey> ' : ''}--outcome "<what a user can now do>"`);
   if (!/^[\w-]+$/.test(found) || !existsSync(join(root, found, 'run.json'))) throw new UsageError(`no run ${found} in ${root}`, `Show the newest run: done-done ${cmd}`);
@@ -982,7 +986,8 @@ Outcome to prove: ${run.claim}
 1. Read the verify skill ${join(skill, 'SKILL.md')} (how to launch, check, drive, capture and clean up this app) and ${recipe}.
 2. Launch the app as the skill says, then drive that feature through the real user path, step by step as its recipe says.
    Never add steps or data to make the outcome look true: capture what that path shows, even when it contradicts the outcome.
-3. Save PNG screenshots of what a user sees, the action and the resulting state, into ${evidence} (also in $DONE_DONE_EVIDENCE_ROOT). Save nothing else there, and never edit a capture.
+3. Save PNG screenshots of what a user sees once the path is done (the resulting state the outcome is about) into ${evidence} (also in $DONE_DONE_EVIDENCE_ROOT).
+   The judge checks every screenshot there against the outcome, so a screenshot of an earlier step (such as an empty or half-filled form) fails the drive: keep those in ${scratch}. Save nothing else there, and never edit a capture.
 4. Stop everything you started.
 
 Do not change any file in the repository. Do not run done-done: it refuses inside a drive, and done-done answers the run after you stop. Put logs and other scratch files in ${scratch} (also in $TMPDIR), never in /tmp.
@@ -1282,6 +1287,15 @@ async function preflightJudge(cfg: Config, needsAgent = true): Promise<JudgeChoi
 }
 const NO_AUTHOR = { agent: '', model: '' };
 
+// A run waiting at its gate is the user's call, so a new verify or rerun of the same claim (claim id, else branch) is refused
+// until the user answers that run or it is aborted: starting another would go around its gate.
+function refuseParked(cfg: Config, claim: string) {
+  const parked = runsIn(runsRoot(cfg.app)).filter((r) => r.kind === 'verify' && r.status === 'awaiting_approval' && (r.claim_id ?? r.branch) === claim).map((r) => r.run_id);
+  if (!parked.length) return;
+  const id = parked[0];
+  throw new UsageError(`claim ${claim} already has run ${parked.join(', ')} waiting at its gate for the user's answer; a new run of that claim would go around the gate`, `Show the user its findings and captures (done-done status --run ${id}), then answer with their choice: done-done respond --run ${id} --action approve|skip|fix [--reason "<why>"], or stop it: done-done abort --run ${id}`);
+}
+
 async function cmdVerify(argv: string[]): Promise<number> {
   const { values, positionals } = parseArgs({
     args: argv,
@@ -1301,18 +1315,20 @@ async function cmdVerify(argv: string[]): Promise<number> {
   if (journey === null && names.length > 1 && values.feature === undefined) throw new UsageError(`verify needs a journey name or --feature; .done-done.yaml defines: ${names.join(', ')}`, `Run: done-done verify <${names.join('|')}> --outcome "<what a user can now do>"`);
   if (journey !== null && !cfg.journeys[journey]) throw new UsageError(`unknown journey ${journey}; .done-done.yaml defines: ${names.join(', ') || 'none'}`);
   if (values['claim-id']?.trim() === '') throw new UsageError('--claim-id needs a non-empty id');
-  if (!values['claim-id'] && !git(repo, 'branch', '--show-current')) throw new UsageError('HEAD is detached, so no branch names this claim; pass --claim-id <id>');
+  const branch = git(repo, 'branch', '--show-current');
+  if (!values['claim-id'] && !branch) throw new UsageError('HEAD is detached, so no branch names this claim; pass --claim-id <id>');
   const drive = journey === null ? await agentDrive(repo, cfg, values.feature) : undefined;
   // verify starts done-done's own judge by default; --no-judge or judge.enabled: false turns it off. An agent drive is judged too, since the author never grades its own captures.
   const judging = !values['no-judge'] && (!!drive || !!values.judge || cfg.judge.enabled !== false);
   // No judge set, or one config forbids (the author's own agent and model), is a usage error now, not a failed run later.
   if (judging) await preflightJudge(cfg);
+  refuseParked(cfg, values['claim-id'] ?? branch);
   const id = newRunId(git(repo, 'rev-parse', 'HEAD'));
   const dir = join(runsRoot(cfg.app), id);
   mkdirSync(join(dir, 'logs'), { recursive: true });
   const created = now();
   const run: Run = {
-    schema: 2, run_id: id, kind: 'verify', app: cfg.app, repo, journey, ...drive, claim: values.outcome, claim_id: values['claim-id'] ?? null, judge: judging, status: 'pending',
+    schema: 2, run_id: id, kind: 'verify', app: cfg.app, repo, journey, ...drive, claim: values.outcome, claim_id: values['claim-id'] ?? null, branch, judge: judging, status: 'pending',
     steps: STEPS.map((name) => ({ name, status: 'pending' })), created, updated: created,
     inputs: inputsOf(repo, cfg, journey, drive?.author),
   };
@@ -1433,6 +1449,8 @@ async function cmdRerun(argv: string[]): Promise<number> {
   // error here too.
   const judging = !values['no-judge'] && !!src.judge;
   if (judging) await preflightJudge(cfg);
+  const branch = git(repo, 'branch', '--show-current');
+  refuseParked(cfg, src.claim_id ?? branch);
   const id = newRunId(git(repo, 'rev-parse', 'HEAD'));
   const dir = join(root, id);
   mkdirSync(join(dir, 'logs'), { recursive: true });
@@ -1441,7 +1459,7 @@ async function cmdRerun(argv: string[]): Promise<number> {
     return s && reused(name) && s.status === 'completed' ? { ...s } : { name, status: 'pending' as StepState };
   });
   const created = now();
-  const run: Run = { schema: 2, run_id: id, kind: src.kind, app: cfg.app, repo: src.repo, journey, ...drive, claim: src.claim, claim_id: src.claim_id, judge: judging, status: 'pending', inputs, steps, created, updated: created, ...(driveReuse && src.record && { record: src.record }) };
+  const run: Run = { schema: 2, run_id: id, kind: src.kind, app: cfg.app, repo: src.repo, journey, ...drive, claim: src.claim, claim_id: src.claim_id, branch, judge: judging, status: 'pending', inputs, steps, created, updated: created, ...(driveReuse && src.record && { record: src.record }) };
   saveRun(dir, run);
   for (const s of steps) {
     const f = join(root, srcId, 'logs', `${s.name}.log`);
@@ -1675,7 +1693,7 @@ function detectApp(repo: string): Detected {
     : api ? 'plain HTTP (curl)'
     : 'TODO(live drive)';
   const observe = web
-    ? 'screenshots of the action and the resulting state, plus the console log'
+    ? 'screenshots of the resulting state the outcome is about, plus the console log'
     : cliish
       ? 'terminal transcripts, exit codes and side effects (files written, rows inserted)'
       : api
@@ -1731,7 +1749,7 @@ ${found.join('\n')}
 
 ## Evidence
 
-Capture ${d.observe}. Exercise the real user path, not internal setters; capture the action and the resulting state, not just the final screen; verify side effects alongside what is visible. Evidence goes to the run folder \`done-done run\` prints.
+Capture ${d.observe}. Exercise the real user path, not internal setters; done-done's judge checks every screenshot in the run folder against the outcome, so save only screenshots of the resulting state there and keep any of earlier steps outside it; verify side effects alongside what is visible. Evidence goes to the run folder \`done-done run\` prints.
 
 ## Cleanup
 

@@ -19,7 +19,7 @@ const json = (r) => JSON.parse(r.out);
 
 const isIgnored = (repo, path) => spawnSync('git', ['check-ignore', '--no-index', '-q', '--', path], { cwd: repo }).status === 0;
 
-function png(w, h, pixel) {
+function png(w, h, pixel, colour = 2) {
   const chunk = (type, data) => {
     const len = Buffer.alloc(4);
     len.writeUInt32BE(data.length);
@@ -27,14 +27,15 @@ function png(w, h, pixel) {
     crc.writeUInt32BE(crc32(Buffer.concat([Buffer.from(type), data])));
     return Buffer.concat([len, Buffer.from(type), data, crc]);
   };
+  const channels = colour === 6 ? 4 : 3;
   const ihdr = Buffer.alloc(13);
   ihdr.writeUInt32BE(w, 0);
   ihdr.writeUInt32BE(h, 4);
   ihdr[8] = 8;
-  ihdr[9] = 2;
-  const raw = Buffer.alloc(h * (w * 3 + 1));
+  ihdr[9] = colour;
+  const raw = Buffer.alloc(h * (w * channels + 1));
   for (let y = 0; y < h; y++)
-    for (let x = 0; x < w; x++) raw.set(pixel(x, y), y * (w * 3 + 1) + 1 + x * 3);
+    for (let x = 0; x < w; x++) raw.set(pixel(x, y), y * (w * channels + 1) + 1 + x * channels);
   return Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), chunk('IHDR', ihdr), chunk('IDAT', deflateSync(raw)), chunk('IEND', Buffer.alloc(0))]);
 }
 const screen = (seed = 0) => png(200, 120, (x, y) => [(x * 3 + seed) % 256, (y * 5) % 256, (x + y) % 256]);
@@ -2024,7 +2025,7 @@ test('design does not report a strip its approved mock has too, but reports one 
   const light = [245, 240, 230];
   writeFileSync(join(t.dir, 'strip.png'), png(240, 160, (x) => (x < 24 ? [20, 22, 20] : light)));
   writeFileSync(join(t.dir, 'band-mock.png'), png(240, 160, (x) => (x < 24 ? [20, 22, 20] : light)));
-  writeFileSync(join(t.dir, 'plain-mock.png'), png(240, 160, () => light));
+  writeFileSync(join(t.dir, 'plain-mock.png'), png(240, 160, (x, y) => (x >= 60 && x < 220 && y % 30 >= 10 && y % 30 < 16 ? [40, 40, 40] : light)));
   const clean = JSON.stringify(Object.fromEntries(['aspect', 'clipped-text', 'overlap', 'off-screen', 'blank-strip', 'layout'].map((k) => [k, { probabilities: { defect: 0.02, none: 0.98 }, rationale: 'Looked.', personReason: 'Nothing of this kind.' }])));
   const s = stubAgents(t.env, clean);
   symlinkSync(process.execPath, join(s.bin, 'node'));
@@ -2038,6 +2039,24 @@ test('design does not report a strip its approved mock has too, but reports one 
   const unmatched = design('strip.png', '--mock', 'strip.png=plain-mock.png');
   assert.equal(unmatched.code, 1, unmatched.out);
   assert.deepEqual(toon(unmatched).screens[0].defects, [{ kind: 'blank-strip', where: 'left edge: a plain #141614 band 24 px deep (10% of the width), full height, with nothing in it' }]);
+  writeFileSync(join(t.dir, 'mock.webp'), Buffer.concat([Buffer.from('RIFF'), Buffer.from([4, 0, 0, 0]), Buffer.from('WEBP')]));
+  const unmeasurable = design('strip.png', '--mock', 'strip.png=mock.webp');
+  assert.equal(unmeasurable.code, 3, unmeasurable.out);
+  assert.deepEqual([toon(unmeasurable).screens[0].verdict, toon(unmeasurable).screens[0].reason], ['unsure', 'approved mock could not be measured; give a PNG or JPEG mock']);
+});
+
+test('design does not read a transparent margin as a black strip', () => {
+  const t = setup();
+  mkdirSync(t.env.DONE_DONE_HOME, { recursive: true });
+  writeFileSync(join(t.env.DONE_DONE_HOME, 'config.yaml'), 'agent: claude\n');
+  // An RGBA capture whose left tenth is fully transparent with stored RGB of black, as a window capture's shadow margin is.
+  writeFileSync(join(t.dir, 'margin.png'), png(240, 160, (x) => (x < 24 ? [0, 0, 0, 0] : [245, 240, 230, 255]), 6));
+  const clean = JSON.stringify(Object.fromEntries(['aspect', 'clipped-text', 'overlap', 'off-screen', 'blank-strip', 'layout'].map((k) => [k, { probabilities: { defect: 0.02, none: 0.98 }, rationale: 'Looked.', personReason: 'Nothing of this kind.' }])));
+  const s = stubAgents(t.env, clean);
+  symlinkSync(process.execPath, join(s.bin, 'node'));
+  const r = spawnSync(process.execPath, [CLI, 'design', '--full', 'margin.png'], { cwd: t.dir, env: s.env, encoding: 'utf8' });
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  assert.deepEqual(toon({ out: r.stdout + r.stderr }).screens[0].defects, [], 'the margin is transparent, not a black band');
 });
 
 // doctor: read-only health check. Required items (git, config, evidence root) gate

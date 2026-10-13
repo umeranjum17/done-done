@@ -63,9 +63,9 @@ function pixels(c: Capture): { w: number; h: number; rgb: Uint8Array } | undefin
   }
 }
 
-function bands(c: Capture): Band[] {
+function bands(c: Capture): Band[] | undefined {
   const p = c.media.status === 'ok' && judgeable(c) ? pixels(c) : undefined;
-  if (!p) return [];
+  if (!p) return undefined;
   const { w, h, rgb } = p;
   // The screen's main colour: its most common colour, at 16 levels per channel.
   const counts = new Uint32Array(4096);
@@ -100,17 +100,20 @@ function bands(c: Capture): Band[] {
   return out;
 }
 
-// The screen's blank strips, less any band its approved mock has too.
-export function blankStrips(s: Screen): Defect[] {
+function describe({ edge, colour, deep, share }: Band): Defect {
+  const side = edge === 'left' || edge === 'right';
+  const hex = `#${colour.map((v) => v.toString(16).padStart(2, '0')).join('')}`;
+  return { kind: 'blank-strip', where: `${edge} edge: a plain ${hex} band ${deep} px deep (${Math.round(100 * share)}% of the ${side ? 'width' : 'height'}), full ${side ? 'height' : 'width'}, with nothing in it` };
+}
+
+// The screen's blank strips, less any band its approved mock has too. unresolved: the screen has a band but its mock
+// cannot be measured, so whether the band is approved is unknown.
+export function blankStrips(s: Screen): { defects: Defect[]; unresolved: boolean } {
+  const found = bands(s) ?? [];
   const approved = s.mock ? bands(s.mock) : [];
+  if (!approved) return { defects: [], unresolved: found.length > 0 };
   const alike = (b: Band, m: Band) => b.edge === m.edge && Math.abs(b.share - m.share) <= STRIP.alike && b.colour.every((v, k) => Math.abs(v - m.colour[k]) < STRIP.contrast);
-  return bands(s)
-    .filter((b) => !approved.some((m) => alike(b, m)))
-    .map(({ edge, colour, deep, share }) => {
-      const side = edge === 'left' || edge === 'right';
-      const hex = `#${colour.map((v) => v.toString(16).padStart(2, '0')).join('')}`;
-      return { kind: 'blank-strip', where: `${edge} edge: a plain ${hex} band ${deep} px deep (${Math.round(100 * share)}% of the ${side ? 'width' : 'height'}), full ${side ? 'height' : 'width'}, with nothing in it` };
-    });
+  return { defects: found.filter((b) => !approved.some((m) => alike(b, m))).map(describe), unresolved: false };
 }
 
 // Why a file cannot be judged, or its image as sent.
@@ -135,7 +138,8 @@ export async function design(cfg: Config, choice: JudgeChoice, screens: Screen[]
       continue;
     }
     // A measured strip fails the screen even when the judge cannot be asked or does not answer.
-    const defects = blankStrips(s);
+    const strips = blankStrips(s);
+    const defects = strips.defects;
     let reason: string | undefined;
     const shot = image(s);
     const mock = s.mock && image(s.mock);
@@ -152,6 +156,7 @@ export async function design(cfg: Config, choice: JudgeChoice, screens: Screen[]
         if (unsure.length) reason = `not confident enough about ${unsure.join(', ')}`;
       }
     }
+    if (strips.unresolved) reason = 'approved mock could not be measured; give a PNG or JPEG mock';
     out.push({ ...row, verdict: defects.length ? 'fail' : reason ? 'unsure' : 'pass', defects, ...(reason && { reason }) });
   }
   return out;

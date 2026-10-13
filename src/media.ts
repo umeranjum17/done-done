@@ -66,7 +66,7 @@ function png(b: Buffer): Verdict {
   return { status: 'ok', type: 'png', w, h };
 }
 
-// Decodes an 8-bit non-interlaced PNG to RGB (alpha is dropped).
+// Decodes an 8-bit non-interlaced PNG to RGB, with alpha composited over white.
 // Other variants return undefined: callers skip what needs pixels and keep the structural checks.
 export function pngPixels(b: Buffer): { w: number; h: number; rgb: Uint8Array } | undefined {
   const w = b.readUInt32BE(16), h = b.readUInt32BE(20);
@@ -113,10 +113,12 @@ export function pngPixels(b: Buffer): { w: number; h: number; rgb: Uint8Array } 
         [r, g, bl] = [palette![k], palette![k + 1], palette![k + 2]];
       } else if (channels >= 3) [r, g, bl] = [cur[x * channels], cur[x * channels + 1], cur[x * channels + 2]];
       else r = g = bl = cur[x * channels];
+      const a = colour === 4 || colour === 6 ? cur[x * channels + channels - 1] : 255;
+      const over = (v: number) => Math.round((v * a + 255 * (255 - a)) / 255);
       const o = (y * w + x) * 3;
-      rgb[o] = r;
-      rgb[o + 1] = g;
-      rgb[o + 2] = bl;
+      rgb[o] = over(r);
+      rgb[o + 1] = over(g);
+      rgb[o + 2] = over(bl);
     }
     [prev, cur] = [cur, prev];
   }

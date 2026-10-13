@@ -73,7 +73,7 @@ function png(b) {
         return { status: 'fail', type: 'png', why: `png is a blank frame (luminance spread ${std.toFixed(4)})` };
     return { status: 'ok', type: 'png', w, h };
 }
-// Decodes an 8-bit non-interlaced PNG to RGB (alpha is dropped).
+// Decodes an 8-bit non-interlaced PNG to RGB, with alpha composited over white.
 // Other variants return undefined: callers skip what needs pixels and keep the structural checks.
 export function pngPixels(b) {
     const w = b.readUInt32BE(16), h = b.readUInt32BE(20);
@@ -132,10 +132,12 @@ export function pngPixels(b) {
                 [r, g, bl] = [cur[x * channels], cur[x * channels + 1], cur[x * channels + 2]];
             else
                 r = g = bl = cur[x * channels];
+            const a = colour === 4 || colour === 6 ? cur[x * channels + channels - 1] : 255;
+            const over = (v) => Math.round((v * a + 255 * (255 - a)) / 255);
             const o = (y * w + x) * 3;
-            rgb[o] = r;
-            rgb[o + 1] = g;
-            rgb[o + 2] = bl;
+            rgb[o] = over(r);
+            rgb[o + 1] = over(g);
+            rgb[o + 2] = over(bl);
         }
         [prev, cur] = [cur, prev];
     }

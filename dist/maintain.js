@@ -44,7 +44,7 @@ const digest = (abs) => {
     }
     return hash.digest('hex');
 };
-const repoState = (repo) => {
+export const repoState = (repo) => {
     const paths = [...new Set([...git(repo, 'diff', '--name-only', '-z', 'HEAD').split('\0'), ...git(repo, 'ls-files', '-z', '--others', '--exclude-standard').split('\0')])].filter(Boolean);
     const files = [];
     const extra = [];
@@ -418,16 +418,9 @@ Recently changed files (git log since ${CHURN_SINCE}, most recent first${churnAl
     const counted = findings.filter((f) => !NOTICE.has(f.kind));
     return counted.length ? { result: 'drift', reason: `${counted.length} findings`, sources } : { result: 'clean' };
 }
-// Triage: the judge (the user's, never the author or the fixer) decides for each drift finding whether the skill is out of
-// date or the product may be wrong. Plain-code findings (links, index, citations) and unmapped surfaces are skill gaps.
-const TRIAGE = {
-    skill: 'The skill is out of date: it should be rewritten to match what the source does now.',
-    product: 'The source looks broken or regressed against what the skill describes (a crash, a lost step, a typo, a half-done change), so the product may need a fix and a person must decide.',
-    unclear: 'The text cannot settle which side is wrong.',
-};
 const TRIAGE_ATTEMPTS = 3;
 const EXCERPT_LINES = 20;
-const FIX_SCHEMA = { type: 'object', properties: { summary: { type: 'string' }, blocker: { type: 'string' } }, required: ['summary', 'blocker'] };
+export const FIX_SCHEMA = { type: 'object', properties: { summary: { type: 'string' }, blocker: { type: 'string' } }, required: ['summary', 'blocker'] };
 // The lines around a cited source line (a repo path or a bare file name, as a reader cites it), numbered, for the judge.
 // A bare name can match several files: the excerpt is from the first one that has the cited line, as citeWhy accepts.
 const excerpt = (repo, tracked, s) => {
@@ -437,24 +430,40 @@ const excerpt = (repo, tracked, s) => {
         return '';
     return text.split('\n').slice(Math.max(0, s.line - 1 - EXCERPT_LINES), s.line + EXCERPT_LINES).map((l, i) => `${Math.max(1, s.line - EXCERPT_LINES) + i}: ${l}`).join('\n');
 };
-// The drift findings the judge does not call skill drift, each marked ask-user; or why the judge did not answer.
-async function triage(cfg, choice, repo, findings, sources, record) {
-    const drift = findings.filter((f) => f.kind === 'drift');
-    if (!drift.length)
+// Triage (see Triage): the findings the judge does not answer `fix` for, each marked ask-user; or why the judge did not answer.
+export async function triage(cfg, choice, findings, flow, state, record) {
+    if (!findings.length)
         return [];
-    const questions = Object.fromEntries(drift.map((f) => [f.id, { kind: 'choice', instructions: `Finding ${f.id} in the state is a statement in a verification skill (the steps a coding agent follows to drive and prove the real app) that the product's source no longer supports. Which side should change? The source is the truth for the skill unless the source looks broken.`, options: TRIAGE, floor: 0.8, personReason: true }]));
-    const tracked = git(repo, 'ls-files', '-z').split('\0').filter(Boolean);
-    const state = { app: cfg.app, findings: Object.fromEntries(drift.map((f) => [f.id, { feature_file: f.file, finding: f.what, feature_text: tryText(join(repo, f.file)).slice(0, FEATURE_CHARS), source: excerpt(repo, tracked, sources.get(f.id)) }])) };
+    const questions = Object.fromEntries(findings.map((f) => [f.id, { kind: 'choice', instructions: `Finding ${f.id} ${flow.question}`, options: flow.options, floor: 0.8, personReason: true }]));
     const answers = await askJudge(cfg, await backend(cfg, choice, () => record, questions, TRIAGE_ATTEMPTS), choice, state, questions, {});
     if (typeof answers === 'string')
         return answers;
-    return drift.flatMap((f) => {
+    return findings.flatMap((f) => {
         const a = answers[f.id];
-        if (!a.abstained && a.answer === 'skill')
+        if (!a.abstained && a.answer === flow.fix)
             return [];
-        const why = a.abstained ? `the judge was not sure (${a.reason})` : a.personReason || a.rationale || TRIAGE[String(a.answer)];
+        const why = a.abstained ? `the judge was not sure (${a.reason})` : a.personReason || a.rationale || flow.options[String(a.answer)];
         return [{ ...f, action: 'ask-user', what: `${f.what}; judge: ${why}` }];
     });
+}
+// Maintain's triage: is each drift finding a skill that is out of date, or a product that may be wrong (the judge sees the
+// feature file and the cited source)?
+const SKILL_TRIAGE = {
+    question: "in the state is a statement in a verification skill (the steps a coding agent follows to drive and prove the real app) that the product's source no longer supports. Which side should change? The source is the truth for the skill unless the source looks broken.",
+    options: {
+        skill: 'The skill is out of date: it should be rewritten to match what the source does now.',
+        product: 'The source looks broken or regressed against what the skill describes (a crash, a lost step, a typo, a half-done change), so the product may need a fix and a person must decide.',
+        unclear: 'The text cannot settle which side is wrong.',
+    },
+    fix: 'skill',
+};
+async function triageDrift(cfg, choice, repo, findings, sources, record) {
+    const drift = findings.filter((f) => f.kind === 'drift');
+    if (!drift.length)
+        return [];
+    const tracked = git(repo, 'ls-files', '-z').split('\0').filter(Boolean);
+    const state = { app: cfg.app, findings: Object.fromEntries(drift.map((f) => [f.id, { feature_file: f.file, finding: f.what, feature_text: tryText(join(repo, f.file)).slice(0, FEATURE_CHARS), source: excerpt(repo, tracked, sources.get(f.id)) }])) };
+    return triage(cfg, choice, drift, SKILL_TRIAGE, state, record);
 }
 const tryText = (p) => {
     try {
@@ -464,26 +473,71 @@ const tryText = (p) => {
         return '';
     }
 };
-// The judge on the fix path is never the fixer's own agent and model, even when judge.allow_same accepts it for verify.
+// The judge on a fix path (auto_fix) is never the fixer's own agent and model, even when judge.allow_same accepts it for a plain verify.
 export function refuseSameSession(choice) {
-    if (choice.independence === 'session-only')
-        throw new UsageError(`judge: the judge ${choice.agent} (model ${choice.model}) is the fixer's own agent and model, and the judge is never the agent that did the work; judge.allow_same does not apply to maintain fixes`, 'Ask the user for another judge agent or model and save it: done-done init --judge <agent> --judge-model <model>');
+    if (choice.independence !== 'agent')
+        throw new UsageError(`judge: the judge ${choice.agent} (model ${choice.model}) is the fixer's own agent (${choice.author.agent}) at any model, and the judge is never the agent that did the work; judge.allow_same does not apply to auto_fix`, 'Ask the user for another judge agent and save it: done-done init --judge <agent> --judge-model <model>');
     return choice;
 }
-// Every path the fixer changed in the worktree since `base`: tracked edits (and commits), new files, ignored ones too.
-const changedSince = (wt, base) => [...new Set([...git(wt, 'diff', '--name-only', '--no-renames', '-z', base).split('\0'), ...git(wt, 'ls-files', '--others', '-z').split('\0')])].filter(Boolean);
+// The fix-branch flow every auto_fix step shares: the user's agent edits a detached done-done worktree, plain code
+// checks each attempt, and done-done makes the commit; the user's branch and checkout are never touched.
+// Every path the fixer changed in the worktree since `base`: tracked edits (and commits) and new files; ignored ones too
+// unless `ignored` is false (a product build may write ignored output that is never committed).
+export const changedSince = (wt, base, ignored = true) => [...new Set([...git(wt, 'diff', '--name-only', '--no-renames', '-z', base).split('\0'), ...git(wt, 'ls-files', '--others', ...(ignored ? [] : ['--exclude-standard']), '-z').split('\0')])].filter(Boolean);
+export const named = (paths) => `${paths.slice(0, LEFT_NAMED).join(', ')}${paths.length > LEFT_NAMED ? `, +${paths.length - LEFT_NAMED} more` : ''}`;
+export const dirtyTracked = (repo) => git(repo, 'diff', '--name-only', '--no-renames', '-z', 'HEAD').split('\0').filter(Boolean);
+// A detached done-done worktree at `commit` for the body, removed after it whatever happens; a branch made from it stays.
+export async function inWorktree(repo, wt, commit, body) {
+    // ponytail: a runner killed mid-fix leaves the worktree registered; `git worktree prune` clears it once the run folder is gone.
+    git(repo, 'worktree', 'add', '-q', '--detach', wt, commit);
+    try {
+        return await body(git(wt, 'rev-parse', 'HEAD').trim());
+    }
+    finally {
+        try {
+            git(repo, 'worktree', 'remove', '--force', wt);
+        }
+        catch {
+            // Already gone.
+        }
+    }
+}
+// Why plain code drops one fix attempt, or '' when it may go on. bad: the changed paths the step forbids, named as badWhat.
+export function attemptProblem(repo, checkout, wt, base, who, a, changed, bad, badWhat, target) {
+    if (repoState(repo) !== checkout)
+        return `${who} changed your checkout at ${repo} during the fix; done-done does not undo changes there, so check git status`;
+    if (git(wt, 'rev-parse', 'HEAD').trim() !== base)
+        return `${who} made a commit; done-done makes the commit itself, so the attempt is dropped`;
+    if (bad.length)
+        return `${who} changed ${badWhat} (${named(bad)}), so the attempt is dropped with the done-done worktree; your branch is untouched`;
+    // A lost answer after edits still gets the re-run: the re-run, not the agent's word, says whether the fix holds.
+    if (!a.ok && !changed.length)
+        return `${who} did not finish the fix: ${a.error}`;
+    const blocker = a.ok ? String(a.answer?.blocker ?? '').trim() : '';
+    return blocker ? `${who} could not fix ${target}: ${blocker}` : '';
+}
+// done-done's commit of `paths` in the worktree: the commit and the files it holds since `base`, or why it failed.
+export function commitFix(wt, base, message, paths) {
+    try {
+        git(wt, 'add', '-A', '--', ...paths);
+        git(wt, 'commit', '-q', '-m', message, '--', ...paths);
+    }
+    catch (e) {
+        return `git commit failed: ${(e.stderr || e.message).trim()}`;
+    }
+    const commit = git(wt, 'rev-parse', 'HEAD').trim();
+    return { commit, files: git(wt, 'diff', '--name-only', '--no-renames', '-z', base, commit).split('\0').filter(Boolean) };
+}
 async function fix(run, dir, cfg, h, tries, sources) {
     const repo = run.repo;
     const skill = relative(repo, join(repo, cfg.skill));
     const inSkill = (p) => p.startsWith(`${skill}/`);
     if (git(repo, 'status', '--porcelain', '--untracked-files=all', '--', skill))
         return { result: 'blocked', reason: `fix: ${skill} has uncommitted changes, and maintain fixes the committed skill; commit them, then run again` };
-    const dirty = git(repo, 'diff', '--name-only', '--no-renames', '-z', 'HEAD').split('\0').filter(Boolean);
+    const dirty = dirtyTracked(repo);
     if (dirty.length) {
-        const names = dirty.slice(0, LEFT_NAMED).join(', ');
-        const more = dirty.length > LEFT_NAMED ? `, +${dirty.length - LEFT_NAMED} more` : '';
-        run.findings = [...(run.findings ?? []), { id: `F${(run.findings?.length ?? 0) + 1}`, kind: 'dirty', file: '.', what: `uncommitted changes to tracked files (${names}${more}): the drift was found in them, and a fix at HEAD would not match them; commit them, or set auto_fix: { maintain: 0 }, then run again` }];
-        return { result: 'blocked', reason: `dirty: uncommitted changes to tracked files (${names}${more}); commit them, or set auto_fix: { maintain: 0 }, then run again` };
+        run.findings = [...(run.findings ?? []), { id: `F${(run.findings?.length ?? 0) + 1}`, kind: 'dirty', file: '.', what: `uncommitted changes to tracked files (${named(dirty)}): the drift was found in them, and a fix at HEAD would not match them; commit them, or set auto_fix: { maintain: 0 }, then run again` }];
+        return { result: 'blocked', reason: `dirty: uncommitted changes to tracked files (${named(dirty)}); commit them, or set auto_fix: { maintain: 0 }, then run again` };
     }
     const agent = selectAgent(cfg);
     const choice = refuseSameSession(selectJudge(cfg, agent));
@@ -493,13 +547,10 @@ async function fix(run, dir, cfg, h, tries, sources) {
     const rounds = [];
     const judged = [];
     let open = (run.findings ?? []).filter((f) => !NOTICE.has(f.kind));
-    // ponytail: a runner killed mid-fix leaves the worktree registered; `git worktree prune` clears it once the run folder is gone.
-    git(repo, 'worktree', 'add', '-q', '--detach', wt, 'HEAD');
-    try {
-        const base = git(wt, 'rev-parse', 'HEAD').trim();
+    return inWorktree(repo, wt, 'HEAD', async (base) => {
         for (let k = 1; k <= tries; k++) {
             let step = h.begin('triage');
-            const asks = await triage(cfg, choice, wt, open, sources, join(dir, 'agents', `triage-${k}.json`));
+            const asks = await triageDrift(cfg, choice, wt, open, sources, join(dir, 'agents', `triage-${k}.json`));
             judged.push({ attempt: k, ask_user: asks });
             h.log('triage', { judge: { route: choice.route, model: choice.model, independence: choice.independence }, rounds: judged });
             h.set(step, typeof asks === 'string' ? 'failed' : 'completed');
@@ -531,19 +582,9 @@ Answer with summary (what you changed, in one line) and blocker ("" when you fix
             // The diff guard: only the skill folder may change, in the worktree only; anything else drops the attempt with the worktree.
             const changed = changedSince(wt, base);
             round.changed = changed;
-            const outside = changed.filter((p) => !inSkill(p));
-            if (repoState(repo) !== checkout)
-                return blocked(`${agent.agent} changed your checkout at ${repo} during the fix; done-done does not undo changes there, so check git status`);
-            if (git(wt, 'rev-parse', 'HEAD').trim() !== base)
-                return blocked(`${agent.agent} made a commit; done-done makes the only commit, so the attempt is dropped`);
-            if (outside.length)
-                return blocked(`${agent.agent} changed files outside ${skill}/ (${outside.slice(0, LEFT_NAMED).join(', ')}${outside.length > LEFT_NAMED ? `, +${outside.length - LEFT_NAMED} more` : ''}), so the attempt is dropped with the done-done worktree; your branch is untouched`);
-            // A lost answer after skill edits still gets the re-run: the re-run, not the agent's word, says whether the skill is fixed.
-            if (!a.ok && !changed.length)
-                return blocked(`${agent.agent} did not finish the fix: ${a.error}`);
-            const blocker = a.ok ? String(a.answer?.blocker ?? '').trim() : '';
-            if (blocker)
-                return blocked(`${agent.agent} could not fix the skill: ${blocker}`);
+            const problem = attemptProblem(repo, checkout, wt, base, agent.agent, a, changed, changed.filter((p) => !inSkill(p)), `files outside ${skill}/`, 'the skill');
+            if (problem)
+                return blocked(problem);
             // Re-run maintain on the fixed skill in the worktree; its steps are this fix step, and its records are named fix<k>-.
             const again = { repo: wt };
             const rerun = await pass(again, dir, cfg, { begin: () => null, set: () => { }, log: () => { } }, `fix${k}-`);
@@ -553,23 +594,17 @@ Answer with summary (what you changed, in one line) and blocker ("" when you fix
             if (rerun.result === 'clean') {
                 if (!changed.length)
                     return blocked(`${agent.agent} changed nothing, yet the re-run is clean, so there is nothing to commit`);
-                try {
-                    git(wt, 'add', '-A', '--', skill);
-                    git(wt, 'commit', '-q', '-m', `fix(verify): done-done maintain fixes ${skill}`, '--', skill);
-                }
-                catch (e) {
-                    return blocked(`git commit failed: ${(e.stderr || e.message).trim()}`);
-                }
-                const commit = git(wt, 'rev-parse', 'HEAD').trim();
-                const files = git(wt, 'diff', '--name-only', '--no-renames', '-z', base, commit).split('\0').filter(Boolean);
-                if (files.some((p) => !inSkill(p)))
+                const made = commitFix(wt, base, `fix(verify): done-done maintain fixes ${skill}`, [skill]);
+                if (typeof made === 'string')
+                    return blocked(made);
+                if (made.files.some((p) => !inSkill(p)))
                     return blocked(`the commit holds files outside ${skill}/ (a commit hook added them), so no branch is made`);
                 const branch = `done-done/maintain-${run.run_id}`;
-                git(repo, 'branch', branch, commit);
-                run.fix = { branch, commit, files, attempts: k };
-                round.commit = commit;
+                git(repo, 'branch', branch, made.commit);
+                run.fix = { branch, commit: made.commit, files: made.files, attempts: k };
+                round.commit = made.commit;
                 h.log('fix', { agent: agent.agent, model: agent.model, worktree: wt, rounds });
-                h.set(step, 'completed', { outputs: files });
+                h.set(step, 'completed', { outputs: made.files });
                 return { result: 'changed', reason: `the skill is clean after ${k} fix ${k === 1 ? 'attempt' : 'attempts'}, in one commit on ${branch}` };
             }
             open = (again.findings ?? []).filter((f) => !NOTICE.has(f.kind));
@@ -579,13 +614,5 @@ Answer with summary (what you changed, in one line) and blocker ("" when you fix
         }
         run.findings = open;
         return { result: 'blocked', reason: `fix: auto_fix.maintain allows ${tries} ${tries === 1 ? 'attempt' : 'attempts'}, and ${open.length} findings remain after them` };
-    }
-    finally {
-        try {
-            git(repo, 'worktree', 'remove', '--force', wt);
-        }
-        catch {
-            // Already gone; the branch, when made, stays.
-        }
-    }
+    });
 }

@@ -266,8 +266,6 @@ export async function maintainSteps(run, dir, cfg, h) {
                     left.add(p);
                     continue;
                 }
-                if (body.length > FEATURE_CHARS)
-                    add({ kind: 'truncated', file: p, what: `the reader saw only the first ${FEATURE_CHARS} characters of this cited file` });
                 total += kept.length;
                 seen.set(p, kept);
             }

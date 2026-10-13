@@ -1260,6 +1260,7 @@ async function sortJudged(run, cfg, open, record, h) {
 // auto_fix.verify: the user's agent fixes product code in a done-done worktree at the verified head, done-done commits it and
 // `again` verifies there, up to `tries` times; a pass or a gate keeps a done-done/verify-<run-id> branch, never the user's.
 async function fixVerify(run, cfg, dir, first, tries, h, again) {
+    h.begin('fix');
     const repo = run.repo;
     const skill = relative(repo, join(repo, cfg.skill));
     const off = (p) => p === '.done-done.yaml' || p.startsWith(`${skill}/`) || TEST_FILE.test(p);

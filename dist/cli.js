@@ -9,7 +9,7 @@ import { createInterface } from 'node:readline/promises';
 import { parseArgs } from 'node:util';
 import { encode } from '@toon-format/toon';
 import { Document, parseDocument } from 'yaml';
-import { ACPX_INSTALL, agentChoices, agentRun, askAgent, findBin, JUDGES, modelFor, noAgent, noJudge, notStartable, routeOf, selectAgent, selectJudge, supported } from './agents.js';
+import { ACPX_INSTALL, agentChoices, agentRun, askAgent, findBin, JUDGES, modelFor, noAgent, noJudge, notStartable, routeOf, selectAgent, selectJudge } from './agents.js';
 import { AGENTS, CHEAP, globalConfigText, home, isAgent, loadConfig, parseDuration, UsageError } from './config.js';
 import { backend, judge, judgeable, onPath, quote } from './judge.js';
 import { maintainSteps } from './maintain.js';
@@ -88,7 +88,7 @@ const FLAGS = {
     '--action <approve|skip|fix>': 'approve: the captures do show the outcome; skip: go on without a judge pass; both end the run overridden; fix: end it fail, then fix the product or the verify skill (done-done maintain checks it against the source)',
     '--reason "<why>"': 'why (required for approve and skip); kept in the run and its receipt with who answered',
     '--limit <n>': 'how many past runs to list (default all)',
-    '--agent <agent>': 'the coding agent done-done starts (claude, opencode, pi, gemini or acp:<target>), saved as agent in ~/.done-done/config.yaml; without it, init asks in a terminal',
+    '--agent <agent>': 'the coding agent done-done starts (claude, codex, opencode, pi, gemini or acp:<target>), saved as agent in ~/.done-done/config.yaml; without it, init asks in a terminal',
     '--model <model>': 'with --agent: that agent\'s model, saved as agent_config.<agent>.model (opencode: provider/model)',
     '--judge <agent>': `the judge done-done starts (${JUDGES.join(' or ')}), saved as judge.route in ~/.done-done/config.yaml; never the agent and model that did the work; without it, init asks in a terminal`,
     '--judge-model <model>': 'with --judge <agent>: the judge\'s model, saved as judge.model',
@@ -217,7 +217,7 @@ judge: done-done's own agent, a fresh one on your own plan through BYOKit, says 
   the outcome; a wrong screen fails, an unsure answer is inconclusive. verify judges by default (judge.enabled: false turns
   that off; --judge turns it on for one run); rerun repeats its source run's judge choice (--no-judge turns it off for a run);
   check and receipt start no model unless --judge or judge.enabled: true. The judge is the one the user set (judge.route:
-  claude-code; answerer:<agent> through the CLI of opencode, pi or gemini with every tool off; or openai:key with judge.model
+  claude-code; answerer:<agent> through the CLI of codex, opencode, pi or gemini with every tool off; or openai:key with judge.model
   on your own OPENAI_API_KEY), never the agent and model that did the work; with none set, done-done asks in a terminal or
   stops (exit 2) with the command that saves it.
 
@@ -932,10 +932,10 @@ async function agentDrive(repo, cfg, feature) {
     // The author is the agent the user set; with none, ask (in a terminal) or stop with the command that saves the answer.
     await withChoice('agent', cfg);
     const a = selectAgent(cfg);
-    if (!a.path || !supported(a.agent))
-        throw new UsageError(`verify needs an agent to drive the app: ${a.path ? `${a.agent} cannot be started by done-done yet` : notStartable(a.agent, a.override)}`, `Install ${a.agent}, or save the agent the user chooses: done-done init --agent <agent> --model <model>; or record a journey: done-done init --journey <name> -- <command>`);
+    if (!a.path)
+        throw new UsageError(`verify needs an agent to drive the app: ${notStartable(a.agent, a.override)}`, `Install ${a.agent}, or save the agent the user chooses: done-done init --agent <agent> --model <model>; or record a journey: done-done init --journey <name> -- <command>`);
     if (a.agent.startsWith('acp:'))
-        throw new UsageError(`${a.agent} cannot drive the app: done-done runs ACP agents with every tool denied`, `Set agent: to one of ${AGENTS.filter(supported).join(', ')}, or record a journey: done-done init --journey <name> -- <command>`);
+        throw new UsageError(`${a.agent} cannot drive the app: done-done runs ACP agents with every tool denied`, `Set agent: to one of ${AGENTS.join(', ')}, or record a journey: done-done init --journey <name> -- <command>`);
     return { author: { agent: a.agent, model: a.model }, feature: name ?? (features.length === 1 ? features[0] : undefined) };
 }
 // The drive prompt: the claim, where the verify skill and its feature recipe are, and where captures go. The judge never sees it.
@@ -1931,7 +1931,7 @@ function writeGlobal() {
 }
 // The user's agent choice, checked before anything is written.
 function checkChoice(agent, model) {
-    if (!isAgent(agent) || !supported(agent))
+    if (!isAgent(agent))
         throw new UsageError(`done-done cannot start ${agent}; it starts ${agentChoices().join(', ')}`, noAgent().help);
     if (agent === 'opencode' && model && !model.includes('/'))
         throw new UsageError(`--model ${model}: an opencode model is provider/model, e.g. ${CHEAP.opencode.model}`);
@@ -1974,7 +1974,7 @@ async function pick(kind, cfg) {
     rl.on('close', () => closed.abort());
     const ask = async (q) => (await rl.question(q, { signal: closed.signal })).trim();
     try {
-        const menu = kind === 'agent' ? [...AGENTS.filter(supported), ACP_TARGET] : JUDGES;
+        const menu = kind === 'agent' ? [...AGENTS, ACP_TARGET] : JUDGES;
         const label = (a) => (a === ACP_TARGET ? `${a} (an agent your acpx bridge starts)` : a);
         const head = kind === 'agent' ? 'done-done starts a coding agent you choose, and none is set. Agents:' : `done-done judges each screenshot with an agent you choose, never the one that did the work (${cfg.agent || 'not set'}), and none is set. Judges:`;
         process.stderr.write(`${head}\n${menu.map((a, i) => `  ${i + 1}) ${label(a)}\n`).join('')}`);
@@ -2348,8 +2348,6 @@ async function cmdDoctor(argv) {
         }
     }
     const agent = agentCfg?.agent ? selectAgent(agentCfg) : null;
-    const startableList = AGENTS.filter(supported);
-    const startable = startableList.length > 1 ? `${startableList.slice(0, -1).join(', ')} and ${startableList.at(-1)}` : (startableList[0] ?? 'no agent');
     // An acp:<target> agent is missing when its acpx bridge is: say which, and how to install it.
     const acpx = agent?.agent.startsWith('acp:') ? findBin(agentCfg.acpx_path) : undefined;
     const override = agent && agentCfg.agent_path_override[agent.agent];
@@ -2357,7 +2355,6 @@ async function cmdDoctor(argv) {
         : notStartable(agent?.agent ?? '', override || '');
     const askFix = `ask the user which agent to use and save it: done-done init --agent <agent> --model <model>`;
     const installFix = acpx === undefined ? `Install ${agent?.agent}, or ${askFix}` : ACPX_INSTALL;
-    const switchFix = `done-done starts ${startable}: ${askFix}`;
     if (repoFileInvalid) {
         checks.push(unknownRow('agent'));
     }
@@ -2371,9 +2368,7 @@ async function cmdDoctor(argv) {
         const what = `${agent.agent} (${modelPhrase(agent.agent, agent.model)}; from config)`;
         checks.push(!agent.path
             ? { check: 'agent', status: 'missing', detail: `${what}: ${notFound}`, fix: installFix }
-            : !supported(agent.agent)
-                ? { check: 'agent', status: 'missing', detail: `${what} at ${agent.path}, but done-done cannot start ${agent.agent} yet (${startable} for now)`, fix: switchFix }
-                : { check: 'agent', status: 'ok', detail: `${what} at ${agent.path}`, fix: '' });
+            : { check: 'agent', status: 'ok', detail: `${what} at ${agent.path}`, fix: '' });
         if (agent.agent === 'pi')
             checks.push({ check: 'tool_gate', status: 'warning', detail: 'pi has no permission gate: every pi tool runs without approval', fix: '' });
     }
@@ -2433,8 +2428,7 @@ async function cmdDoctor(argv) {
     if (values.probe && agent) {
         const record = join(home(), 'agents', `probe-${new Date().toISOString().replace(/[:.]/g, '-')}-${agent.agent}.json`);
         const probe = !agent.path ? { ok: false, error: notFound, fix: installFix }
-            : !supported(agent.agent) ? { ok: false, error: `done-done cannot start ${agent.agent} yet (${startable} for now)`, fix: switchFix }
-                : await askAgent({ ...agent, prompt: 'This is a connectivity probe from done-done doctor. Use no tools. Answer with ok set to true.', schema: PROBE_SCHEMA, cwd: repo ?? process.cwd(), tools: 'none', record });
+            : await askAgent({ ...agent, prompt: 'This is a connectivity probe from done-done doctor. Use no tools. Answer with ok set to true.', schema: PROBE_SCHEMA, cwd: repo ?? process.cwd(), tools: 'none', record });
         checks.push(probe.ok && probe.answer?.ok === true
             ? { check: 'probe', status: 'ok', detail: `${agent.agent} (${modelPhrase(agent.agent, agent.model)}) answered the schema question; ${probe.recordError ? `the call record could not be written: ${probe.recordError}` : `record ${record}`}`, fix: '' }
             : { check: 'probe', status: 'missing', detail: `${agent.agent} did not answer: ${probe.error ?? `answer ${JSON.stringify(probe.answer)}`}${probe.record ? `; record ${record}` : ''}${probe.recordError ? `; the call record could not be written: ${probe.recordError}` : ''}`, fix: probe.fix ?? `Check that ${agent.agent} is signed in${agent.model ? ` and can use model ${agent.model}` : ''}, or set agent_config.${agent.agent}.model` });

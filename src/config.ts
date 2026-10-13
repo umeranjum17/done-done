@@ -32,17 +32,17 @@ export type Config = {
 // The coding agents a user can set as agent.
 export const AGENTS = ['claude', 'codex', 'opencode', 'pi', 'gemini'];
 // The agents whose CLI can read an attached image with every tool off, so they judge through the answerer route;
-// claude judges through claude-code. codex has no adapter yet, and an acp:<target> agent cannot be sent an image.
-export const ANSWERER_JUDGES = ['opencode', 'pi', 'gemini'];
+// claude judges through claude-code. An acp:<target> agent cannot be sent an image.
+export const ANSWERER_JUDGES = ['codex', 'opencode', 'pi', 'gemini'];
 // BYOKit key routes: a judge on the user's own API key, read from this environment variable, with no agent CLI.
 export const KEY_ROUTES: Record<string, string> = { 'openai:key': 'OPENAI_API_KEY' };
 // Or acp:<target>, any agent the user's acpx bridge can start; the target is one argv word, so it never reads as a flag.
 export const isAgent = (v: unknown) => AGENTS.includes(v as string) || (typeof v === 'string' && /^acp:[A-Za-z0-9][\w.-]*$/.test(v));
 // The cost guard is this table: a default model for an agent here is always its cheap one, never a flagship,
 // whatever the vendor; any other model runs only when the user names it. gemini's is the CLI's own
-// `flash-lite` alias (its cli-reference.md: the fastest model for simple tasks). pi and acp:<target> have no public
+// `flash-lite` alias (its cli-reference.md: the fastest model for simple tasks). codex, pi and acp:<target> have no public
 // cheap alias, so they run their own configured default model, and agent_config.<agent>.model caps their cost.
-// As a judge, pi has no default: answerer:pi needs judge.model or agent_config.pi.model, a model that reads images.
+// As a judge, codex and pi have no default: answerer:<agent> needs judge.model or agent_config.<agent>.model, a model that reads images.
 export const CHEAP: Record<string, { model: string; effort?: string }> = {
   claude: { model: 'claude-haiku-5-5', effort: 'low' },
   opencode: { model: 'opencode-go/muse-spark-1.3-contributor', effort: 'low' },
@@ -145,7 +145,7 @@ function apply(target: Config, text: string | undefined, file: string, scope: 'g
       paths: `a map of <agent>: <binary name or absolute path> for ${AGENTS.join(', ')}`,
       bin: 'a binary name on PATH or an absolute path',
       duration: 'a duration such as 90s, 30m or 1h',
-      route: `claude-code (for claude), answerer:<agent> for one of ${ANSWERER_JUDGES.join(', ')}, or a key route (${Object.keys(KEY_ROUTES).join(', ')}); codex cannot judge yet (done-done cannot start it), nor can an acp:<target> agent (done-done cannot send it an image)`,
+      route: `claude-code (for claude), answerer:<agent> for one of ${ANSWERER_JUDGES.join(', ')}, or a key route (${Object.keys(KEY_ROUTES).join(', ')}); an acp:<target> agent cannot judge, since done-done cannot send it an image`,
       claude_code: 'a map with config_dir, a string (the claude binary is agent_path_override.claude)',
     } as Record<string, string>;
     if (key === 'judge.route' && (value === 'auto' || value === '')) throw new UsageError(`${file}: judge.route ${value === '' ? 'must not be empty; to leave it unset, remove the key' : 'auto is gone: done-done never picks the judge, the user sets it'}`, `Delete the judge.route line in ${file}, then run: done-done init --judge <agent> --judge-model <model>`);
@@ -236,7 +236,11 @@ export function globalConfigText(): string {
 
 # Model and reasoning effort per agent (effort: ${EFFORTS.join(', ')}; gemini and acp:<target> have no effort flag). These are the cheap defaults.
 agent_config:
-${agents}
+${agents}  # codex and pi have no cheap default: they run their own default model until you set one here, e.g.
+  # codex:
+  #   model: <model>
+  #   effort: low
+
 # Extra CLI flags per agent, added after done-done's own, e.g. claude: [--permission-mode, plan].
 agent_args_override: {}
 

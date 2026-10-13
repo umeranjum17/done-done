@@ -2,7 +2,7 @@ import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { accessSync, closeSync, constants, existsSync, lstatSync, openSync, readdirSync, readFileSync, readlinkSync, readSync, realpathSync, statSync } from 'node:fs';
 import { dirname, extname, isAbsolute, join, relative, resolve, sep } from 'node:path';
-import { askAgent, notStartable, selectAgent, supported } from './agents.js';
+import { askAgent, notStartable, selectAgent } from './agents.js';
 import type { Config } from './config.js';
 
 // `done-done maintain`, part 1 and read only: locate the verify skill, check its feature index in plain code, send one
@@ -294,9 +294,9 @@ export async function maintainSteps<S>(run: { repo: string; findings?: Finding[]
   // Only claude reads the repo with its own tools: its read tools refuse paths outside it, while the other agents'
   // tools cannot be trusted that way, so they get the cited source from plain code.
   const toolless = agent.agent !== 'claude';
-  const geminiBlock = agent.path && agent.agent === 'gemini' ? 'source-wave: gemini cannot read tool-less yet, since its none mode is read-only plan mode, not tool-free; use claude, opencode, pi or acp' : '';
+  const geminiBlock = agent.path && agent.agent === 'gemini' ? 'source-wave: gemini cannot read tool-less yet, since its none mode is read-only plan mode, not tool-free; use claude, codex, opencode, pi or acp' : '';
   if (geminiBlock) add({ kind: 'coverage', file: rel(featDir), what: geminiBlock });
-  const agentBlock = !agent.path || !supported(agent.agent) ? `source-wave: no agent done-done can start (${agent.path ? `${agent.agent} is not supported yet` : notStartable(agent.agent, agent.override)}); run done-done doctor` : geminiBlock;
+  const agentBlock = !agent.path ? `source-wave: no agent done-done can start (${notStartable(agent.agent, agent.override)}); run done-done doctor` : geminiBlock;
   let calls = 0;
   const record = (name: string) => join(dir, 'agents', `${++calls}-${name}.json`);
   const read = agentBlock ? [] : features.slice(0, MAX_CALLS - 1);

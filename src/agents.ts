@@ -107,6 +107,22 @@ const ACP: Adapter = {
 export const ACPX_INSTALL = 'Install the acpx ACP bridge (npm install -g acpx, https://github.com/openclaw/acpx), then re-run: done-done doctor';
 
 const PI_TOOL_LESS = ['--no-tools', '--no-extensions', '--no-skills', '--no-prompt-templates', '--no-context-files'];
+// codex has no single tools-off flag: a tool-less call ignores the user's config.toml (its MCP servers, plugins and hooks),
+// turns off every feature that adds a tool, and keeps the read-only sandbox, so the apply_patch tool left over cannot write.
+// Probed live on codex-cli 0.159.2 (13 Oct): it listed only apply_patch and a clock tool, a canary file outside the
+// cwd went unread, and its writes were refused.
+// ponytail: a feature a later codex adds is on until this list names it; re-run the canary on a codex upgrade.
+const CODEX_TOOL_LESS = ['--ignore-user-config', '--ignore-rules', '--skip-git-repo-check', '--sandbox', 'read-only', '-c', 'web_search="disabled"',
+  ...['shell_tool', 'unified_exec', 'view_image', 'apps', 'plugins', 'browser_use', 'browser_use_external', 'computer_use', 'in_app_browser', 'multi_agent',
+    'image_generation', 'hooks', 'goals', 'tool_suggest', 'sleep_tool', 'skill_mcp_dependency_install'].flatMap((f) => ['--disable', f])];
+// codex reports an API error as the API's JSON text (seen 13 Oct: a model a ChatGPT sign-in cannot use): show its own message.
+const apiMessage = (text: string): string => {
+  try {
+    return String(JSON.parse(text).error?.message ?? text);
+  } catch {
+    return text; // Plain text already.
+  }
+};
 const ADAPTERS: Record<string, Adapter> = {
   // claude -p: --json-schema puts the validated object in structured_output; --tools '' turns every tool off.
   // An edit step accepts edits only in cwd and --add-dir folders, and may run commands (the drive launches the app).
@@ -167,6 +183,30 @@ const ADAPTERS: Record<string, Adapter> = {
       return extractJsonObject(text, c.schema.required);
     },
   },
+  // codex exec with no prompt argument reads it on stdin; --json streams JSONL events whose last agent_message holds the
+  // answer, and --ephemeral keeps no session. -i attaches an image to the prompt, outside every tool. An edit step runs
+  // in codex's workspace-write sandbox, which writes only the repo, the run's folders (--add-dir) and $TMPDIR; it may use
+  // the network, since the drive launches the app and talks to it. Without a model, codex runs its own default.
+  codex: {
+    argv: (c, dir) => ['exec', ...(c.images ?? []).flatMap((i) => ['-i', join(dir, i.name)]), '--json', '--ephemeral', ...(c.model ? ['-m', c.model] : []),
+      ...(c.tools === 'edit' ? ['--sandbox', 'workspace-write', '-c', 'sandbox_workspace_write.network_access=true', ...(c.dirs ?? []).flatMap((d) => ['--add-dir', d])] : CODEX_TOOL_LESS)],
+    answer: (out, c) => {
+      let text = '';
+      let failed = '';
+      let error = '';
+      for (const line of out.split('\n')) {
+        if (!line.startsWith('{')) continue;
+        const e = JSON.parse(line);
+        if (e.type === 'item.completed' && e.item?.type === 'agent_message') text = String(e.item.text ?? '');
+        if (e.type === 'turn.failed') failed = String(e.error?.message ?? JSON.stringify(e));
+        if (e.type === 'error') error = String(e.message ?? JSON.stringify(e));
+      }
+      // A failed turn has no answer; an error event (a retried stream) fails the call only when the agent said nothing.
+      const why = failed || (text ? '' : error);
+      if (why) throw new ProviderError(apiMessage(why));
+      return extractJsonObject(text, c.schema.required);
+    },
+  },
   // gemini -p text is appended to stdin, so -p carries only a fixed trailer and the prompt goes on stdin;
   // -o json prints one object {response, stats, error?} (its headless.md). plan mode is read-only, so a
   // headless call never blocks on an approval prompt; auto_edit (edits approved) plus the shell tool is only for edit steps,
@@ -198,7 +238,7 @@ export function selectAgent(cfg: Config): AgentRun {
 }
 
 // The agents a user can pick, and the error that tells a calling agent to ask the user rather than pick one itself.
-export const agentChoices = () => [...AGENTS.filter(supported), 'acp:<target>'];
+export const agentChoices = () => [...AGENTS, 'acp:<target>'];
 // The error a command gives when the agent or the judge is not set: the ask, the choices, and the command that saves the answer.
 const askError = (kind: 'agent' | 'judge', choices: string, rule: string, save: string) =>
   new UsageError(`no ${kind} is set: ask the user which ${kind} to use (${choices}); ${rule}`, `Save the user's answer: ${save}`);
@@ -222,10 +262,6 @@ export function knownAgentOf(agent: string): string {
 }
 
 const adapterFor = (agent: string): Adapter | undefined => (agent.startsWith('acp:') ? ACP : Object.hasOwn(ADAPTERS, agent) ? ADAPTERS[agent] : undefined);
-
-export function supported(agent: string) {
-  return !!adapterFor(agent);
-}
 
 // A binary from config: a bare name is looked up on PATH, an absolute path is used when it is an executable file.
 export const findBin = (bin: string) => (isAbsolute(bin) ? (isExecutable(bin) ? bin : '') : onPath(bin));

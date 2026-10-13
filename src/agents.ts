@@ -1,4 +1,4 @@
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, isAbsolute, join } from 'node:path';
@@ -18,10 +18,13 @@ export type AgentCall = {
   schema: { required?: string[] } & Record<string, unknown>;
   cwd: string;
   timeoutMs: number;
-  tools: 'none' | 'read' | 'edit'; // none for the judge and readers
+  tools: 'none' | 'read' | 'edit'; // none for the judge and readers; edit (the drive) may also run commands
   record: string; // where the call record is written
   files?: string[]; // images attached to the prompt, for the answerer judge
   attempts?: number; // asks allowed for a bad tool-less answer, default ASK_ATTEMPTS
+  dirs?: string[]; // folders outside cwd an edit step may write (the run's evidence folder)
+  env?: Record<string, string>; // extra environment for the agent
+  onSpawn?: (pgid: number) => void; // an edit step runs in its own process group; this gets its id
 };
 export type AgentAnswer = { ok: boolean; answer?: Record<string, unknown>; error?: string; record?: string; recordError?: string };
 
@@ -100,9 +103,10 @@ export const ACPX_INSTALL = 'Install the acpx ACP bridge (npm install -g acpx, h
 
 const ADAPTERS: Record<string, Adapter> = {
   // claude -p: --json-schema puts the validated object in structured_output; --tools '' turns every tool off.
+  // An edit step accepts edits only in cwd and --add-dir folders, and may run commands (the drive launches the app).
   claude: {
     argv: (c) => ['-p', '--output-format', 'json', '--json-schema', JSON.stringify(c.schema), '--model', c.model, '--no-session-persistence',
-      ...(c.tools === 'edit' ? ['--permission-mode', 'acceptEdits'] : ['--tools', c.tools === 'read' ? 'Read,Grep,Glob' : '']),
+      ...(c.tools === 'edit' ? ['--permission-mode', 'acceptEdits', '--allowedTools', 'Bash', ...(c.dirs ?? []).flatMap((d) => ['--add-dir', d])] : ['--tools', c.tools === 'read' ? 'Read,Grep,Glob' : '']),
       ...(c.tools === 'none' ? ['--setting-sources', ''] : [])],
     answer: (out) => {
       const r = JSON.parse(out);
@@ -126,7 +130,10 @@ const ADAPTERS: Record<string, Adapter> = {
       }
       return extractJsonObject(text, c.schema.required);
     },
-    env: (c): Record<string, string> => (c.tools === 'edit' ? {} : { OPENCODE_PERMISSION: JSON.stringify(c.tools === 'read' ? { '*': 'deny', read: 'allow', grep: 'allow', glob: 'allow', list: 'allow' } : { '*': 'deny' }) }),
+    // An edit step keeps the user's own permissions, where a folder outside cwd asks and so is refused in `run`; only the
+    // run's own folders are allowed.
+    env: (c): Record<string, string> => ({ OPENCODE_PERMISSION: JSON.stringify(c.tools === 'edit' ? { external_directory: Object.fromEntries((c.dirs ?? []).flatMap((d) => [[d, 'allow'], [`${d}/*`, 'allow']])) }
+      : c.tools === 'read' ? { '*': 'deny', read: 'allow', grep: 'allow', glob: 'allow', list: 'allow' } : { '*': 'deny' }) }),
   },
   // pi -p reads the prompt on stdin (probed 12 Oct: with no positional message, stdin becomes the user
   // message); --mode json streams JSONL events whose assistant message_end holds the answer text,
@@ -154,11 +161,13 @@ const ADAPTERS: Record<string, Adapter> = {
   },
   // gemini -p text is appended to stdin, so -p carries only a fixed trailer and the prompt goes on stdin;
   // -o json prints one object {response, stats, error?} (its headless.md). plan mode is read-only, so a
-  // headless call never blocks on an approval prompt; auto_edit (edits approved, shell still asks) is only for edit steps.
+  // headless call never blocks on an approval prompt; auto_edit (edits approved) plus the shell tool is only for edit steps,
+  // with the run's folders added to the workspace.
   // --skip-trust is only for the tool-less probe in its scratch folder (the headless path in its trusted-folders.md): done-done
   // never runs interactively, so the trust dialog could never be answered there. Repo calls keep Gemini's trust gate.
   gemini: {
-    argv: (c) => ['-p', 'Follow the instructions on stdin.', '-o', 'json', '-m', c.model, '--approval-mode', c.tools === 'edit' ? 'auto_edit' : 'plan', ...(c.tools === 'none' ? ['--skip-trust'] : [])],
+    argv: (c) => ['-p', 'Follow the instructions on stdin.', '-o', 'json', '-m', c.model, '--approval-mode', c.tools === 'edit' ? 'auto_edit' : 'plan', ...(c.tools === 'none' ? ['--skip-trust'] : []),
+      ...(c.tools === 'edit' ? ['--allowed-tools', 'run_shell_command', ...(c.dirs ?? []).flatMap((d) => ['--include-directories', d])] : [])],
     hint: 'if gemini refused this folder as untrusted, trust it in Gemini CLI first, then retry',
     answer: (out, c) => {
       const r = JSON.parse(out);
@@ -250,12 +259,53 @@ export function selectJudge(cfg: Config, found: { agent: string; model: string; 
   return choice;
 }
 
-export function askAgent(c: AgentCall): AgentAnswer {
+type Ran = { status: number | null; stdout: string; stderr: string; error?: Error };
+
+// One agent process. An edit step gets its own process group, so whatever it started (a dev server, a browser) is
+// killed with it when it ends or times out.
+function start(bin: string, argv: string[], c: AgentCall, cwd: string, input: string, env: NodeJS.ProcessEnv): Promise<Ran> {
+  const group = c.tools === 'edit';
+  return new Promise((done) => {
+    const child = spawn(bin, argv, { cwd, env, detached: group });
+    let stdout = '';
+    let stderr = '';
+    let error: Error | undefined;
+    const kill = () => {
+      try {
+        if (group) process.kill(-child.pid!, 'SIGKILL');
+        else child.kill('SIGKILL');
+      } catch {
+        // Already gone.
+      }
+    };
+    const timer = setTimeout(() => {
+      error = new Error(`${c.agent} timed out after ${Math.round(c.timeoutMs / 1000)}s`);
+      kill();
+    }, c.timeoutMs);
+    child.on('error', (e) => {
+      clearTimeout(timer);
+      done({ status: null, stdout, stderr, error: e });
+    });
+    if (!child.pid) return;
+    if (group) c.onSpawn?.(child.pid);
+    child.stdout.setEncoding('utf8').on('data', (d) => (stdout += d));
+    child.stderr.setEncoding('utf8').on('data', (d) => (stderr += d));
+    child.on('close', (status) => {
+      clearTimeout(timer);
+      if (group) kill();
+      done({ status, stdout, stderr, error });
+    });
+    child.stdin.on('error', () => {}); // an agent that exits without reading its stdin
+    child.stdin.end(input);
+  });
+}
+
+export async function askAgent(c: AgentCall): Promise<AgentAnswer> {
   const adapter = adapterFor(c.agent);
   const started = Date.now();
   let dir = '';
   let cwd = c.cwd;
-  let res: ReturnType<typeof spawnSync> | undefined;
+  let res: Ran | undefined;
   let attempts = 0;
   let out: AgentAnswer;
   let failure: string | undefined;
@@ -272,7 +322,7 @@ export function askAgent(c: AgentCall): AgentAnswer {
       const schemaTrailer = `\n\nAnswer with only one JSON object that matches this JSON schema, and no other text:\n${JSON.stringify(c.schema)}\n`;
       const promptText = (attempts === 1 ? c.prompt : `${c.prompt}\n\nYour previous answer was not valid (${lastError}).`) + schemaTrailer;
       if (adapter.file) writeFileSync(join(dir, 'prompt.md'), promptText, { mode: 0o600 });
-      res = spawnSync(bin, adapter.argv(c, dir), { cwd, input: adapter.file ? '' : promptText, env: { ...process.env, ...adapter.env?.(c) }, encoding: 'utf8', timeout: c.timeoutMs, maxBuffer: 64 << 20 });
+      res = await start(bin, adapter.argv(c, dir), c, cwd, adapter.file ? '' : promptText, { ...process.env, ...c.env, ...adapter.env?.(c) });
       if (res.error) throw res.error;
       if (res.status !== 0) {
         // An agent that exits non-zero may still say why in its own output (claude: a usage limit, a bad model).
@@ -289,7 +339,7 @@ export function askAgent(c: AgentCall): AgentAnswer {
         const answer = adapter.answer(String(res.stdout), c);
         if (!answer || typeof answer !== 'object' || Array.isArray(answer)) throw new Error(`the answer is not a JSON object: ${JSON.stringify(answer)}`);
         const missing = (c.schema.required ?? []).filter((k) => !(k in answer));
-        if (missing.length) throw new Error(`the answer does not match the schema (missing ${missing.join(', ')})`);
+        if (missing.length) throw new Error(`the answer does not match the schema (missing ${missing.join(', ')}): ${JSON.stringify(answer).slice(0, 200)}`);
         out = { ok: true, answer: answer as Record<string, unknown> };
         break;
       } catch (e) {

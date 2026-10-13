@@ -100,7 +100,7 @@ export async function backend(cfg, choice, record = () => '') {
                         writeFileSync(file, Buffer.from(img.dataUrl.slice(img.dataUrl.indexOf(',') + 1), 'base64'), { mode: 0o600 });
                         return file;
                     });
-                    const a = askAgent({ agent: choice.agent, model: choice.model, prompt, schema: ANSWER_SCHEMA, cwd: dir, timeoutMs: TIMEOUT_MS, tools: 'none', attempts: 1, record: record(), files });
+                    const a = await askAgent({ agent: choice.agent, model: choice.model, prompt, schema: ANSWER_SCHEMA, cwd: dir, timeoutMs: TIMEOUT_MS, tools: 'none', attempts: 1, record: record(), files });
                     lastError = a.ok ? '' : a.error ?? 'no answer';
                     if (!a.ok)
                         throw new Error(lastError);

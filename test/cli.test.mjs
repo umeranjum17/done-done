@@ -1408,7 +1408,7 @@ test('verify goes on in a detached runner after the calling shell is killed, and
   const s = toon(r);
   assert.equal(s.run_id, run.run_id);
   assert.equal(s.result, 'pass');
-  assert.deepEqual(s.steps.map((x) => [x.name, x.status]), [['resolve', 'completed'], ['drive', 'completed'], ['check', 'completed'], ['judge', 'skipped'], ['receipt', 'completed'], ['report', 'completed']], 'the judge is off');
+  assert.deepEqual(s.steps.map((x) => [x.name, x.status]), [['resolve', 'completed'], ['drive', 'completed'], ['check', 'completed'], ['judge', 'skipped'], ['gate', 'skipped'], ['receipt', 'completed'], ['report', 'completed']], 'the judge is off');
   assert.deepEqual(s.evidence, [`.proof/${run.run_id}/home.png`, `.proof/${run.run_id}/settings.png`]);
   assert.match(s.help[0], /done-done receipt --verify [0-9a-f]{40}$/);
   assert.ok(existsSync(join(repo, s.receipt)), 'the runner recorded a receipt');
@@ -1515,7 +1515,7 @@ test('a journey past its timeout is killed and the run ends inconclusive', async
   const s = toon(r);
   assert.equal(s.result, 'inconclusive');
   assert.equal(s.reason, 'drive: journey timed out after 2s');
-  assert.deepEqual(s.steps.map((x) => x.status), ['completed', 'failed', 'skipped', 'skipped', 'skipped', 'completed']);
+  assert.deepEqual(s.steps.map((x) => x.status), ['completed', 'failed', 'skipped', 'skipped', 'skipped', 'skipped', 'completed']);
   const pgid = JSON.parse(readFileSync(join(env.DONE_DONE_HOME, 'runs', 'notes', s.run_id, 'run.json'), 'utf8')).runner.journey_pgid;
   assert.ok(await groupGone(pgid), 'the timed-out journey is gone');
 });
@@ -1561,7 +1561,7 @@ test('verify --foreground fails at a broken journey and skips the rest; usage er
   const s = toon(r);
   assert.equal(s.result, 'fail');
   assert.equal(s.reason, 'drive: the run command exited 3');
-  assert.deepEqual(s.steps.map((x) => x.status), ['completed', 'failed', 'skipped', 'skipped', 'skipped', 'completed']);
+  assert.deepEqual(s.steps.map((x) => x.status), ['completed', 'failed', 'skipped', 'skipped', 'skipped', 'skipped', 'completed']);
   assert.equal(toon(dd('status')).run_id, s.run_id);
   assert.equal(dd('status', '--run', '../x').code, 2);
 });
@@ -1810,7 +1810,7 @@ test('verify --judge with judge.route auto: opencode judges a claude author thro
   const ok = verify(right.env, 'home and settings render');
   assert.equal(ok.code, 0, ok.out);
   const o = toon(ok);
-  assert.deepEqual(o.steps.map((x) => [x.name, x.status]), [['resolve', 'completed'], ['drive', 'completed'], ['check', 'completed'], ['judge', 'completed'], ['receipt', 'completed'], ['report', 'completed']]);
+  assert.deepEqual(o.steps.map((x) => [x.name, x.status]), [['resolve', 'completed'], ['drive', 'completed'], ['check', 'completed'], ['judge', 'completed'], ['gate', 'skipped'], ['receipt', 'completed'], ['report', 'completed']]);
   const calls = right.calls();
   assert.equal(calls.length, 2, 'one tools-off call per capture, none to the author');
   assert.ok(calls.every((c) => c.agent === 'opencode' && c.argv.includes('opencode-go/muse-spark-1.3-contributor') && JSON.parse(c.permission)['*'] === 'deny'));
@@ -1828,17 +1828,37 @@ test('verify --judge with judge.route auto: opencode judges a claude author thro
   const v = t.dd('receipt', '--verify', t.head());
   assert.equal(v.code, 0, v.out);
   assert.deepEqual([toon(v).schema, toon(v).judge.route, toon(v).judge.verdicts.map((x) => x.verdict)], [2, 'answerer:opencode', ['pass', 'pass']]);
+  // A wrong screen parks the run at the gate (exit 4): the check passed, the judge failed it, no receipt yet.
   const wrong = agents({ correct: 0.04, wrong: 0.93, unclear: 0.03 });
   const bad = verify(wrong.env, 'the settings page shows dark mode on');
-  assert.equal(bad.code, 1, bad.out);
+  assert.equal(bad.code, 4, bad.out);
   const b = toon(bad);
-  assert.equal(b.result, 'fail');
-  assert.match(b.reason, /^judge: .*judge says wrong screen/);
-  assert.deepEqual(b.steps.map((x) => x.status), ['completed', 'completed', 'completed', 'failed', 'skipped', 'completed'], 'the check passed, the judge failed it, no receipt');
+  assert.deepEqual([b.status, b.step, b.result], ['awaiting_approval', 'gate', undefined]);
+  assert.deepEqual(b.steps.map((x) => x.status), ['completed', 'completed', 'completed', 'failed', 'awaiting_approval', 'pending', 'pending']);
+  assert.deepEqual([b.findings.length, b.findings[0].id, b.findings[0].severity, b.findings[0].action], [2, 'gate-1', 'error', 'ask-user']);
+  assert.match(b.findings[0].what, /judge says wrong screen/);
+  assert.ok(b.help.some((h) => h.includes(`done-done respond --run ${b.run_id} --action approve --reason`)), bad.out);
+  // An approve needs a reason; with one, the run ends overridden (exit 1, never pass) and the receipt says who and why.
+  const noReason = t.dd('respond', '--run', b.run_id, '--action', 'approve');
+  assert.equal(noReason.code, 2, noReason.out);
+  assert.match(toon(noReason).error, /needs --reason/);
+  const ok2 = t.dd('respond', '--run', b.run_id, '--action', 'approve', '--reason', 'dark mode is on in the capture');
+  assert.equal(ok2.code, 1, ok2.out);
+  const a = toon(ok2);
+  assert.deepEqual([a.status, a.result, a.response.action, a.response.reason], ['completed', 'overridden', 'approve', 'dark mode is on in the capture']);
+  assert.ok(a.response.by, 'who answered is recorded');
+  assert.deepEqual(a.steps.map((x) => x.status), ['completed', 'completed', 'completed', 'failed', 'completed', 'completed', 'completed']);
+  const events = readFileSync(join(t.env.DONE_DONE_HOME, 'runs', 'notes', b.run_id, 'events.jsonl'), 'utf8');
+  assert.match(events, /"step":"gate","response":"approve","by":"[^"]+","reason":"dark mode is on in the capture"/, 'the answer is logged');
+  const ov = t.dd('receipt', '--verify', t.head());
+  assert.equal(ov.code, 1, ov.out);
+  assert.deepEqual([toon(ov).result, toon(ov).override.action, toon(ov).judge.verdicts.map((x) => x.verdict)], ['overridden', 'approve', ['fail', 'fail']]);
+  assert.match(toon(ov).help[0], /not proven/);
+  assert.equal(t.dd('respond', '--run', b.run_id, '--action', 'skip', '--reason', 'again').code, 2, 'a run is answered once');
   // A rerun of the judged run judges again (the cached wrong verdict), so it cannot pass with the judge left out.
   const re = spawnSync(process.execPath, [CLI, 'rerun', '--run', b.run_id], { cwd: t.repo, env: right.env, encoding: 'utf8' });
-  assert.equal(re.status, 1, re.stdout + re.stderr);
-  assert.deepEqual(toon({ out: re.stdout }).steps.map((x) => [x.name, x.status]).slice(3, 5), [['judge', 'failed'], ['receipt', 'skipped']]);
+  assert.equal(re.status, 4, re.stdout + re.stderr);
+  assert.deepEqual(toon({ out: re.stdout }).steps.map((x) => [x.name, x.status]).slice(3, 6), [['judge', 'failed'], ['gate', 'awaiting_approval'], ['receipt', 'pending']]);
   // The author's own agent and model as the judge is a usage error before any run starts, unless allow_same accepts it.
   writeFileSync(join(t.env.DONE_DONE_HOME, 'config.yaml'), 'agent: opencode\njudge:\n  route: answerer:opencode\n');
   const same = verify(right.env, 'home and settings render');
@@ -1857,8 +1877,90 @@ test('verify --judge on the answerer route: a malformed judge answer is one requ
   const calls = s.calls();
   assert.equal(calls.length, 2, 'one tools-off request per capture, no re-ask after a malformed answer');
   assert.ok(calls.every((c) => c.agent === 'opencode'));
-  assert.equal(o.result, 'inconclusive', r.stdout);
-  assert.match(o.reason, /judge says unsure: the judge did not answer: the agent did not answer with valid JSON after 1 try/, r.stdout);
+  assert.equal(r.status, 4, r.stdout);
+  assert.deepEqual([o.status, o.findings[0].severity], ['awaiting_approval', 'warning'], 'an unsure judge parks at the gate');
+  assert.match(o.findings[0].what, /judge says unsure: the judge did not answer: the agent did not answer with valid JSON after 1 try/, r.stdout);
+});
+
+test('verify with no journey: the author agent drives the verify skill feature, the judge passes it; a wrong claim parks at the gate until respond', () => {
+  const t = setup('app: notes\nevidence:\n  root: .proof\n');
+  const skill = join(t.repo, '.agents', 'skills', 'verify-notes');
+  mkdirSync(join(skill, 'features'), { recursive: true });
+  writeFileSync(join(skill, 'SKILL.md'), '---\nname: verify-notes\n---\n# verify-notes\n\n## Launch\n\nnode src/app.js\n');
+  writeFileSync(join(skill, 'features', 'README.md'), '- [Add a note](add-note.md)\n');
+  writeFileSync(join(skill, 'features', 'add-note.md'), '# Add a note\n');
+  t.sh('add', '-A');
+  t.sh('commit', '-qm', 'verify skill');
+  mkdirSync(t.env.DONE_DONE_HOME, { recursive: true });
+  writeFileSync(join(t.env.DONE_DONE_HOME, 'config.yaml'), 'agent: claude\n');
+  const verdict = (p) => JSON.stringify({ relevance: { probabilities: p, rationale: 'The list shows the note.', personReason: 'The list shows the note.' } });
+  // claude is the author: it saves a capture into the run's evidence folder and answers; DRIVE=edit also edits a tracked file.
+  const agents = (p) => {
+    const s = stubAgents(t.env, verdict(p));
+    symlinkSync(process.execPath, join(s.bin, 'node'));
+    writeFileSync(join(s.bin, 'claude'), `#!${process.execPath}
+const { appendFileSync, copyFileSync, readFileSync } = require('node:fs');
+appendFileSync(${JSON.stringify(join(s.bin, 'calls.jsonl'))}, JSON.stringify({ agent: 'claude', argv: process.argv.slice(2), stdin: readFileSync(0, 'utf8'), cwd: process.cwd(), evidence: process.env.DONE_DONE_EVIDENCE_ROOT, tmp: process.env.TMPDIR }) + '\\n');
+copyFileSync(${JSON.stringify(join(t.dir, 'screen.png'))}, process.env.DONE_DONE_EVIDENCE_ROOT + '/note.png');
+if (process.env.DRIVE === 'edit') appendFileSync('src/app.js', '// changed\\n');
+process.stdout.write(JSON.stringify({ type: 'result', is_error: false, structured_output: { feature: 'features/add-note.md', captures: ['note.png'], blocker: '' } }));
+`, { mode: 0o755 });
+    return s;
+  };
+  const verify = (env, outcome, ...more) => {
+    const r = spawnSync(process.execPath, [CLI, 'verify', '--outcome', outcome, '--foreground', ...more], { cwd: t.repo, env, encoding: 'utf8' });
+    return { code: r.status, out: r.stdout + r.stderr, o: r.stdout.startsWith('command') ? toon({ out: r.stdout }) : undefined };
+  };
+  const right = agents(CORRECT);
+  const ok = verify(right.env, 'the note Umer added shows in the list');
+  assert.equal(ok.code, 0, ok.out);
+  assert.deepEqual([ok.o.result, ok.o.journey, ok.o.feature, ok.o.author], ['pass', null, 'add-note', 'claude (model claude-haiku-5-5)']);
+  assert.deepEqual(ok.o.steps.map((x) => [x.name, x.status]), [['resolve', 'completed'], ['drive', 'completed'], ['check', 'completed'], ['judge', 'completed'], ['gate', 'skipped'], ['receipt', 'completed'], ['report', 'completed']]);
+  const [drive, ...judged] = right.calls();
+  assert.equal(drive.agent, 'claude');
+  assert.equal(drive.cwd, t.repo, 'the drive runs in the repo');
+  assert.equal(drive.evidence, join(t.repo, '.proof', ok.o.run_id), "the drive gets the run's own evidence folder");
+  const runDir = join(t.env.DONE_DONE_HOME, 'runs', 'notes', ok.o.run_id);
+  assert.equal(drive.tmp, join(runDir, 'tmp'), "the drive's scratch is the run's own tmp folder");
+  assert.deepEqual(drive.argv.slice(drive.argv.indexOf('--permission-mode')), ['--permission-mode', 'acceptEdits', '--allowedTools', 'Bash', '--add-dir', drive.evidence, '--add-dir', drive.tmp], 'edits only in the repo, the evidence folder and the run scratch');
+  assert.match(drive.stdin, /Never add steps or data to make the outcome look true/, 'the drive is told not to stage the claim');
+  assert.match(drive.stdin, /Outcome to prove: the note Umer added shows in the list[\s\S]*verify-notes\/features\/add-note\.md/, 'the claim and the feature recipe go on stdin');
+  assert.ok(!drive.argv.some((a) => a.includes('Umer added')), 'never in argv');
+  assert.deepEqual([judged.length, judged[0].agent], [1, 'opencode'], 'one capture, judged by another agent');
+  assert.ok(!judged[0].file.includes('verify-notes'), 'the judge sees the claim and the capture, not the recipe or the drive');
+  assert.equal(JSON.parse(readFileSync(join(runDir, 'agents', 'drive.json'), 'utf8')).ok, true, 'the drive call leaves a record');
+  assert.equal(t.dd('receipt', '--verify', t.head()).code, 0);
+  // A wrong claim parks at the gate; skip needs a reason and ends the run overridden, never pass.
+  const wrong = agents({ correct: 0.04, wrong: 0.93, unclear: 0.03 });
+  const bad = verify(wrong.env, 'the note list is sorted by date');
+  assert.equal(bad.code, 4, bad.out);
+  assert.deepEqual([bad.o.status, bad.o.step, bad.o.findings.length], ['awaiting_approval', 'gate', 1]);
+  assert.equal(t.dd('respond', '--action', 'skip').code, 2, 'skip needs a reason');
+  const skip = t.dd('respond', '--action', 'skip', '--reason', 'the sort is checked by hand');
+  assert.equal(skip.code, 1, skip.out);
+  assert.deepEqual([toon(skip).run_id, toon(skip).result, toon(skip).response.action], [bad.o.run_id, 'overridden', 'skip'], 'respond answers the newest run by default');
+  const ov = t.dd('receipt', '--verify', t.head());
+  assert.deepEqual([ov.code, toon(ov).result, toon(ov).override.reason], [1, 'overridden', 'the sort is checked by hand']);
+  // fix ends a parked run as fail; abort cancels one; neither can be answered again.
+  const fixRun = verify(wrong.env, 'the note list is sorted by date');
+  const fix = t.dd('respond', '--run', fixRun.o.run_id, '--action', 'fix');
+  assert.equal(fix.code, 1, fix.out);
+  assert.deepEqual([toon(fix).result, toon(fix).steps.find((x) => x.name === 'gate').status], ['fail', 'failed']);
+  const abortRun = verify(wrong.env, 'the note list is sorted by date');
+  assert.equal(t.dd('abort', '--run', abortRun.o.run_id).code, 0);
+  assert.equal(toon(t.dd('status', '--run', abortRun.o.run_id)).status, 'cancelled');
+  assert.equal(t.dd('respond', '--run', abortRun.o.run_id, '--action', 'fix').code, 2);
+  // A drive that changes a tracked file fails: its captures would not be of the committed code.
+  const edit = verify({ ...right.env, DRIVE: 'edit' }, 'the note Umer added shows in the list');
+  assert.equal(edit.code, 1, edit.out);
+  assert.match(edit.o.reason, /^drive: claude changed tracked files in the repo during the drive/);
+  t.sh('checkout', '--', 'src/app.js');
+  // Usage errors before any run: an unknown feature, a journey with --feature, no verify skill.
+  assert.match(toon(verify(right.env, 'x', '--feature', 'nope')).error, /no feature nope in \.agents\/skills\/verify-notes\/features; it has: add-note/);
+  rmSync(skill, { recursive: true });
+  const none = verify(right.env, 'x');
+  assert.equal(none.code, 2, none.out);
+  assert.match(toon(none).error, /needs a journey or a verify skill/);
 });
 
 test('a rerun refused by the judge preflight exits 2 and creates no run folder', () => {
@@ -2736,8 +2838,8 @@ test('gemini edit steps run with auto_edit, never yolo, and read steps stay in p
   const old = process.env.PATH;
   process.env.PATH = s.env.PATH;
   try {
-    askAgent({ ...call, tools: 'edit' });
-    askAgent({ ...call, tools: 'read' });
+    await askAgent({ ...call, tools: 'edit' });
+    await askAgent({ ...call, tools: 'read' });
   } finally {
     process.env.PATH = old;
   }
@@ -2786,7 +2888,7 @@ test('a repo step that gemini refuses as untrusted fails with the trust fix line
   const old = process.env.PATH;
   process.env.PATH = s.env.PATH;
   try {
-    const out = askAgent({ agent: 'gemini', model: 'flash-lite', prompt: 'p', schema: { type: 'object', properties: { ok: { type: 'boolean' } }, required: ['ok'] }, cwd: repo, timeoutMs: 60_000, record: join(s.env.PATH, 'rec.json'), tools: 'edit' });
+    const out = await askAgent({ agent: 'gemini', model: 'flash-lite', prompt: 'p', schema: { type: 'object', properties: { ok: { type: 'boolean' } }, required: ['ok'] }, cwd: repo, timeoutMs: 60_000, record: join(s.env.PATH, 'rec.json'), tools: 'edit' });
     assert.equal(out.ok, false);
     assert.match(out.error, /trust it in Gemini CLI first, then retry/);
   } finally {
@@ -2802,10 +2904,10 @@ test('an edit step whose answer is not JSON is never asked again, while a tool-l
   const old = process.env.PATH;
   process.env.PATH = s.env.PATH;
   try {
-    const edit = askAgent({ ...call, tools: 'edit' });
+    const edit = await askAgent({ ...call, tools: 'edit' });
     assert.equal(edit.ok, false);
     assert.equal(s.calls().length, 1, 'the edit step ran once');
-    const probe = askAgent({ ...call, tools: 'none' });
+    const probe = await askAgent({ ...call, tools: 'none' });
     assert.equal(probe.ok, false);
     assert.equal(s.calls().length, 4, 'the tool-less probe is asked again up to three tries');
   } finally {

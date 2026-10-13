@@ -2,7 +2,7 @@
 import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import { createHash, randomBytes } from 'node:crypto';
 import { accessSync, appendFileSync, closeSync, constants, existsSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
-import { homedir } from 'node:os';
+import { homedir, userInfo } from 'node:os';
 import { dirname, isAbsolute, join, matchesGlob, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
@@ -25,8 +25,15 @@ const CHECKS_TEXT = `Checks block (--from): the newest "## Checks" heading, then
   repro: <command that failed before and passes now, or n/a; a fix PR needs one>
   proof: <the command or path that drove the real product; name the repo's verify-<app> skill, or say "no verify skill">
   evidence: <the evidence file paths, or "not proven: <cause>">`;
-const RUNS_TEXT = `runs: each verify run lives in $DONE_DONE_HOME/runs/<app>/<run-id> (run.json, events.jsonl, logs/<step>.log)
-  and goes on when the command that started it ends; its steps are resolve, drive (the journey), check, judge (with --judge), receipt, report`;
+const RUNS_TEXT = `runs: each verify run lives in $DONE_DONE_HOME/runs/<app>/<run-id> (run.json, events.jsonl, logs/<step>.log, agents/)
+  and goes on when the command that started it ends; its steps are resolve, drive, check, judge (with --judge, and always after an agent drive),
+  gate, receipt, report
+  drive: the journey when there is one; else the author agent (agent: in config) drives one feature of the verify skill the way a user
+  does and saves screenshots into the run's evidence folder; it may run commands and edit files only in the repo and that folder where
+  its CLI can limit it (pi cannot), and a drive that changes a tracked file fails
+  gate: a judge fail or unsure (or an agent drive with no judged capture) parks the run as awaiting_approval (exit 4); answer it with
+  respond: approve or skip (each needs --reason) ends the run overridden, never pass, and its receipt says who and why, so
+  receipt --verify refuses it; fix ends the run fail`;
 const DOCTOR_TEXT = `doctor changes nothing except the --probe call record (the agent itself may keep its own session files) and exits 0 when every required item is ok, 2 otherwise.
   required: git (inside a repository), config (a valid .done-done.yaml), evidence_root (writable).
   optional: verify_skill (.agents/skills/verify-<app>/), agent (the configured agent, or with agent: auto the first
@@ -54,7 +61,10 @@ const FLAGS = {
     '--foreground': 'run every step in this process instead of a detached runner (use in CI)',
     '--run <run-id>': 'the run to show (default: the newest run of this checkout)',
     '--probe': 'ask the configured agent one JSON-schema question and require a valid answer (one call at the agent\'s model: its cheap default where it has one, else its own; set agent_config.<agent>.model to choose)',
-    '--step <name>': 'the step log to show (resolve, drive, check, judge, receipt, report)',
+    '--step <name>': 'the step log to show (resolve, drive, check, judge, gate, receipt, report)',
+    '--feature <name>': 'with no journey, the author agent drives this feature of the verify skill (features/<name>.md); default: the only feature, else the agent picks the one the outcome is about',
+    '--action <approve|skip|fix>': 'approve: the captures do show the outcome; skip: go on without a judge pass; both end the run overridden; fix: end it fail, then fix the product or the verify skill',
+    '--reason "<why>"': 'why (required for approve and skip); kept in the run and its receipt with who answered',
     '--limit <n>': 'how many past runs to list (default all)',
     '--agent <agent>': 'also add a SessionStart hook to .claude/settings.json (claude), .codex/hooks.json (codex) or .gemini/settings.json (gemini) that shows `done-done` to each session, or a plugin to .opencode/plugins (opencode) or an extension to .pi/extensions (pi) that adds it to the first message of each session (opt-in)',
 };
@@ -111,9 +121,10 @@ const COMMANDS = {
     verify: {
         usage: [
             ['done-done verify [<journey>] --outcome "<what a user can now do>" [--claim-id <id>] [--judge]', 'drive the journey in a run that outlives this command, check its evidence and record a receipt'],
-            ['done-done verify [<journey>] --outcome "<claim>" --no-wait | --wait | --foreground', 'return at once, wait until the run ends (default), or run in this process (CI)'],
+            ['done-done verify --outcome "<claim>" [--feature <name>]', 'with no journey, the author agent drives a verify skill feature and the judge (never the author) judges its captures'],
+            ['done-done verify [<journey>] --outcome "<claim>" --no-wait | --wait | --foreground', 'return at once, wait until the run ends or waits at its gate (default), or run in this process (CI)'],
         ],
-        flags: ['--outcome "<what a user can now do>"', '--claim-id <id>', '--judge', '--wait', '--no-wait', '--foreground'],
+        flags: ['--outcome "<what a user can now do>"', '--feature <name>', '--claim-id <id>', '--judge', '--wait', '--no-wait', '--foreground'],
         more: [RUNS_TEXT],
     },
     status: {
@@ -129,6 +140,14 @@ const COMMANDS = {
     logs: {
         usage: [['done-done logs --step <name> [--run <run-id>] [--full]', 'show a step log (tail by default)']],
         flags: ['--step <name>', '--run <run-id>'],
+        more: [RUNS_TEXT],
+    },
+    respond: {
+        usage: [
+            ['done-done respond [--run <run-id>] --action approve|skip --reason "<why>"', 'move a run on past its gate; it ends overridden, never pass'],
+            ['done-done respond [--run <run-id>] --action fix', 'end a run waiting at its gate as fail'],
+        ],
+        flags: ['--run <run-id>', '--action <approve|skip|fix>', '--reason "<why>"'],
         more: [RUNS_TEXT],
     },
     rerun: {
@@ -149,7 +168,7 @@ const COMMANDS = {
 };
 const rows = (pairs, width = Math.max(...pairs.map(([a]) => a.length)) + 3) => pairs.map(([a, b]) => `  ${a}${' '.repeat(Math.max(3, width - a.length))}${b}`).join('\n');
 const GLOBAL_TEXT = `global flags: --json (JSON instead of TOON), --full (do not truncate lists), --help (this command's usage)
-exit codes: 0 pass, 1 fail, 2 usage or config error, 3 inconclusive, 4 the run is still running (verify, rerun, status)`;
+exit codes: 0 pass, 1 fail (also a run overridden at its gate), 2 usage or config error, 3 inconclusive, 4 the run is still running or waits at its gate (verify, rerun, status, respond)`;
 const USAGE_TEXT = `install: npm install -g --prefix ~/.local --allow-git=all github:umeranjum17/done-done-axi (installs done-done-axi and done-done), or run npx -y --allow-git=all github:umeranjum17/done-done-axi <command>
 usage:
 ${rows([['done-done', "show this repo's config state and the next step"], ...Object.values(COMMANDS).flatMap((c) => c.usage)], 46)}
@@ -626,15 +645,26 @@ function verifyReceipt(repo, cfg, headArg) {
     catch (e) {
         return fail(`receipt for ${short} is malformed (${e.message})`);
     }
-    if (!rec || typeof rec !== 'object' || (rec.schema !== 1 && rec.schema !== 2) || rec.result !== 'pass' || !Array.isArray(rec.files) || !rec.files.length)
+    if (!rec || typeof rec !== 'object' || (rec.schema !== 1 && rec.schema !== 2) || (rec.result !== 'pass' && rec.result !== 'overridden') || !Array.isArray(rec.files) || !rec.files.length)
         return fail(`receipt for ${short} is malformed`);
     if (!rec.files.every((f) => f && typeof f === 'object' && typeof f.path === 'string' && typeof f.sha256 === 'string'))
         return fail(`receipt for ${short} is malformed`);
-    // A schema 2 judge block must name its judge, and pass only captures this receipt cites.
+    // A schema 2 judge block must name its judge, and pass only captures this receipt cites. An overridden receipt keeps the
+    // verdicts that did not pass, or no block when the judge judged no capture.
     const j = rec.judge;
-    if (rec.schema === 2 && (!j || typeof j !== 'object' || typeof j.route !== 'string' || typeof j.model !== 'string' || !['agent', 'model', 'session-only'].includes(j.independence) || !Array.isArray(j.verdicts) || !j.verdicts.length
-        || !j.verdicts.every((v) => v && v.verdict === 'pass' && rec.files.some((f) => f.path === v.path && f.sha256 === v.sha256))))
+    const o = rec.override;
+    const overridden = rec.result === 'overridden';
+    const badJudge = !j || typeof j !== 'object' || typeof j.route !== 'string' || typeof j.model !== 'string' || !['agent', 'model', 'session-only'].includes(j.independence) || !Array.isArray(j.verdicts) || !j.verdicts.length
+        || !j.verdicts.every((v) => v && (overridden ? ['pass', 'fail', 'unsure'] : ['pass']).includes(v.verdict) && rec.files.some((f) => f.path === v.path && f.sha256 === v.sha256));
+    if (overridden ? j !== undefined && badJudge : rec.schema === 2 && badJudge)
         return fail(`receipt for ${short} has a malformed judge block`);
+    // A caller can move a run past its gate, but never turn it into a pass: an overridden receipt always fails here.
+    if (overridden) {
+        if (rec.schema !== 2 || !o || typeof o !== 'object' || !['approve', 'skip'].includes(o.action) || typeof o.by !== 'string' || typeof o.reason !== 'string' || !o.reason)
+            return fail(`receipt for ${short} has a malformed override`);
+        emit({ command: 'receipt', result: 'overridden', head: commit, claim: rec.claim, override: o, judge: j, help: [`This head is not proven: the judge did not pass it, and ${o.by} chose ${o.action} (${o.reason})`, 'Capture proof the judge passes, then: done-done verify --outcome "<what a user can now do>"'] });
+        return FAIL;
+    }
     if (rec.head !== commit)
         return fail(`receipt records head ${String(rec.head).slice(0, 12)}, not ${short}`);
     const now = head(repo);
@@ -768,7 +798,14 @@ const HEARTBEAT_MS = 5_000;
 // A run that never recorded its runner's pid this long after it was created has no runner.
 const STALE_MS = 60_000;
 const runsRoot = (app) => join(home(), 'runs', app);
-const STEPS = ['resolve', 'drive', 'check', 'judge', 'receipt', 'report'];
+const STEPS = ['resolve', 'drive', 'check', 'judge', 'gate', 'receipt', 'report'];
+// One agent drive may launch the app, drive it and save captures; past this it is killed with everything it started.
+const DRIVE_MS = 20 * 60_000;
+const DRIVE_SCHEMA = {
+    type: 'object',
+    properties: { feature: { type: 'string' }, captures: { type: 'array', items: { type: 'string' } }, blocker: { type: 'string' } },
+    required: ['feature', 'captures', 'blocker'],
+};
 const now = () => new Date().toISOString();
 const errorText = (e) => (e.stderr || e.message || String(e)).trim();
 const killGroup = (pgid) => {
@@ -814,10 +851,61 @@ function skillHash(repo, cfg) {
         return '';
     }
 }
-function inputsOf(repo, cfg, journey) {
+// The drive's input is the journey command, or for an agent drive the feature it was asked to drive.
+function inputsOf(repo, cfg, journey, feature) {
     const h = head(repo);
-    const j = cfg.journeys[journey];
-    return { head: h.commit, journey: sha256(Buffer.from(`${j?.command ?? ''}\n${j?.timeout ?? '30m'}`)), skill: skillHash(repo, cfg) };
+    const j = journey === null ? undefined : cfg.journeys[journey];
+    const drive = journey === null ? `agent\n${feature ?? ''}` : `${j?.command ?? ''}\n${j?.timeout ?? '30m'}`;
+    return { head: h.commit, journey: sha256(Buffer.from(drive)), skill: skillHash(repo, cfg) };
+}
+// The verify skill features an agent can drive: features/<name>.md, minus the index.
+function skillFeatures(repo, cfg) {
+    try {
+        return readdirSync(join(repo, cfg.skill, 'features')).filter((n) => n.endsWith('.md') && n !== 'README.md').map((n) => n.slice(0, -3)).sort();
+    }
+    catch {
+        return [];
+    }
+}
+// Who drives a run with no journey: the author agent, which must be one done-done can let drive, and a judge that is not
+// the author must be ready. A usage error now, never a failed run later. Returns the author and the feature to drive.
+function agentDrive(repo, cfg, feature) {
+    const skill = join(cfg.skill, 'SKILL.md');
+    if (!existsSync(join(repo, skill)))
+        throw new UsageError(`verify needs a journey or a verify skill to drive the app, and this repo has neither (no ${skill})`, 'Scaffold the verify skill: done-done init, or record a journey: done-done init --journey <name> -- <command that drives the real app>');
+    const features = skillFeatures(repo, cfg);
+    const name = feature?.replace(/^features\//, '').replace(/\.md$/, '');
+    if (name !== undefined && !features.includes(name))
+        throw new UsageError(`no feature ${feature} in ${cfg.skill}/features; it has: ${features.join(', ') || 'none'}`, `Run: done-done verify --feature <${features.join('|') || 'name'}> --outcome "<what a user can now do>"`);
+    const a = selectAgent(cfg);
+    if (!a.path || !supported(a.agent))
+        throw new UsageError(`verify needs an agent to drive the app: ${a.agent} ${a.path ? 'cannot be started by done-done yet' : 'is not on PATH'}`, `Install one of ${AGENTS.join(', ')} (or set agent: in config), or record a journey: done-done init --journey <name> -- <command>`);
+    if (a.agent.startsWith('acp:'))
+        throw new UsageError(`${a.agent} cannot drive the app: done-done runs ACP agents with every tool denied`, `Set agent: to one of ${AGENTS.filter(supported).join(', ')}, or record a journey: done-done init --journey <name> -- <command>`);
+    selectJudge(cfg, a);
+    return { author: { agent: a.agent, model: a.model }, feature: name ?? (features.length === 1 ? features[0] : undefined) };
+}
+// The drive prompt: the claim, where the verify skill and its feature recipe are, and where captures go. The judge never sees it.
+// With a verify skill and no journey, the next step can be an agent drive.
+const driveHint = (repo, cfg) => existsSync(join(repo, cfg.skill, 'SKILL.md'))
+    ? ['Have your coding agent drive a verify skill feature: done-done verify --outcome "<what a user can now do>" [--feature <name>]'] : [];
+function drivePrompt(run, cfg, evidence, scratch) {
+    const skill = join(run.repo, cfg.skill);
+    const recipe = run.feature ? `the feature recipe ${join(skill, 'features', `${run.feature}.md`)}` : `its feature map ${join(skill, 'features', 'README.md')}, then pick the one feature the outcome is about`;
+    return `You drive the real ${run.app} app the way a user does, to capture proof of one outcome. Someone else judges your captures.
+
+Outcome to prove: ${run.claim}
+
+1. Read the verify skill ${join(skill, 'SKILL.md')} (how to launch, check, drive, capture and clean up this app) and ${recipe}.
+2. Launch the app as the skill says, then drive that feature through the real user path, step by step as its recipe says.
+   Never add steps or data to make the outcome look true: capture what that path shows, even when it contradicts the outcome.
+3. Save PNG screenshots of what a user sees, the action and the resulting state, into ${evidence} (also in $DONE_DONE_EVIDENCE_ROOT). Save nothing else there, and never edit a capture.
+4. Stop everything you started.
+
+Do not change any file in the repository. Put logs and other scratch files in ${scratch} (also in $TMPDIR), never in /tmp.
+Keep working until all four steps are done: your next message without a tool call ends the drive and must be the answer.
+If you cannot launch the app or reach the feature, say why in blocker and save no capture.
+Answer with feature (the feature file you drove, such as features/<name>.md), captures (the file names you saved) and blocker ("" when you drove it).`;
 }
 function saveRun(dir, run) {
     run.updated = now();
@@ -827,7 +915,23 @@ function saveRun(dir, run) {
 }
 const loadRun = (dir) => JSON.parse(readFileSync(join(dir, 'run.json'), 'utf8'));
 const logEvent = (dir, e) => appendFileSync(join(dir, 'events.jsonl'), `${JSON.stringify({ at: now(), ...e })}\n`);
-// The verify steps, all plain code: resolve the head, drive the journey, check its evidence, record a receipt, report.
+const setStep = (dir, run, s, status, extra = {}) => {
+    Object.assign(s, { status, [status === 'running' ? 'started' : 'ended']: now() }, extra);
+    logEvent(dir, { step: s.name, status });
+    saveRun(dir, run);
+};
+// End a run: steps it never reached are skipped, and the report step records the result.
+function finishRun(dir, run, result, reason) {
+    for (const s of run.steps)
+        if (s.status === 'pending' && s.name !== 'report')
+            s.status = 'skipped';
+    const report = run.steps.find((s) => s.name === 'report');
+    setStep(dir, run, report, 'running');
+    Object.assign(run, { result, reason, status: 'completed' });
+    setStep(dir, run, report, 'completed');
+}
+// The verify steps: resolve the head, drive (the journey, or the author agent), check its evidence, judge, gate on a judge
+// that did not pass, record a receipt, report. Only the agent drive and the judge call a model; the rest is plain code.
 async function runVerify(dir) {
     const run = loadRun(dir);
     if (run.status === 'cancelled')
@@ -844,25 +948,17 @@ async function runVerify(dir) {
         saveRun(dir, run);
     }, HEARTBEAT_MS);
     let step;
-    const set = (s, status, extra = {}) => {
-        Object.assign(s, { status, [status === 'running' ? 'started' : 'ended']: now() }, extra);
-        logEvent(dir, { step: s.name, status });
-        saveRun(dir, run);
-    };
+    const set = (s, status, extra = {}) => setStep(dir, run, s, status, extra);
     const begin = (name) => set((step = run.steps.find((s) => s.name === name)), 'running');
     const log = (name, result) => writeFileSync(join(dir, 'logs', `${name}.log`), `${encode(result)}\n`);
     const finish = (result, reason) => {
-        for (const s of run.steps)
-            if (s.status === 'pending' && s.name !== 'report')
-                s.status = 'skipped';
-        begin('report');
-        Object.assign(run, { result, reason, status: 'completed' });
-        set(step, 'completed');
+        step = run.steps.find((s) => s.name === 'report');
+        finishRun(dir, run, result, reason);
     };
     try {
         const done = (n) => run.steps.find((s) => s.name === n).status === 'completed';
         const cfg = loadConfig(run.repo);
-        const journey = cfg.journeys[run.journey];
+        const journey = run.journey === null ? undefined : cfg.journeys[run.journey];
         const command = journey?.command;
         const timeout = journey?.timeout ?? '30m';
         const limit = parseDuration(timeout);
@@ -871,7 +967,7 @@ async function runVerify(dir) {
             logEvent(dir, { step: 'resolve', status: 'completed', reused: true });
         else
             begin('resolve');
-        if (!command)
+        if (run.journey !== null && !command)
             throw new Error(`journey ${run.journey} is not in .done-done.yaml`);
         if (limit === null)
             throw new Error(`journeys.${run.journey}.timeout must be a duration such as 30m or 90s, not ${timeout}`);
@@ -882,6 +978,43 @@ async function runVerify(dir) {
             begin('drive');
             rec = JSON.parse(readFileSync(run.record, 'utf8'));
             set(step, 'completed');
+        }
+        else if (run.journey === null) {
+            // The author agent drives the feature in its own process group, so a timeout, an abort or a dead runner stops it
+            // and the app it launched; a drive that changed tracked files would prove code that is not committed.
+            begin('drive');
+            const author = run.author;
+            rec = { ...openRun(run.repo, cfg, null, null, run.run_id), author };
+            const evidence = runDir(cfg, rec.run_id);
+            const tracked = () => git(run.repo, 'status', '--porcelain', '--untracked-files=no');
+            const before = tracked();
+            const scratch = join(dir, 'tmp');
+            mkdirSync(scratch, { recursive: true });
+            const a = await askAgent({
+                agent: author.agent, model: author.model, prompt: drivePrompt(run, cfg, evidence, scratch), schema: DRIVE_SCHEMA, cwd: run.repo, timeoutMs: DRIVE_MS, tools: 'edit',
+                record: join(dir, 'agents', 'drive.json'), dirs: [evidence, scratch], env: { DONE_DONE_RUN_ID: rec.run_id, DONE_DONE_EVIDENCE_ROOT: evidence, TMPDIR: scratch },
+                onSpawn: (pgid) => {
+                    run.runner.journey_pgid = pgid;
+                    saveRun(dir, run);
+                },
+            });
+            const answer = a.answer;
+            const blocker = String(answer?.blocker ?? '').trim();
+            rec.exit = a.ok && !blocker ? 0 : 1;
+            const changed = tracked() !== before;
+            const sealed = closeRun(run.repo, cfg, rec);
+            run.record = join(recordsDir(cfg), `${rec.run_id}.json`);
+            const picked = typeof answer?.feature === 'string' ? answer.feature.replace(/^.*features\//, '').replace(/\.md$/, '') : '';
+            if (skillFeatures(run.repo, cfg).includes(picked))
+                run.feature ??= picked;
+            log('drive', { agent: author.agent, model: author.model, feature: run.feature ?? 'none', ...(a.ok ? { captures: answer?.captures, blocker } : { error: a.error }), record: a.record ?? a.recordError });
+            const why = !a.ok ? `${author.agent} did not finish the drive: ${a.error}`
+                : blocker ? `${author.agent} could not drive the feature: ${blocker}`
+                    : changed ? `${author.agent} changed tracked files in the repo during the drive (see git status), so its captures are not of the committed code`
+                        : sealed.code !== PASS ? sealed.reason : '';
+            set(step, why ? 'failed' : 'completed', { exit: rec.exit, outputs: evidenceOf(run.repo, cfg, rec) });
+            if (why)
+                return finish('fail', `drive: ${why}`);
         }
         else {
             begin('drive');
@@ -929,6 +1062,19 @@ async function runVerify(dir) {
         }
         else
             set(step, checked.code === PASS ? 'completed' : 'failed', { exit: checked.code, findings: checked.findings });
+        // The gate: when the check itself is clean but the judge did not pass a capture (or judged none of an agent's), the run
+        // waits for the caller (respond), who can move it on but never make it a pass. The runner ends here.
+        const clean = judgeRan ? checkFindings === 0 : checked.code === PASS;
+        const asks = !clean ? [] : judgeRan ? judgeFindings
+            : run.journey === null ? [{ level: 'inconclusive', why: 'the judge judged no capture (only PNG and JPEG captures are judged), and an agent drive passes only with a judge pass' }] : [];
+        if (asks.length) {
+            begin('gate');
+            const findings = asks.map((f, i) => ({ id: `gate-${i + 1}`, severity: f.level === 'fail' ? 'error' : 'warning', what: f.why, action: 'ask-user' }));
+            run.gate = { findings, cited: checked.cited, head: { commit: checked.head.commit, tree: checked.head.tree }, ...(checked.judgeBlock && { judge: checked.judgeBlock }) };
+            run.status = 'awaiting_approval';
+            set(step, 'awaiting_approval', { findings });
+            return;
+        }
         if (checked.code !== PASS)
             return finish(checked.code === FAIL ? 'fail' : 'inconclusive', `${judgeFindings.length ? 'judge' : 'check'}: ${(judgeFindings[0] ?? checked.findings[0])?.why ?? 'did not pass'}`);
         begin('receipt');
@@ -982,7 +1128,7 @@ const reapJourney = (dir, run) => {
 function showRun(dir, cfg, command, gone = false) {
     const run = loadRun(dir);
     const rec = run.record ? JSON.parse(readFileSync(run.record, 'utf8')) : undefined;
-    const at = run.steps.find((s) => s.status === 'running') ?? run.steps.find((s) => s.status === 'pending');
+    const at = run.steps.find((s) => s.status === 'running' || s.status === 'awaiting_approval') ?? run.steps.find((s) => s.status === 'pending');
     let { status, reason } = run;
     const open = status === 'pending' || status === 'running';
     if (open && (gone || runnerGone(run))) {
@@ -991,8 +1137,10 @@ function showRun(dir, cfg, command, gone = false) {
         reason = `the runner died at step ${at?.name}${run.runner ? ` (pid ${run.runner.pid}, last heartbeat ${beat}s ago)` : ' before it started'}`;
         reapJourney(dir, run);
     }
-    const code = status === 'pending' || status === 'running' ? WAITING : status === 'cancelled' || status === 'failed' || run.result === 'fail' ? FAIL : run.result === 'inconclusive' ? INCONCLUSIVE : PASS;
-    const again = `done-done verify ${run.journey} --outcome ${arg(run.claim)}${run.claim_id ? ` --claim-id ${arg(run.claim_id)}` : ''}`;
+    // An overridden run is never a pass: it exits 1 like a fail.
+    const code = status === 'pending' || status === 'running' || status === 'awaiting_approval' ? WAITING : status === 'cancelled' || status === 'failed' || run.result === 'fail' || run.result === 'overridden' ? FAIL : run.result === 'inconclusive' ? INCONCLUSIVE : PASS;
+    const drive = run.journey ?? (run.feature ? `--feature ${arg(run.feature)}` : '');
+    const again = `done-done verify ${drive ? `${drive} ` : ''}--outcome ${arg(run.claim)}${run.claim_id ? ` --claim-id ${arg(run.claim_id)}` : ''}`;
     const ev = cap(rec ? evidenceOf(run.repo, cfg, rec) : []);
     const result = { command, run_id: run.run_id, kind: run.kind, status };
     if (code === WAITING)
@@ -1001,7 +1149,15 @@ function showRun(dir, cfg, command, gone = false) {
         result.result = run.result;
     if (reason)
         result.reason = reason;
-    Object.assign(result, { claim: run.claim, journey: run.journey, repo: run.repo, ...(rec && { head: rec.commit }), steps: run.steps.map((s) => ({ name: s.name, status: s === at && (status === 'failed' || (status === 'cancelled' && s.status === 'running')) ? status : s.status })) });
+    Object.assign(result, {
+        claim: run.claim, journey: run.journey, ...(run.journey === null && { feature: run.feature ?? 'picked by the agent', author: run.author && `${run.author.agent} (model ${run.author.model || 'its own default'})` }),
+        repo: run.repo, ...(rec && { head: rec.commit }),
+        steps: run.steps.map((s) => ({ name: s.name, status: s === at && (status === 'failed' || (status === 'cancelled' && (s.status === 'running' || s.status === 'awaiting_approval'))) ? status : s.status })),
+    });
+    if (status === 'awaiting_approval' && run.gate)
+        result.findings = run.gate.findings;
+    if (run.response)
+        result.response = run.response;
     if (ev.items.length)
         result.evidence = ev.items;
     if (ev.omitted)
@@ -1009,11 +1165,19 @@ function showRun(dir, cfg, command, gone = false) {
     if (run.receipt)
         result.receipt = run.receipt;
     result.run = shown(run.repo, dir);
+    const id = run.run_id;
     result.help =
-        code === WAITING ? [`The run goes on without this command; read it later: done-done status --run ${run.run_id}`]
-            : code === PASS ? [`Verify this receipt (CI or merge): done-done receipt --verify ${rec.commit}`]
-                : status === 'cancelled' ? [`Start again from the failed step: done-done rerun --run ${run.run_id}`, `List past runs: done-done history`]
-                    : [`Read the step logs in ${shown(run.repo, join(dir, 'logs'))}`, `Fix the cause, commit, then run again from the failed step: done-done rerun --run ${run.run_id}`, `Or start a new run: ${again}`];
+        status === 'awaiting_approval' ? [
+            'Read the findings and look at the captures (evidence above), then answer the gate:',
+            `done-done respond --run ${id} --action approve --reason "<why they do show the outcome>"   (ends overridden, never pass)`,
+            `done-done respond --run ${id} --action skip --reason "<why to go on without a judge pass>"   (ends overridden, never pass)`,
+            `done-done respond --run ${id} --action fix   (ends fail; fix the product, or the verify skill's recipe, commit, then: done-done rerun --run ${id})`,
+        ]
+            : run.result === 'overridden' ? [`This head is not proven: ${run.response?.by} chose ${run.response?.action} past the judge, and receipt --verify refuses this receipt`, `Capture proof the judge passes: ${again}`]
+                : code === WAITING ? [`The run goes on without this command; read it later: done-done status --run ${run.run_id}`]
+                    : code === PASS ? [`Verify this receipt (CI or merge): done-done receipt --verify ${rec.commit}`]
+                        : status === 'cancelled' ? [`Start again from the failed step: done-done rerun --run ${run.run_id}`, `List past runs: done-done history`]
+                            : [`Read the step logs in ${shown(run.repo, join(dir, 'logs'))}`, `Fix the cause, commit, then run again from the failed step: done-done rerun --run ${run.run_id}`, `Or start a new run: ${again}`];
     emit(result);
     return code;
 }
@@ -1024,30 +1188,33 @@ async function waitRun(dir, pid) {
 async function cmdVerify(argv) {
     const { values, positionals } = parseArgs({
         args: argv,
-        options: { outcome: { type: 'string' }, 'claim-id': { type: 'string' }, judge: { type: 'boolean' }, wait: { type: 'boolean' }, 'no-wait': { type: 'boolean' }, foreground: { type: 'boolean' } },
+        options: { outcome: { type: 'string' }, feature: { type: 'string' }, 'claim-id': { type: 'string' }, judge: { type: 'boolean' }, wait: { type: 'boolean' }, 'no-wait': { type: 'boolean' }, foreground: { type: 'boolean' } },
         allowPositionals: true,
     });
     if (!values.outcome?.trim())
         throw new UsageError('verify needs --outcome "<what a user can now do>"');
     if (positionals.length > 1)
         throw new UsageError('verify takes at most one journey name');
+    if (positionals.length && values.feature !== undefined)
+        throw new UsageError('pass a journey or --feature, not both: a journey drives by its command, --feature by the author agent');
     if ([values.wait, values['no-wait'], values.foreground].filter(Boolean).length > 1)
         throw new UsageError('pass only one of --wait, --no-wait and --foreground');
     const repo = repoRoot();
     const cfg = loadConfig(repo);
     const names = Object.keys(cfg.journeys);
-    const journey = positionals[0] ?? (names.length === 1 ? names[0] : undefined);
-    if (!journey && names.length)
-        throw new UsageError(`verify needs a journey name; .done-done.yaml defines: ${names.join(', ')}`, `Run: done-done verify <${names.join('|')}> --outcome "<what a user can now do>"`);
-    if (!journey)
-        throw new UsageError('verify needs a journey, and .done-done.yaml defines none', 'Record one: done-done init --journey <name> -- <command that drives the real app>');
-    if (!cfg.journeys[journey])
-        throw new UsageError(`unknown journey ${journey}; .done-done.yaml defines: ${names.join(', ')}`);
+    // A named journey, or the only one, drives by its command; with --feature or no journey at all, the author agent drives.
+    const journey = positionals[0] ?? (names.length === 1 && values.feature === undefined ? names[0] : null);
+    if (journey === null && names.length > 1 && values.feature === undefined)
+        throw new UsageError(`verify needs a journey name or --feature; .done-done.yaml defines: ${names.join(', ')}`, `Run: done-done verify <${names.join('|')}> --outcome "<what a user can now do>"`);
+    if (journey !== null && !cfg.journeys[journey])
+        throw new UsageError(`unknown journey ${journey}; .done-done.yaml defines: ${names.join(', ') || 'none'}`);
     if (values['claim-id']?.trim() === '')
         throw new UsageError('--claim-id needs a non-empty id');
     if (!values['claim-id'] && !git(repo, 'branch', '--show-current'))
         throw new UsageError('HEAD is detached, so no branch names this claim; pass --claim-id <id>');
-    const judging = !!values.judge || cfg.judge.enabled;
+    const drive = journey === null ? agentDrive(repo, cfg, values.feature) : undefined;
+    // An agent drive is always judged, since the author never grades its own captures.
+    const judging = !!drive || !!values.judge || cfg.judge.enabled;
     // A judge that config forbids (the author's own agent and model) is a usage error now, not a failed run later.
     if (judging && cfg.judge.route !== 'auto')
         selectJudge(cfg, selectAgent(cfg));
@@ -1056,9 +1223,9 @@ async function cmdVerify(argv) {
     mkdirSync(join(dir, 'logs'), { recursive: true });
     const created = now();
     const run = {
-        schema: 2, run_id: id, kind: 'verify', app: cfg.app, repo, journey, claim: values.outcome, claim_id: values['claim-id'] ?? null, judge: judging, status: 'pending',
+        schema: 2, run_id: id, kind: 'verify', app: cfg.app, repo, journey, ...drive, claim: values.outcome, claim_id: values['claim-id'] ?? null, judge: judging, status: 'pending',
         steps: STEPS.map((name) => ({ name, status: 'pending' })), created, updated: created,
-        inputs: inputsOf(repo, cfg, journey),
+        inputs: inputsOf(repo, cfg, journey, drive?.feature),
     };
     saveRun(dir, run);
     logEvent(dir, { status: 'pending' });
@@ -1096,7 +1263,7 @@ async function cmdAttach(argv) {
         const lines = existsSync(join(dir, 'events.jsonl')) ? readFileSync(join(dir, 'events.jsonl'), 'utf8').split('\n').slice(0, -1) : [];
         for (; shown < lines.length; shown++)
             process.stderr.write(`${lines[shown]}\n`);
-        if (run.status === 'completed' || run.status === 'failed' || run.status === 'cancelled')
+        if (['completed', 'failed', 'cancelled', 'awaiting_approval'].includes(run.status))
             break;
         if (gone)
             break;
@@ -1147,13 +1314,16 @@ async function cmdRerun(argv) {
     const group = src.runner?.journey_pgid;
     if (['pending', 'running'].includes(src.status) && group && alive(-group))
         throw new UsageError(`the journey of run ${srcId} is still running, so it cannot be rerun yet`, `Read it: done-done status --run ${srcId}`);
-    const inputs = inputsOf(src.repo, loadConfig(src.repo), src.journey);
+    // A source run with no journey is driven again by the author agent config names now; schema 2 runs before PR 4 always had a journey.
+    const journey = src.journey ?? null;
+    const drive = journey === null ? agentDrive(src.repo, cfg, src.feature) : undefined;
+    const inputs = inputsOf(src.repo, loadConfig(src.repo), journey, drive?.feature);
     const same = !!src.inputs && ['head', 'journey', 'skill'].every((k) => src.inputs[k] === inputs[k]);
     const driveReuse = same && drivesClean(src.record, src.inputs?.head);
     const reused = (name) => (name === 'resolve' && same) || (name === 'drive' && driveReuse);
     // A rerun judges when its source did or config now turns the judge on; a forbidden judge is a usage error here too.
     // Steps follow the current list, so a run from before the judge step gains it.
-    const judging = !!src.judge || cfg.judge.enabled;
+    const judging = !!drive || !!src.judge || cfg.judge.enabled;
     if (judging && cfg.judge.route !== 'auto')
         selectJudge(cfg, selectAgent(cfg));
     const id = newRunId(git(repo, 'rev-parse', 'HEAD'));
@@ -1164,7 +1334,7 @@ async function cmdRerun(argv) {
         return s && reused(name) && s.status === 'completed' ? { ...s } : { name, status: 'pending' };
     });
     const created = now();
-    const run = { schema: 2, run_id: id, kind: src.kind, app: cfg.app, repo: src.repo, journey: src.journey, claim: src.claim, claim_id: src.claim_id, judge: judging, status: 'pending', inputs, steps, created, updated: created, ...(driveReuse && src.record && { record: src.record }) };
+    const run = { schema: 2, run_id: id, kind: src.kind, app: cfg.app, repo: src.repo, journey, ...drive, claim: src.claim, claim_id: src.claim_id, judge: judging, status: 'pending', inputs, steps, created, updated: created, ...(driveReuse && src.record && { record: src.record }) };
     saveRun(dir, run);
     for (const s of steps) {
         const f = join(root, srcId, 'logs', `${s.name}.log`);
@@ -1191,7 +1361,7 @@ async function cmdAbort(argv) {
     const id = pickId(runsRoot(cfg.app), repo, 'abort', cfg, values.run);
     const dir = join(runsRoot(cfg.app), id);
     const closed = (r, status = shownStatus(r)) => {
-        if (status === 'pending' || status === 'running')
+        if (status === 'pending' || status === 'running' || status === 'awaiting_approval')
             return false;
         emit({ command: 'abort', run_id: id, status, reason: `run ${id} is already ${status}`, help: [`List past runs: done-done history`, `Start again: done-done rerun --run ${id}`] });
         return true;
@@ -1201,11 +1371,17 @@ async function cmdAbort(argv) {
         reapJourney(dir, latest);
     if (closed(latest))
         return FAIL;
-    if (latest.runner && !isOurRunner(latest.runner.pid, dir)) {
+    // A run waiting at its gate has no runner left; the respond lock keeps abort and respond from both closing it.
+    const parked = latest.status === 'awaiting_approval';
+    if (parked && !createOnce(join(dir, 'respond.lock'))) {
+        emit({ command: 'abort', run_id: id, status: latest.status, reason: `run ${id} is being answered at its gate, so it was not cancelled`, help: [`Read the run: done-done status --run ${id}`] });
+        return FAIL;
+    }
+    if (!parked && latest.runner && !isOurRunner(latest.runner.pid, dir)) {
         emit({ command: 'abort', run_id: id, status: latest.status, reason: `could not confirm pid ${latest.runner.pid} is this run's runner, so nothing was killed or cancelled`, help: [`Read the run: done-done status --run ${id}`] });
         return FAIL;
     }
-    if (latest.runner) {
+    if (!parked && latest.runner) {
         try {
             process.kill(latest.runner.pid, 'SIGKILL');
         }
@@ -1222,6 +1398,53 @@ async function cmdAbort(argv) {
     saveRun(dir, after);
     emit({ command: 'abort', run_id: id, status: 'cancelled', reason: after.reason, help: [`Read the run: done-done status --run ${id}`, `Start again: done-done rerun --run ${id}`] });
     return PASS;
+}
+// Who answered a gate: the git user of this checkout, else the login name.
+function answeredBy(repo) {
+    try {
+        return git(repo, 'config', 'user.name') || userInfo().username;
+    }
+    catch {
+        return userInfo().username;
+    }
+}
+// Answer a run waiting at its gate. approve and skip write the receipt as overridden (with who and why) and end the run
+// overridden, never pass; fix ends it fail. The runner has exited, so this command finishes the run; the respond lock
+// lets only one answer (or an abort) close it.
+function cmdRespond(argv) {
+    const { values } = parseArgs({ args: argv, options: { run: { type: 'string' }, action: { type: 'string' }, reason: { type: 'string' } } });
+    const action = values.action;
+    if (action !== 'approve' && action !== 'skip' && action !== 'fix')
+        throw new UsageError('respond needs --action approve, skip or fix', 'Run: done-done respond --run <run-id> --action <approve|skip|fix> [--reason "<why>"]');
+    const reason = values.reason?.replace(/\s+/g, ' ').trim() ?? '';
+    if (action !== 'fix' && !reason)
+        throw new UsageError(`respond --action ${action} needs --reason "<why>": moving past the judge is recorded with who and why`, `Run: done-done respond --run <run-id> --action ${action} --reason "<why>"`);
+    const repo = repoRoot();
+    const cfg = loadConfig(repo);
+    const root = runsRoot(cfg.app);
+    const id = pickId(root, repo, 'respond', cfg, values.run);
+    const dir = join(root, id);
+    const run = loadRun(dir);
+    if (run.status !== 'awaiting_approval' || !run.gate || !createOnce(join(dir, 'respond.lock')))
+        throw new UsageError(`run ${id} is not waiting at its gate (it is ${run.status === 'awaiting_approval' ? 'being answered' : shownStatus(run)})`, `Read it: done-done status --run ${id}`);
+    const gate = run.steps.find((s) => s.name === 'gate');
+    const by = answeredBy(repo);
+    run.response = { action, by, ...(reason && { reason }), at: now() };
+    logEvent(dir, { step: 'gate', response: action, by, ...(reason && { reason }) });
+    if (action === 'fix') {
+        setStep(dir, run, gate, 'failed');
+        finishRun(dir, run, 'fail', `gate: ${by} chose fix: ${reason || run.gate.findings[0].what}`);
+        return showRun(dir, cfg, 'respond');
+    }
+    setStep(dir, run, gate, 'completed');
+    const step = run.steps.find((s) => s.name === 'receipt');
+    setStep(dir, run, step, 'running');
+    const { gate: g } = run;
+    const rec = { schema: 2, repo: cfg.app, head: g.head.commit, tree: g.head.tree, claim: run.claim, result: 'overridden', at: now(), files: g.cited, ...(g.judge && { judge: g.judge }), override: { action, by, reason, at: run.response.at } };
+    run.receipt = shown(repo, writeReceipt(cfg, rec));
+    setStep(dir, run, step, 'completed');
+    finishRun(dir, run, 'overridden', `gate: ${by} chose ${action}: ${reason}`);
+    return showRun(dir, cfg, 'respond');
 }
 function cmdHistory(argv) {
     const { values } = parseArgs({ args: argv, options: { limit: { type: 'string' } } });
@@ -1882,7 +2105,7 @@ async function cmdDoctor(argv) {
         const record = join(home(), 'agents', `probe-${new Date().toISOString().replace(/[:.]/g, '-')}-${agent.agent}.json`);
         const probe = !agent.path ? { ok: false, error: `${agent.agent} ${notFound}`, fix: installFix }
             : !supported(agent.agent) ? { ok: false, error: `done-done cannot start ${agent.agent} yet (${startable} for now)`, fix: switchFix }
-                : askAgent({ agent: agent.agent, model: agent.model, prompt: 'This is a connectivity probe from done-done doctor. Use no tools. Answer with ok set to true.', schema: PROBE_SCHEMA, cwd: repo ?? process.cwd(), timeoutMs: 180_000, tools: 'none', record });
+                : await askAgent({ agent: agent.agent, model: agent.model, prompt: 'This is a connectivity probe from done-done doctor. Use no tools. Answer with ok set to true.', schema: PROBE_SCHEMA, cwd: repo ?? process.cwd(), timeoutMs: 180_000, tools: 'none', record });
         checks.push(probe.ok && probe.answer?.ok === true
             ? { check: 'probe', status: 'ok', detail: `${agent.agent} (${modelPhrase(agent.agent, agent.model)}) answered the schema question; ${probe.recordError ? `the call record could not be written: ${probe.recordError}` : `record ${record}`}`, fix: '' }
             : { check: 'probe', status: 'missing', detail: `${agent.agent} did not answer: ${probe.error ?? `answer ${JSON.stringify(probe.answer)}`}${probe.record ? `; record ${record}` : ''}${probe.recordError ? `; the call record could not be written: ${probe.recordError}` : ''}`, fix: probe.fix ?? `Check that ${agent.agent} is signed in${agent.model ? ` and can use model ${agent.model}` : ''}, or set agent_config.${agent.agent}.model` });
@@ -1899,7 +2122,7 @@ async function cmdDoctor(argv) {
             ? fixes
             : names.length
                 ? [`Capture proof with \`done-done run ${names[0]}\`, then check it with ${check}`]
-                : [`Add a journey to .done-done.yaml (${journeyExample}), commit, then \`done-done run smoke\` and ${check}`];
+                : [...driveHint(repo, cfg), `Add a journey to .done-done.yaml (${journeyExample}), commit, then \`done-done run smoke\` and ${check}`];
     }
     else {
         result.help = fixes;
@@ -1934,7 +2157,7 @@ function cmdBare() {
     const check = '`done-done check --outcome "<what you proved>" <files it recorded>`';
     result.help = journeys.length
         ? [`Capture proof with \`done-done run ${journeys[0]}\`, then check it with ${check}`]
-        : [`Add a journey to .done-done.yaml (${journeyExample}), commit, then \`done-done run smoke\` and ${check}`];
+        : [...driveHint(repo, cfg), `Add a journey to .done-done.yaml (${journeyExample}), commit, then \`done-done run smoke\` and ${check}`];
     emit(result);
     return PASS;
 }
@@ -1979,6 +2202,8 @@ async function main(argv) {
             return await cmdRerun(rest);
         if (cmd === 'abort')
             return cmdAbort(rest);
+        if (cmd === 'respond')
+            return cmdRespond(rest);
         if (cmd === 'history')
             return cmdHistory(rest);
         if (cmd === '__runner') {

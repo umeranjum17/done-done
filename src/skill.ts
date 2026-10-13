@@ -49,6 +49,8 @@ Results are TOON: read \`result\` and follow the \`help\` lines through
 \`init\`, \`doctor\`, \`run\`, \`check\` and \`receipt\`. Proof comes from driving the real product, not from a unit test run, and counts only from a committed
 tree: commit the done-done setup (config, capture script) before you capture. \`fail\` or
 \`inconclusive\` is not done: fix the cause and re-run, or tell the user exactly what is still unproven.
+A run waiting at its gate (\`awaiting_approval\`) is the user's call: show them its findings and captures, and run
+\`done-done respond\` only with their answer and reason. Never approve or skip on your own; \`overridden\` is not done either.
 
 ## Request
 

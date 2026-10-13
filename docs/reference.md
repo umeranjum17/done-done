@@ -197,6 +197,8 @@ done-done receipt --judge --from pr-body.md
 | `fail`: wrong screen | fail | 1 |
 | `unsure`: the model said it cannot tell, was less than 80% sure, or did not answer (a model error or a used-up plan) | inconclusive | 3 |
 
+Under `verify`, a `fail` or `unsure` verdict does not end the run: it parks it at its [gate](#the-gate-and-respond).
+
 The result gains a `judge` block with the route, the model, the independence, the author and, for each judged file, its verdict, a short reason and whether it came from the cache. For the `claude-code` route, a missing or signed-out sign-in folder, a sign-in that is not a Claude subscription, a sign-in folder that is (or links to) your own `~/.claude`, a missing or non-executable `claude` binary, a missing `@byokit/decide` kit or a Node older than 22.18 is a config error (exit 2) whose `help` line is the command to fix it. The kit cannot tell a bad `judge.model` from a used-up plan, so both are `unsure` with a reason naming each. The judge's confidence is the model's own estimate, not a calibrated score.
 
 ### Record a receipt
@@ -210,12 +212,14 @@ done-done receipt --verify <head>         # read-only: check a recorded receipt
 
 `receipt` takes the same claim inputs as `check` and runs that check. It writes `<root>/.done-done/receipts/<head>.json` only when the check passes on the current HEAD, the tracked tree is clean, and the check cited at least one evidence file; a dirty tracked tree, a failed or inconclusive check, a pass that cited no evidence (for example `not proven:` allowed by trusted config), or a moved HEAD writes nothing and exits non-zero. The record holds the repo, the head and tree sha, the claim outcome, and every cited file with its sha256 and a timestamp. A judged receipt is schema 2 and adds a `judge` block: the route, model, independence and author, and each judged file's path, sha256 and verdict. A cited file is stored relative to the repo, or as `<evidence root>/<path>` when it is under an evidence root outside the repo, so the receipt still finds it from another checkout or a restored evidence root.
 
-`receipt --verify <head>` changes nothing. The argument may be a full commit sha or a ref (`HEAD`, a branch or a tag), resolved to the commit with `git rev-parse --verify <arg>^{commit}` before the receipt lookup; an unresolvable argument fails with the same missing-receipt shape. It succeeds only when the receipt exists, is PASS, the current HEAD is still that head, and every cited file still hashes to the recorded sha256. It reads schema 1 and 2; a schema 2 receipt also needs a well-formed `judge` block whose every verdict is `pass` for a cited file with the same sha256, and the result shows that block. A missing or malformed receipt and a hash mismatch are failures (exit 1), not usage errors. When the mismatched path is named in a run record, the failure names it as `changed after run <run-id>`.
+`receipt --verify <head>` changes nothing. The argument may be a full commit sha or a ref (`HEAD`, a branch or a tag), resolved to the commit with `git rev-parse --verify <arg>^{commit}` before the receipt lookup; an unresolvable argument fails with the same missing-receipt shape. It succeeds only when the receipt exists, is PASS, the current HEAD is still that head, and every cited file still hashes to the recorded sha256. A receipt whose `result` is `overridden` (written when someone moved a run past its gate with `respond`) always fails: it shows the `override` (approve or skip, who, why, when) and the judge block, and says the head is not proven, so a merge gate that runs `receipt --verify` refuses it. It reads schema 1 and 2; a schema 2 receipt also needs a well-formed `judge` block whose every verdict is `pass` for a cited file with the same sha256, and the result shows that block. A missing or malformed receipt and a hash mismatch are failures (exit 1), not usage errors. When the mismatched path is named in a run record, the failure names it as `changed after run <run-id>`.
 
 ### Verify a change in one run
 
 ```sh
 done-done verify [<journey>] --outcome "<what a user can now do>"   # --no-wait, --wait (the default), or --foreground (CI)
+done-done verify --outcome "<claim>" [--feature <name>]             # no journey: the author agent drives a verify skill feature
+done-done respond [--run <run-id>] --action approve|skip --reason "<why>" | --action fix   # answer a run waiting at its gate
 done-done status [--run <run-id>]                                   # the newest run of this checkout by default
 done-done attach [--run <run-id>]                                   # stream the run's events to stderr until it ends, then show it
 done-done logs --step <name> [--run <run-id>] [--full]              # one step's log, the last 50 lines unless --full
@@ -224,9 +228,29 @@ done-done abort [--run <run-id>]                                    # stop a liv
 done-done history [--limit <n>]                                     # this checkout's runs, newest first
 ```
 
-`verify` writes `$DONE_DONE_HOME/runs/<app>/<run-id>/run.json` (schema 2), then starts a detached runner that drives the journey, checks the files it wrote and records a receipt (steps `resolve`, `drive`, `check`, `judge`, `receipt`, `report`; `judge` runs only with `--judge` or `judge.enabled`, and its output goes to `logs/judge.log`). The runner goes on when the command or shell that started it ends. It writes its pid, the journey's process group and a heartbeat to `run.json`, each step to `events.jsonl`, and step output to `logs/`. `run.json` keeps the run's inputs and step state; the head, tree, dirty flag and evidence come from the evidence run record it points to. `verify` waits until the run ends (`--wait`, the default), then prints it like `status`; `--no-wait` returns at once. A journey still running after `journeys.<name>.timeout` (default `30m`, e.g. `90s`) is killed with everything it started, and the run ends inconclusive (exit 3) with `journey timed out after <timeout>`. `status` only reads the store, except that an open run whose runner is gone (its pid is no longer alive, or it never wrote a pid and is still open after 60 s) is shown as `failed` at the step it was on and its journey's process group is killed once (a `journey.killed` marker in the run folder keeps later reads from signalling again). Runs are stored per app, shared by every checkout of it; `status` shows the newest run of the current checkout and names its `repo`.
+`verify` writes `$DONE_DONE_HOME/runs/<app>/<run-id>/run.json` (schema 2), then starts a detached runner that drives the journey, checks the files it wrote and records a receipt (steps `resolve`, `drive`, `check`, `judge`, `gate`, `receipt`, `report`; `judge` runs with `--judge`, `judge.enabled` or after an agent drive, and its output goes to `logs/judge.log`). The runner goes on when the command or shell that started it ends. It writes its pid, the journey's process group and a heartbeat to `run.json`, each step to `events.jsonl`, and step output to `logs/`. `run.json` keeps the run's inputs and step state; the head, tree, dirty flag and evidence come from the evidence run record it points to. `verify` waits until the run ends (`--wait`, the default), then prints it like `status`; `--no-wait` returns at once. A journey still running after `journeys.<name>.timeout` (default `30m`, e.g. `90s`) is killed with everything it started, and the run ends inconclusive (exit 3) with `journey timed out after <timeout>`. `status` only reads the store, except that an open run whose runner is gone (its pid is no longer alive, or it never wrote a pid and is still open after 60 s) is shown as `failed` at the step it was on and its journey's process group is killed once (a `journey.killed` marker in the run folder keeps later reads from signalling again). Runs are stored per app, shared by every checkout of it; `status` shows the newest run of the current checkout and names its `repo`.
 
-`attach` prints each new event line to stderr while the run goes on, and exits when the run ends or its runner is gone. The step names for `logs --step` are the run's steps (`resolve`, `drive`, `check`, `judge` (only with `--judge`), `receipt`, `report`).
+`attach` prints each new event line to stderr while the run goes on, and exits when the run ends or its runner is gone. The step names for `logs --step` are the run's steps (`resolve`, `drive`, `check`, `judge` (when the run is judged), `gate`, `receipt`, `report`).
+
+#### Drive by agent
+
+With no journey named and none configured (or with `--feature`), the drive step has the author agent (`agent:` in config) drive one feature of the verify skill the way a user does. It reads the skill's `SKILL.md` and `features/<name>.md`, launches the app, drives that feature, saves PNG screenshots into the run's evidence folder (`$DONE_DONE_EVIDENCE_ROOT`) and stops what it started. `--feature <name>` picks the feature; without it, the only feature is used, or with several the agent picks the one the outcome is about and the run records it. The claim and the recipe paths go to the agent on stdin or in a prompt file, never in argv. The agent is told to follow the recipe and never add steps or data to make the outcome look true.
+
+- **Scope.** The drive runs under the agent's own approval policy, in the repo, with write access beyond it only to the run's evidence folder and its scratch folder (`<run>/tmp`, also `$TMPDIR`), where its CLI can limit that: claude with `--permission-mode acceptEdits --allowedTools Bash --add-dir`, opencode with `OPENCODE_PERMISSION` allowing only those folders outside the repo, gemini with `--approval-mode auto_edit --allowed-tools run_shell_command --include-directories`. Pi has no permission gate, so doctor warns (`tool_gate`). An `acp:<target>` agent cannot drive (done-done runs ACP agents with every tool denied): `verify` exits 2. A drive that changes a tracked file in the repo fails.
+- **Bounded.** The agent runs in its own process group with a 20-minute timeout; the group is killed when the drive ends, times out, the run is aborted or its runner dies.
+- **Always judged.** The judge (never the author's agent and model, as in [Judge relevance](#judge-relevance-opt-in)) judges each capture. A drive that reports a blocker or saves nothing the check accepts fails; one where no capture could be judged parks at the gate.
+- **Recorded.** The call goes to `agents/drive.json` (no prompt text), and the agent's answer (feature, captures, blocker) to `logs/drive.log`.
+- **Usage errors (exit 2):** no verify skill, an unknown `--feature`, a journey and `--feature` together, or an agent that is missing or cannot be started.
+
+#### The gate and respond
+
+When the judge says `fail` or `unsure` for a capture (or an agent drive has no judged capture), the run parks at its `gate` step: `status: awaiting_approval`, exit 4, with one `ask-user` finding per problem (`gate-1`, ...). The runner exits; the run waits until someone answers it with `respond`:
+
+- `--action approve --reason "<why>"`: the captures do show the outcome.
+- `--action skip --reason "<why>"`: go on without a judge pass.
+- `--action fix`: end the run `fail`; fix the product or the verify skill's recipe, commit, then `rerun`.
+
+Approve and skip need a non-empty `--reason`. Each answer is logged in `events.jsonl` (`step: gate`, the action, who answered (git `user.name`, else the OS user) and the reason) and kept in `run.json` as `response`. Approve and skip end the run `overridden`, never `pass` (exit 1), and write a receipt with `result: overridden`, the `override` (action, who, why, when) and the judge's verdicts; `receipt --verify` refuses it. A run is answered once (a second `respond` exits 2). `abort` cancels a parked run.
 
 `rerun` starts a new run of the same journey and leaves the source run as it was. It reuses `resolve` when HEAD, the journey command and the verify skill are unchanged, and `drive` too when the source's drive record is clean and bound to that HEAD; every other step runs again, and the judge runs when the source run was judged or `judge.enabled` is set. It refuses a source run that is still pending or running (exit 2), and one whose journey's process group is still alive. `--wait` (the default) waits for the new run and prints it; `--no-wait` returns at once, with exit 4 while the run is still running.
 
@@ -245,10 +269,10 @@ Running `done-done` with no subcommand prints the repo's config state (`config: 
 | Code | Meaning |
 |---|---|
 | 0 | pass |
-| 1 | fail |
+| 1 | fail (also a run overridden at its gate) |
 | 2 | usage or config error |
 | 3 | inconclusive (could not be proven either way) |
-| 4 | the run is still running (`verify --no-wait`, `rerun --no-wait`, `status`) |
+| 4 | the run is still running, or waits at its gate (`verify`, `rerun`, `status`, `respond`) |
 
 `doctor` exits 2 when a required item (`git`, `config`, `evidence_root`, and `probe` with `--probe`) is missing.
 

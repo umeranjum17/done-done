@@ -70,7 +70,7 @@ const LINK = /\[[^\]]*\]\(((?:[^()\s]|\([^()\s]*\))+)[^)]*\)/g;
 const localTarget = (t) => (/^[a-z][\w+.-]*:/i.test(t) ? '' : t.split('#')[0]);
 // A path:line or path:line-line. A path with a / is checked; a bare name is checked only when its extension is one
 // of the tracked files', so host:port text is never read as a citation.
-const CITE = /(?<![\w/.-])([\w.-][\w.()[\]-]*(?:\/[\w.()[\]-]+)*\.[A-Za-z]\w*):(\d+)(?:-(\d+))?\b/g;
+const CITE = /(?<![\w/.-])((?:(?:[\w.-]+|\([\w.-]+\)|\[[\w.-]+\])\/)*[\w-][\w.-]*\.[A-Za-z]\w*):(\d+)(?:-(\d+))?\b/g;
 // Whether the file at `p` really lies under the repo: a symlinked folder on the way to it is followed, so it counts by where it points.
 const realInside = (repo, p) => realpathSync(p).startsWith(`${realpathSync(repo)}${sep}`);
 // Why repo-relative `file` has no line `line` (through `end`), or '' when it has.
@@ -278,7 +278,10 @@ export async function maintainSteps(run, dir, cfg, h) {
     // Only claude reads the repo with its own tools: its read tools refuse paths outside it, while the other agents'
     // tools cannot be trusted that way, so they get the cited source from plain code.
     const toolless = agent.agent !== 'claude';
-    const agentBlock = !agent.path || !supported(agent.agent) ? `source-wave: no agent done-done can start (${agent.agent}${agent.path ? ' is not supported yet' : ' is not on PATH'}); run done-done doctor` : '';
+    const geminiBlock = agent.path && agent.agent === 'gemini' ? 'source-wave: gemini cannot read tool-less yet, since its none mode is read-only plan mode, not tool-free; use claude, opencode, pi or acp' : '';
+    if (geminiBlock)
+        add({ kind: 'coverage', file: rel(featDir), what: geminiBlock });
+    const agentBlock = !agent.path || !supported(agent.agent) ? `source-wave: no agent done-done can start (${agent.agent}${agent.path ? ' is not supported yet' : ' is not on PATH'}); run done-done doctor` : geminiBlock;
     let calls = 0;
     const record = (name) => join(dir, 'agents', `${++calls}-${name}.json`);
     const read = agentBlock ? [] : features.slice(0, MAX_CALLS - 1);

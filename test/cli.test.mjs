@@ -3276,7 +3276,7 @@ test('maintain checks a bracketed or parenthesized file:line citation and sends 
   writeFileSync(join(repo, 'app', '(auth)', 'login.tsx'), 'export const Login = 1; // BRACKET-CITED-LINE\n');
   writeFileSync(join(skill, 'SKILL.md'), '# verify-notes\n');
   writeFileSync(join(skill, 'features', 'README.md'), '# features\n\n- [Home](home.md)\n');
-  writeFileSync(join(skill, 'features', 'home.md'), '# Home\n\nThe page is app/[slug]/page.tsx:10, and login is app/(auth)/login.tsx:1.\n');
+  writeFileSync(join(skill, 'features', 'home.md'), '# Home\n\nThe page is app/[slug]/page.tsx:10, and login is app/(auth)/login.tsx:1. Run handler(login.tsx:1) or foo[page.tsx:1].\n');
   sh('add', '-A');
   sh('commit', '-qm', 'skill');
   const r = doctorIn(repo, s.env, 'maintain', '--foreground');
@@ -3337,4 +3337,24 @@ test('maintain does not name a file that was untracked since the window as recen
   const m = toon(r);
   assert.deepEqual([r.code, m.result], [0, 'clean'], r.out);
   assert.match(m.unverified.join('\n'), /missing secrets\/\.env: not in the churn list/, r.out);
+});
+
+test('maintain blocks the source wave for gemini, which cannot read tool-less, and still runs the plain checks', () => {
+  const { repo, env, sh } = setup();
+  const s = stubPiGemini(env, JSON.stringify({ drift: [], recipe: 'open it', recipes: [], missing: [] }));
+  mkdirSync(env.DONE_DONE_HOME, { recursive: true });
+  writeFileSync(join(env.DONE_DONE_HOME, 'config.yaml'), 'agent: gemini\n');
+  const skill = join(repo, '.agents', 'skills', 'verify-notes');
+  mkdirSync(join(skill, 'features'), { recursive: true });
+  writeFileSync(join(skill, 'SKILL.md'), '# verify-notes\n\n[Gone](gone.md)\n');
+  writeFileSync(join(skill, 'features', 'README.md'), '# features\n\n- [Home](home.md)\n');
+  writeFileSync(join(skill, 'features', 'home.md'), '# Home\n');
+  sh('add', '-A');
+  sh('commit', '-qm', 'skill');
+  const r = doctorIn(repo, s.env, 'maintain', '--foreground', '--full');
+  const m = toon(r);
+  assert.deepEqual([r.code, m.result], [3, 'blocked'], r.out);
+  assert.match(m.reason, /^coverage: .*gemini cannot read tool-less yet/, r.out);
+  assert.deepEqual(m.findings.map((f) => f.kind), ['dead-link', 'coverage'], r.out);
+  assert.equal(s.calls().length, 0, 'no reader or reconcile call reaches gemini');
 });

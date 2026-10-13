@@ -998,7 +998,8 @@ Outcome to prove: ${run.claim}
 Do not change any file in the repository. Do not run done-done: it refuses inside a drive, and done-done answers the run after you stop. Put logs and other scratch files in ${scratch} (also in $TMPDIR), never in /tmp.
 Keep working until all four steps are done: your next message without a tool call ends the drive and must be the answer.
 If you cannot launch the app or reach the feature, say why in blocker and save no capture.
-Answer with feature (the feature file you drove, such as features/<name>.md), captures (the file names you saved) and blocker ("" when you drove it).`;
+Answer with feature (the feature file you drove, such as features/<name>.md), captures (the file names you saved) and blocker ("" when you drove it),
+for example {"feature":"features/<name>.md","captures":["<name>.png"],"blocker":""}.`;
 }
 
 function saveRun(dir: string, run: Run) {

@@ -2022,6 +2022,7 @@ process.stdout.write(JSON.stringify({ type: 'result', is_error: false, structure
   assert.deepEqual(drive.argv.slice(drive.argv.indexOf('--permission-mode')), ['--permission-mode', 'acceptEdits', '--allowedTools', 'Bash', '--add-dir', drive.evidence, '--add-dir', drive.tmp, '--effort', 'low'], 'edits only in the repo, the evidence folder and the run scratch, at the configured effort');
   assert.match(drive.stdin, /Never add steps or data to make the outcome look true/, 'the drive is told not to stage the claim');
   assert.match(drive.stdin, /a screenshot of an earlier step \(such as an empty or half-filled form\) fails the drive: keep those in /, 'the drive saves only screenshots of the outcome, since the judge checks each against it');
+  assert.match(drive.stdin, /for example \{"feature":"features\/<name>\.md","captures":\["<name>\.png"\],"blocker":""\}[\s\S]*"required":\["feature","captures","blocker"\]\}\nThat object holds your own values, never the schema itself/, 'the prompt shows an answer and ends on words, not the schema a weak model copies back');
   assert.match(drive.stdin, /Outcome to prove: the note Umer added shows in the list[\s\S]*verify-notes\/features\/add-note\.md/, 'the claim and the feature recipe go on stdin');
   assert.ok(!drive.argv.some((a) => a.includes('Umer added')), 'never in argv');
   assert.deepEqual([judged.length, judged[0].agent], [1, 'opencode'], 'one capture, judged by another agent');
@@ -4644,7 +4645,7 @@ const role = pi ? 'judge' : /You fix the verification skill/.test(prompt) ? 'fix
 appendFileSync(${JSON.stringify(log)}, JSON.stringify({ role, cwd: process.cwd(), argv, prompt }) + '\\n');
 let answer;
 if (role === 'judge') {
-  const ids = JSON.parse(prompt.trim().split('\\n').pop()).required;
+  const ids = JSON.parse(prompt.trim().split('\\n').filter((l) => l.startsWith('{')).pop()).required;
   const p = mode === 'product' ? { skill: 0.02, product: 0.97, unclear: 0.01 } : { skill: 0.97, product: 0.02, unclear: 0.01 };
   answer = Object.fromEntries(ids.map((id) => [id, { probabilities: p, rationale: 'r', personReason: mode === 'product' ? 'the source looks broken' : 'the rename is deliberate' }]));
 } else if (role === 'fixer') {

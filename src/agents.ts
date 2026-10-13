@@ -16,7 +16,7 @@ export type AgentCall = {
   model: string;
   effort?: string; // agent_config.<agent>.effort, passed as the CLI's own flag
   args?: string[]; // agent_args_override.<agent>, after done-done's own flags
-  path?: string; // the binary; default: the agent's name on PATH
+  path: string; // the binary from agentRun: agent_path_override.<agent>, else its name on PATH; '' when neither starts
   prompt: string;
   schema: { required?: string[] } & Record<string, unknown>;
   cwd: string;
@@ -279,8 +279,8 @@ export function askAgent(c: AgentCall): AgentAnswer {
     dir = mkdtempSync(join(tmpdir(), 'done-done-agent-'));
     cwd = c.tools === 'none' ? dir : c.cwd;
     if (!adapter) throw new Error(`no adapter for ${c.agent} yet`);
-    const bin = c.path || agentPath(c.agent);
-    if (!bin) throw new Error(c.agent.startsWith('acp:') ? `${c.agent} needs acpx, and acpx is not startable; ${ACPX_INSTALL}` : `${c.agent} is not on PATH`);
+    const bin = c.path;
+    if (!bin) throw new Error(c.agent.startsWith('acp:') ? `${c.agent} needs acpx, and acpx is not startable; ${ACPX_INSTALL}` : `${c.agent} is not on PATH, or agent_path_override.${c.agent} is not an executable file`);
     let lastError = '';
     for (;;) {
       attempts++;

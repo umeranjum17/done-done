@@ -1649,7 +1649,6 @@ function checkChoice(agent: string, model: string) {
 
 // Save the user's agent (and model) in the global config, in place, keeping its comments and every other key.
 function saveAgent(agent: string, model: string): string {
-  writeGlobal();
   const file = join(home(), 'config.yaml');
   const doc = parseDocument(readFileSync(file, 'utf8'));
   doc.set('agent', doc.createNode(agent)); // a new node, so it drops the template's "" quotes
@@ -1700,6 +1699,7 @@ async function withAgent(cfg: Config): Promise<void> {
   if (cfg.agent) return;
   if (!interactive()) throw noAgent();
   const { agent, model } = await pickAgent();
+  writeGlobal();
   process.stderr.write(`${saveAgent(agent, model)}\n`);
   cfg.agent = agent;
   if (model) cfg.agent_config[agent] = { ...cfg.agent_config[agent], model };
@@ -1730,10 +1730,14 @@ async function cmdInit(argv: string[]): Promise<number> {
   const hook = spec?.make(repo); // likewise validated before any write
   // The agent: --agent, else with none set the user's pick in a terminal (asked before any write); never done-done's.
   const choice = values.agent !== undefined ? { agent: values.agent, model: values.model ?? '' } : !cfg.agent && interactive() ? await pickAgent() : undefined;
-  const writeAgent = (): { out: Record<string, string>; help: string[] } => {
-    if (choice) return { out: { agent: saveAgent(choice.agent, choice.model) }, help: [] };
-    if (cfg.agent) return { out: { agent: `unchanged (${cfg.agent})` }, help: [] };
-    return { out: { agent: 'not set' }, help: [`${noAgent().message}. ${noAgent().help}`] };
+  const writeAgent = (): { out: Record<string, string>; help: string[]; code: number } => {
+    if (choice) {
+      const saved = saveAgent(choice.agent, choice.model);
+      const overridden = cfg.from.agent === 'repo' && !!cfg.agent && cfg.agent !== choice.agent;
+      return { out: { agent: overridden ? `${saved}; .done-done.yaml overrides it with ${cfg.agent}` : saved }, help: [], code: PASS };
+    }
+    if (cfg.agent) return { out: { agent: `unchanged (${cfg.agent})` }, help: [], code: PASS };
+    return { out: { agent: 'not set' }, help: [`${noAgent().message}. ${noAgent().help}`], code: USAGE };
   };
   // Written last on both paths, after the config; init reports it as <agent>_hook (or the plugin/extension key).
   const writeHook = (): { out: Record<string, string>; help: string[] } => {
@@ -1769,7 +1773,7 @@ async function cmdInit(argv: string[]): Promise<number> {
     const ag = writeAgent();
     emit({
       command: 'init',
-      result: 'pass',
+      result: ag.code === PASS ? 'pass' : 'fail',
       config: existed ? 'updated' : 'written',
       global_config: globalConfig,
       ...ag.out,
@@ -1781,7 +1785,7 @@ async function cmdInit(argv: string[]): Promise<number> {
       ...agentHook.out,
       help: [`Capture proof: done-done run ${journey}, then: ${check}`, ...agentHook.help, ...ag.help],
     });
-    return PASS;
+    return ag.code;
   }
   if (!existed) {
     // No evidence.root: proof goes to <local_root>/<app>, outside the repo, so it outlives this checkout.
@@ -1806,7 +1810,7 @@ app: ${JSON.stringify(cfg.app)}
   const ag = writeAgent();
   emit({
     command: 'init',
-    result: 'pass',
+    result: ag.code === PASS ? 'pass' : 'fail',
     config: existed ? 'unchanged' : 'written',
     global_config: globalConfig,
     ...ag.out,
@@ -1823,7 +1827,7 @@ app: ${JSON.stringify(cfg.app)}
       ...ag.help,
     ],
   });
-  return PASS;
+  return ag.code;
 }
 
 // The exact next command for a usage or config error, so an agent can recover without reading --help.
@@ -1872,7 +1876,7 @@ function agentSettings(cfg: Config, agent: string): string {
     `agent ${cfg.agent} (${where('agent')})`,
     `model ${c.model || 'the CLI\'s own'} (${where(`agent_config.${agent}.model`)})`,
     `effort ${c.effort || 'the CLI\'s own'} (${where(`agent_config.${agent}.effort`)})`,
-    `args ${args.length ? args.join(' ') : 'none'} (${where(`agent_args_override.${agent}`)})`,
+    `args ${args.length ? `${args.length} set` : 'none'} (${where(`agent_args_override.${agent}`)})`,
     `path ${acp ? cfg.acpx_path : cfg.agent_path_override[agent] || `${agent} on PATH`} (${where(pathKey)})`,
     `agent_timeout ${cfg.agent_timeout} (${where('agent_timeout')})`,
   ].join('; ');

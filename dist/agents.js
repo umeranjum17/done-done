@@ -268,9 +268,9 @@ export function askAgent(c) {
         cwd = c.tools === 'none' ? dir : c.cwd;
         if (!adapter)
             throw new Error(`no adapter for ${c.agent} yet`);
-        const bin = c.path || agentPath(c.agent);
+        const bin = c.path;
         if (!bin)
-            throw new Error(c.agent.startsWith('acp:') ? `${c.agent} needs acpx, and acpx is not startable; ${ACPX_INSTALL}` : `${c.agent} is not on PATH`);
+            throw new Error(c.agent.startsWith('acp:') ? `${c.agent} needs acpx, and acpx is not startable; ${ACPX_INSTALL}` : `${c.agent} is not on PATH, or agent_path_override.${c.agent} is not an executable file`);
         let lastError = '';
         for (;;) {
             attempts++;

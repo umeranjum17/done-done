@@ -1651,7 +1651,8 @@ function checkChoice(agent: string, model: string) {
 function saveAgent(agent: string, model: string): string {
   const file = join(home(), 'config.yaml');
   let text = readFileSync(file, 'utf8');
-  if (!parseDocument(text).has('agent')) text = text.replace(/^# agent: .*$|^(?=[a-z_]+:)/m, (line) => `agent: ${agent}${line ? '' : '\n'}`);
+  const example = /^# agent: .*$/m;
+  if (!parseDocument(text).has('agent')) text = example.test(text) ? text.replace(example, `agent: ${agent}`) : text.replace(/^(?=[a-z_]+:)/m, `agent: ${agent}\n`);
   const doc = parseDocument(text);
   doc.set('agent', doc.createNode(agent));
   if (model) doc.setIn(['agent_config', agent, 'model'], model);

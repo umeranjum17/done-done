@@ -2280,6 +2280,21 @@ test('init --agent puts the key before the first top-level key when the example 
   assert.equal(parse(text).agent_config.opencode.model, 'opencode-go/test-model');
 });
 
+test('init --agent replaces the example comment even when a key sits above it', () => {
+  const { dir, dd } = bareRepo();
+  const globalYml = join(dir, 'home', 'config.yaml');
+  mkdirSync(join(dir, 'home'), { recursive: true });
+  writeFileSync(globalYml, `evidence:\n  local_root: ${join(dir, 'ev')}\n# agent: opencode\nagent_config:\n  claude: { model: claude-haiku-5-5 }\n`);
+  const r = dd('init', '--agent', 'opencode');
+  assert.equal(r.code, 0, r.out);
+  const text = readFileSync(globalYml, 'utf8');
+  const lines = text.split('\n');
+  const agentAt = lines.findIndex((l) => l.startsWith('agent: '));
+  assert.ok(agentAt > lines.findIndex((l) => l.startsWith('evidence:')) && agentAt < lines.findIndex((l) => l.startsWith('agent_config:')), 'the key takes the example comment\'s place, after the key above it');
+  assert.equal(parse(text).agent, 'opencode');
+  assert.ok(!text.includes('# agent: opencode'), 'the example comment is replaced by the key');
+});
+
 test('agent "" is refused in the repo and the global config; removing the key leaves it unset', () => {
   const { repo, env, dd } = setup('app: notes\nagent: ""\n');
   const inRepo = dd('init');

@@ -31,21 +31,28 @@ const CHECKS_TEXT = `Checks block (--from): the newest "## Checks" heading, then
 const RUNS_TEXT = `runs: each verify or maintain run lives in $DONE_DONE_HOME/runs/<app>/<run-id> (run.json, events.jsonl, logs/<step>.log,
   agents/<n>-<name>.json for each agent call) and goes on when the command that started it ends;
   verify steps: resolve, drive, check, judge (unless --no-judge), gate, receipt, report;
-  maintain steps: locate, hygiene, source-wave, reconcile, report
+  maintain steps: locate, hygiene, source-wave, reconcile, triage and fix (only with auto_fix.maintain above 0), report
   drive: the journey when there is one; else the author agent (agent: in config) drives one feature of the verify skill the way a user
   does and saves screenshots into the run's evidence folder; it may run commands and edit files only in the repo and that folder where
   its CLI can limit it (pi cannot), and a drive that changes a tracked file fails
   gate: a judge fail or unsure (or an agent drive with no judged capture) parks the run as awaiting_approval (exit 4); answer it with
   respond: approve or skip (each needs --reason) ends the run overridden, never pass, and its receipt says who and why, so
   receipt --verify refuses it; fix ends the run fail`;
-const MAINTAIN_TEXT = `maintain reads the verify skill and the source and edits nothing; HEAD, git status and the content of changed files must be the same before and after.
+const MAINTAIN_TEXT = `maintain reads the verify skill and the source; HEAD, git status and the content of changed files must be the same before and after.
   locate: the verify skill (.agents/skills/verify-<app>/SKILL.md); none: blocked, create it with done-done init
   hygiene: every local link in the skill resolves; features/README.md lists each features/*.md file once
   source-wave: one fresh read-only reader per feature file at the configured agent (agent, agent_config) explains it from source
   reconcile: each file:line the skill or a reader cites must exist (a bare file name matches a tracked file); one tool-less call
   merges the recipes and names recently changed source (git log, 30 days) that no feature covers. Result: clean (exit 0),
   drift with findings (exit 1), or blocked (no skill, a reader that did not answer, a repo that changed, or no agent: the
-  readers and the merge call do not run, the plain checks still do; exit 3)`;
+  readers and the merge call do not run, the plain checks still do; exit 3)
+  auto_fix: { maintain: <n> } (config, as no-mistakes; 0, the default, reports only) lets done-done fix drift up to n times:
+  triage: the judge the user set (never the agent that fixes) sorts each drift finding: the skill is out of date, or the product
+  may be wrong; a product finding is ask-user, so the run ends blocked and the user decides (maintain never edits product code)
+  fix: the agent the user set edits only the verify skill, in a done-done worktree at HEAD; a change outside the skill folder,
+  a commit by the agent or a change to your checkout ends it blocked, and the worktree is dropped. maintain then runs again there.
+  Result: changed (a clean re-run; one commit of the skill folder on a done-done/maintain-<run-id> branch, your branch and checkout
+  untouched; exit 0), or blocked (ask-user findings, a guard, or every attempt used, with the findings that remain; no branch)`;
 const DOCTOR_TEXT = `doctor changes nothing except the --probe call record (the agent itself may keep its own session files) and exits 0 when every required item is ok, 2 otherwise.
   required: git (inside a repository), config (a valid .done-done.yaml), evidence_root (writable).
   optional: verify_skill (.agents/skills/verify-<app>/), agent (the agent the user set and its model; missing when none is
@@ -83,7 +90,7 @@ const FLAGS = {
     '--run <run-id>': 'the run to show (default: the newest run of this checkout)',
     '--probe': 'ask the configured agent one JSON-schema question and require a valid answer (one call at the agent\'s model: its cheap default where it has one, else its own; set agent_config.<agent>.model to choose)',
     '--mock <screen>=<mock>': 'judge this screen next to its approved mock (repeat per screen; the screen is judged even when not listed)',
-    '--step <name>': 'the step log to show (verify: resolve, drive, check, judge, gate, receipt, report; maintain: locate, hygiene, source-wave, reconcile, report)',
+    '--step <name>': 'the step log to show (verify: resolve, drive, check, judge, gate, receipt, report; maintain: locate, hygiene, source-wave, reconcile, triage, fix, report)',
     '--feature <name>': 'with no journey, the author agent drives this feature of the verify skill (features/<name>.md); default: the only feature, else the agent picks the one the outcome is about',
     '--action <approve|skip|fix>': 'approve: the captures do show the outcome; skip: go on without a judge pass; both end the run overridden; fix: end it fail, then fix the product or the verify skill (done-done maintain checks it against the source)',
     '--reason "<why>"': 'why (required for approve and skip); kept in the run and its receipt with who answered',
@@ -156,7 +163,7 @@ const COMMANDS = {
         more: [RUNS_TEXT],
     },
     maintain: {
-        usage: [['done-done maintain [--no-wait | --wait | --foreground]', 'check the verify skill against the source in a run: links, index, cited file:line, one read-only reader per feature; edits nothing']],
+        usage: [['done-done maintain [--no-wait | --wait | --foreground]', 'check the verify skill against the source in a run: links, index, cited file:line, one read-only reader per feature; with auto_fix.maintain, the agent fixes the skill on a done-done branch']],
         flags: ['--wait', '--no-wait', '--foreground'],
         more: [MAINTAIN_TEXT, RUNS_TEXT],
     },
@@ -851,7 +858,7 @@ const STALE_MS = 60_000;
 const runsRoot = (app) => join(home(), 'runs', app);
 const STEPS = ['resolve', 'drive', 'check', 'judge', 'gate', 'receipt', 'report'];
 // Commands an agent drive must not run: they answer a gate, write a receipt or start a run that can write one.
-const DRIVE_REFUSED = ['respond', 'receipt', 'verify', 'rerun'];
+const DRIVE_REFUSED = ['respond', 'receipt', 'verify', 'rerun', 'maintain'];
 // One agent drive may launch the app, drive it and save captures; past this it is killed with everything it started.
 const DRIVE_SCHEMA = {
     type: 'object',
@@ -1011,8 +1018,12 @@ async function runSteps(dir) {
     };
     try {
         const cfg = loadConfig(run.repo);
+        const spawned = (pgid) => {
+            run.runner.journey_pgid = pgid;
+            saveRun(dir, run);
+        };
         if (run.kind === 'maintain')
-            return await maintainSteps(run, dir, cfg, { begin, set, log, finish });
+            return await maintainSteps(run, dir, cfg, { begin, set, log, finish, spawned });
         const done = (n) => run.steps.find((s) => s.name === n).status === 'completed';
         const journey = run.journey === null ? undefined : cfg.journeys[run.journey];
         const command = journey?.command;
@@ -1049,10 +1060,7 @@ async function runSteps(dir) {
             const a = await askAgent({
                 ...agentRun(cfg, author.agent, author.model), prompt: drivePrompt(run, cfg, evidence, scratch), schema: DRIVE_SCHEMA, cwd: run.repo, tools: 'edit',
                 record: join(dir, 'agents', 'drive.json'), dirs: [evidence, scratch], env: { DONE_DONE_RUN_ID: rec.run_id, DONE_DONE_DRIVE: rec.run_id, DONE_DONE_EVIDENCE_ROOT: evidence, TMPDIR: scratch },
-                onSpawn: (pgid) => {
-                    run.runner.journey_pgid = pgid;
-                    saveRun(dir, run);
-                },
+                onSpawn: spawned,
             });
             const answer = a.answer;
             const blocker = String(answer?.blocker ?? '').trim();
@@ -1224,6 +1232,8 @@ function showRun(dir, cfg, command, gone = false) {
         result.evidence_omitted = ev.omitted;
     if (run.receipt)
         result.receipt = run.receipt;
+    if (run.fix)
+        result.fix = run.fix;
     if (run.git_status)
         result.git_status = run.git_status;
     if (findings.items.length)
@@ -1247,10 +1257,13 @@ function showRun(dir, cfg, command, gone = false) {
             : run.result === 'overridden' ? [`This head is not proven: ${run.response?.by} chose ${run.response?.action} past the judge, and receipt --verify refuses this receipt`, `Capture proof the judge passes: ${again}`]
                 : code === WAITING ? [`The run goes on without this command; read it later: done-done status --run ${run.run_id}`]
                     : run.kind === 'maintain' && status === 'completed' ? (run.result === 'clean' ? [`The verify skill matches the source; read the readers' recipes: done-done logs --step reconcile --run ${run.run_id}`]
-                        : run.result === 'drift' ? [`Fix the findings in ${cfg.skill} (maintain edits nothing; --full lists them all), commit, then run again: ${again}`]
-                            : /^locate: no verify skill/.test(run.reason ?? '') ? ['Create the verify skill: done-done init']
-                                : /^locate:/.test(run.reason ?? '') ? [`Make ${cfg.skill} a real folder inside the repository (not a link), commit, then run again: ${again}`]
-                                    : [`Read the step logs in ${shown(run.repo, join(dir, 'logs'))}`, `Fix the cause, then run again: ${again}`])
+                        : run.result === 'changed' ? [`Review the fix on its own branch (your branch is untouched): git show ${run.fix.branch}`, `Take it: git merge ${run.fix.branch}, or drop it: git branch -D ${run.fix.branch}`]
+                            : run.result === 'drift' ? [`Fix the findings in ${cfg.skill} (--full lists them all), commit, then run again: ${again}`, `Or let done-done's agent fix them on a branch: set auto_fix: { maintain: 2 } in .done-done.yaml, then run again: ${again}`]
+                                : /^ask-user:/.test(run.reason ?? '') ? ['Ask the user about each ask-user finding: is the product or the skill wrong? Never decide it for them', `Product wrong: fix the product (maintain never edits product code). Skill wrong: fix ${cfg.skill}, commit, then run again: ${again}`]
+                                    : /^fix:/.test(run.reason ?? '') ? [`Read what each fix attempt did: done-done logs --step fix --run ${run.run_id}`, `Fix the findings in ${cfg.skill} by hand, commit, then run again: ${again}`]
+                                        : /^locate: no verify skill/.test(run.reason ?? '') ? ['Create the verify skill: done-done init']
+                                            : /^locate:/.test(run.reason ?? '') ? [`Make ${cfg.skill} a real folder inside the repository (not a link), commit, then run again: ${again}`]
+                                                : [`Read the step logs in ${shown(run.repo, join(dir, 'logs'))}`, `Fix the cause, then run again: ${again}`])
                         : code === PASS ? [`Verify this receipt (CI or merge): done-done receipt --verify ${rec.commit}`]
                             : status === 'cancelled' ? [...(run.kind === 'maintain' ? [] : [`Start again from the failed step: done-done rerun --run ${run.run_id}`]), `List past runs: done-done history`]
                                 : [`Read the step logs in ${shown(run.repo, join(dir, 'logs'))}`, ...(run.kind === 'maintain' ? [] : [`Fix the cause, commit, then run again from the failed step: done-done rerun --run ${run.run_id}`]), `Or start a new run: ${again}`];
@@ -1337,11 +1350,17 @@ async function cmdMaintain(argv) {
     const repo = repoRoot();
     const cfg = loadConfig(repo);
     await withChoice('agent', cfg);
+    // auto_fix: the agent the user set fixes the skill and the judge the user set (never that agent and model) triages, so both are set now.
+    if (cfg.auto_fix.maintain) {
+        if (cfg.agent.startsWith('acp:'))
+            throw new UsageError(`${cfg.agent} cannot fix the verify skill: done-done runs ACP agents with every tool denied`, `Set auto_fix.maintain: 0 to report only, or set agent: to one of ${AGENTS.filter(supported).join(', ')}`);
+        await preflightJudge(cfg);
+    }
     const id = newRunId(git(repo, 'rev-parse', 'HEAD'));
     const dir = join(runsRoot(cfg.app), id);
     mkdirSync(join(dir, 'logs'), { recursive: true });
     const created = now();
-    const steps = ['locate', 'hygiene', 'source-wave', 'reconcile', 'report'].map((name) => ({ name, status: 'pending' }));
+    const steps = ['locate', 'hygiene', 'source-wave', 'reconcile', ...(cfg.auto_fix.maintain ? ['triage', 'fix'] : []), 'report'].map((name) => ({ name, status: 'pending' }));
     saveRun(dir, { schema: 2, run_id: id, kind: 'maintain', app: cfg.app, repo, claim_id: null, status: 'pending', steps, created, updated: created });
     logEvent(dir, { status: 'pending' });
     return launch(dir, cfg, 'maintain', values);

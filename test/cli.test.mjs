@@ -625,7 +625,7 @@ test('init writes a minimal config that keeps evidence outside the repo, and is 
   assert.equal(d.global_config, `written ${globalYml}`);
   const globalText = readFileSync(globalYml, 'utf8');
   const g = parse(globalText);
-  assert.deepEqual(Object.keys(g), ['agent_config', 'agent_args_override', 'agent_path_override', 'acpx_path', 'agent_timeout', 'evidence', 'judge'], 'every global key, named as in no-mistakes where the meaning is the same');
+  assert.deepEqual(Object.keys(g), ['agent_config', 'agent_args_override', 'agent_path_override', 'acpx_path', 'agent_timeout', 'auto_fix', 'evidence', 'judge'], 'every global key, named as in no-mistakes where the meaning is the same');
   assert.deepEqual([g.agent, g.agent_config.claude, g.agent_config.opencode, g.agent_timeout], [undefined, { model: 'claude-haiku-5-5', effort: 'low' }, { model: 'opencode-go/muse-spark-1.3-contributor', effort: 'low' }, '30m'], 'no agent key until the user picks one, and the cheap defaults');
   for (const key of Object.keys(g)) assert.match(globalText, new RegExp(`# .*\\n${key}:`), `${key} has a comment`);
   const before = readFileSync(yml);
@@ -3787,7 +3787,7 @@ test('maintain gives a pi reader no tools and puts the cited source in its promp
   const reader = s.calls().find((c) => c.stdin.includes('Feature file'));
   assert.ok(reader.argv.includes('--no-tools'), reader.argv.join(' '));
   assert.ok(!reader.argv.includes('-t'), 'no read tools for pi');
-  assert.match(reader.stdin, /Cited source src\/app\.js:\nexport const app = 1; \/\/ CITED-SOURCE-LINE/);
+  assert.match(reader.stdin, /Cited source src\/app\.js:\n1: export const app = 1; \/\/ CITED-SOURCE-LINE/);
 });
 
 test('maintain sends a pi reader only the source its prompt shows, not a citation past the reader window', () => {
@@ -3866,7 +3866,7 @@ test('maintain gives a pi reader the cited source for a ./ path citation', () =>
   const r = doctorIn(repo, s.env, 'maintain', '--foreground');
   assert.equal(r.code, 0, r.out);
   const reader = s.calls().find((c) => c.stdin.includes('Feature file'));
-  assert.match(reader.stdin, /Cited source src\/app\.js:\nexport const app = 1; \/\/ CITED-SOURCE-LINE/);
+  assert.match(reader.stdin, /Cited source src\/app\.js:\n1: export const app = 1; \/\/ CITED-SOURCE-LINE/);
 });
 
 test('maintain says a cited symlink that points outside the repo is outside the repository', () => {
@@ -4178,7 +4178,7 @@ console.log(JSON.stringify({ jsonrpc: '2.0', method: 'session/update', params: {
   const calls = readFileSync(log, 'utf8').trim().split('\n').map((l) => JSON.parse(l));
   const reader = calls.find((c) => c.stdin.includes('Feature file'));
   assert.ok(reader.argv.includes('--deny-all'), reader.argv.join(' '));
-  assert.match(reader.stdin, /Cited source src\/app\.js:\nexport const app = 1; \/\/ ACP-CITED-LINE/);
+  assert.match(reader.stdin, /Cited source src\/app\.js:\n1: export const app = 1; \/\/ ACP-CITED-LINE/);
 });
 
 test('maintain checks and sends a tracked symlink to an in-repo file as that file', () => {
@@ -4199,7 +4199,7 @@ test('maintain checks and sends a tracked symlink to an in-repo file as that fil
   const m = toon(r);
   assert.deepEqual([r.code, m.result, m.findings?.length ?? 0], [0, 'clean', 0], r.out);
   const reader = s.calls().find((c) => c.stdin.includes('Feature file'));
-  assert.match(reader.stdin, /Cited source AGENTS\.md:\n# Rules\n\/\/ LINK-CITED-LINE/);
+  assert.match(reader.stdin, /Cited source AGENTS\.md:\n1: # Rules\n2: \/\/ LINK-CITED-LINE/);
 });
 
 test('maintain treats an untracked repo path as a citation problem in the skill and as unverified drift', () => {
@@ -4262,7 +4262,7 @@ test('maintain checks a bracketed or parenthesized file:line citation and sends 
   assert.deepEqual([r.code, m.result], [1, 'drift'], r.out);
   assert.deepEqual(m.findings.map((f) => f.what), ['cites app/[slug]/page.tsx:10, but app/[slug]/page.tsx has 1 lines'], r.out);
   const reader = s.calls().find((c) => c.stdin.includes('Feature file'));
-  assert.ok(reader.stdin.includes('Cited source app/(auth)/login.tsx:\nexport const Login = 1; // BRACKET-CITED-LINE'), reader.stdin);
+  assert.ok(reader.stdin.includes('Cited source app/(auth)/login.tsx:\n1: export const Login = 1; // BRACKET-CITED-LINE'), reader.stdin);
 });
 
 test('maintain checks a citation of a bracketed file name like pages/[id].tsx and reports a wrong line', () => {
@@ -4309,7 +4309,7 @@ test('maintain leaves an unreadable cited file out of the reader source and name
   assert.deepEqual([r.code, m.result], [1, 'drift'], r.out);
   assert.ok(!m.findings.some((f) => f.kind === 'coverage'), r.out);
   const reader = s.calls().find((c) => c.stdin.includes('Feature file'));
-  assert.ok(reader.stdin.includes('Cited source src/app.js:\nexport const app = 1; // READABLE-CITED-LINE'), reader.stdin);
+  assert.ok(reader.stdin.includes('Cited source src/app.js:\n1: export const app = 1; // READABLE-CITED-LINE'), reader.stdin);
   assert.match(reader.stdin, /\[truncated: .*left out: src\/secret\.js\]/, reader.stdin);
 });
 
@@ -4394,4 +4394,113 @@ setTimeout(() => {}, 30_000);
   const ab = spawnSync(process.execPath, [CLI, 'abort', '--run', id], { cwd: repo, env: { ...s.env, PATH: process.env.PATH }, encoding: 'utf8' });
   assert.equal(ab.status, 0, ab.stdout + ab.stderr);
   assert.ok(await groupGone(agent), 'the agent child outlived the aborted run');
+});
+
+// auto_fix: the opencode author reads and fixes the skill, the pi judge triages; the stub reads its mode from a file.
+function fixSetup(autoFix) {
+  const t = setup(`app: notes\njudge:\n  enabled: false\n${autoFix === undefined ? '' : `auto_fix:\n  maintain: ${autoFix}\n`}`);
+  const e = pathEnv(t.env, []);
+  const log = join(e.PATH, 'calls.jsonl');
+  const stub = `#!${process.execPath}
+const { appendFileSync, readFileSync, writeFileSync } = require('node:fs');
+const argv = process.argv.slice(2);
+const pi = argv[0] === '-p';
+const prompt = pi ? readFileSync(0, 'utf8') : readFileSync(argv[argv.indexOf('-f') + 1], 'utf8');
+const mode = readFileSync(${JSON.stringify(join(e.PATH, 'mode'))}, 'utf8').trim();
+const role = pi ? 'judge' : /You fix the verification skill/.test(prompt) ? 'fixer' : /read-only source reader/.test(prompt) ? 'reader' : 'reconcile';
+appendFileSync(${JSON.stringify(log)}, JSON.stringify({ role, cwd: process.cwd(), argv }) + '\\n');
+let answer;
+if (role === 'judge') {
+  const ids = JSON.parse(prompt.trim().split('\\n').pop()).required;
+  const p = mode === 'product' ? { skill: 0.02, product: 0.97, unclear: 0.01 } : { skill: 0.97, product: 0.02, unclear: 0.01 };
+  answer = Object.fromEntries(ids.map((id) => [id, { probabilities: p, rationale: 'r', personReason: mode === 'product' ? 'the source looks broken' : 'the rename is deliberate' }]));
+} else if (role === 'fixer') {
+  const f = '.agents/skills/verify-notes/features/home.md';
+  writeFileSync(f, readFileSync(f, 'utf8').replace('OLD', 'NEW'));
+  if (mode === 'outside') writeFileSync('src/app.js', 'export const app = 2;\\n');
+  answer = { summary: 'renamed the title', blocker: '' };
+} else if (role === 'reader') {
+  answer = { drift: /Feature file[\\s\\S]*OLD/.test(prompt.split('Cited source')[0]) ? [{ claim: 'the title is OLD', why: 'the source names it NEW', file: 'src/app.js', line: 1 }] : [], recipe: 'open home' };
+} else answer = { recipes: [], missing: [] };
+const text = JSON.stringify(answer);
+if (pi) console.log(JSON.stringify({ type: 'message_end', message: { role: 'assistant', content: [{ type: 'text', text }] } }));
+else console.log(JSON.stringify({ type: 'text', part: { type: 'text', text } }));
+`;
+  for (const b of ['opencode', 'pi']) writeFileSync(join(e.PATH, b), stub, { mode: 0o755 });
+  writeFileSync(join(e.PATH, 'mode'), 'good');
+  mkdirSync(t.env.DONE_DONE_HOME, { recursive: true });
+  writeFileSync(join(t.env.DONE_DONE_HOME, 'config.yaml'), 'agent: opencode\nagent_config:\n  opencode: { model: opencode-go/author }\njudge:\n  route: answerer:pi\n  model: pi/judge\n');
+  const skill = join(t.repo, '.agents', 'skills', 'verify-notes');
+  mkdirSync(join(skill, 'features'), { recursive: true });
+  writeFileSync(join(skill, 'SKILL.md'), '# verify-notes\n');
+  writeFileSync(join(skill, 'features', 'README.md'), '# features\n\n- [Home](home.md)\n');
+  writeFileSync(join(skill, 'features', 'home.md'), '# Home\n\nThe title is OLD. See src/app.js:1.\n');
+  t.sh('add', '-A');
+  t.sh('commit', '-qm', 'skill');
+  const git = (...a) => t.sh(...a).toString().trim();
+  const calls = () => (existsSync(log) ? readFileSync(log, 'utf8').trim().split('\n').map((l) => JSON.parse(l)) : []);
+  const maintain = () => {
+    const r = doctorIn(t.repo, { ...e, PATH: `${e.PATH}:${dirname(process.execPath)}` }, 'maintain', '--foreground');
+    return { r, m: toon(r) };
+  };
+  return { ...t, e, calls, git, maintain, mode: (m) => writeFileSync(join(e.PATH, 'mode'), m), branches: () => git('branch', '--list', 'done-done/*') };
+}
+
+test('maintain with auto_fix 0 reports drift only: no judge, no fixer, no branch', () => {
+  const t = fixSetup(0);
+  const { r, m } = t.maintain();
+  assert.deepEqual([r.code, m.result], [1, 'drift'], r.out);
+  assert.deepEqual(t.calls().map((c) => c.role), ['reader', 'reconcile']);
+  assert.equal(t.branches(), '');
+  assert.match(m.help.join('\n'), /auto_fix: \{ maintain: 2 \}/);
+});
+
+test('maintain with auto_fix fixes the skill in one skill-only commit on a done-done branch and leaves the user branch alone', () => {
+  const t = fixSetup(2);
+  const head = t.git('rev-parse', 'HEAD');
+  const { r, m } = t.maintain();
+  assert.deepEqual([r.code, m.result], [0, 'changed'], r.out);
+  assert.deepEqual(t.calls().map((c) => c.role), ['reader', 'reconcile', 'judge', 'fixer', 'reader', 'reconcile']);
+  const fixer = t.calls().find((c) => c.role === 'fixer');
+  assert.notEqual(fixer.cwd, t.repo, 'the fixer edits a done-done worktree, never the checkout');
+  assert.equal(m.fix.branch, `done-done/maintain-${m.run_id}`);
+  assert.equal(t.git('rev-parse', 'HEAD'), head, 'the user branch did not move');
+  assert.equal(t.git('status', '--porcelain'), '', 'the checkout is untouched');
+  assert.equal(t.git('rev-list', '--count', `${head}..${m.fix.branch}`), '1');
+  assert.equal(t.git('diff', '--name-only', head, m.fix.branch), '.agents/skills/verify-notes/features/home.md');
+  assert.match(t.git('show', `${m.fix.branch}:.agents/skills/verify-notes/features/home.md`), /The title is NEW/);
+  assert.equal(t.git('worktree', 'list').split('\n').length, 1, 'the done-done worktree is removed');
+});
+
+test('maintain with auto_fix drops a fix that edits outside the skill folder and makes no branch', () => {
+  const t = fixSetup(2);
+  t.mode('outside');
+  const { r, m } = t.maintain();
+  assert.deepEqual([r.code, m.result], [3, 'blocked'], r.out);
+  assert.match(m.reason, /^fix: opencode changed files outside \.agents\/skills\/verify-notes\/ \(src\/app\.js\)/);
+  assert.equal(t.branches(), '');
+  assert.equal(readFileSync(join(t.repo, 'src', 'app.js'), 'utf8'), 'export const app = 1;\n');
+  assert.equal(t.git('worktree', 'list').split('\n').length, 1);
+});
+
+test('maintain with auto_fix stops and asks when the judge says the product may be wrong', () => {
+  const t = fixSetup(2);
+  t.mode('product');
+  const { r, m } = t.maintain();
+  assert.deepEqual([r.code, m.result], [3, 'blocked'], r.out);
+  assert.match(m.reason, /^ask-user: .*\(F1\)/);
+  assert.deepEqual(m.findings.map((f) => [f.kind, f.action]), [['drift', 'ask-user']]);
+  assert.ok(!t.calls().some((c) => c.role === 'fixer'), 'no fixer runs on an ask-user finding');
+  assert.equal(t.branches(), '');
+  assert.match(m.help[0], /Ask the user/);
+});
+
+test('maintain with auto_fix on a clean skill ends clean with no branch and no judge', () => {
+  const t = fixSetup(2);
+  writeFileSync(join(t.repo, '.agents', 'skills', 'verify-notes', 'features', 'home.md'), '# Home\n\nThe title is NEW. See src/app.js:1.\n');
+  t.sh('commit', '-qam', 'fresh');
+  const { r, m } = t.maintain();
+  assert.deepEqual([r.code, m.result], [0, 'clean'], r.out);
+  assert.deepEqual(t.calls().map((c) => c.role), ['reader', 'reconcile']);
+  assert.equal(t.branches(), '');
 });

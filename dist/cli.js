@@ -524,8 +524,8 @@ async function runCheck(argv, run) {
     else {
         const src = readSource(values.from);
         prBranch = src.branch;
-        // A local file or stdin has no PR title: its own first heading, else the HEAD commit subject, is the title.
-        const title = src.title ?? src.body.match(/^#\s+(.+)$/m)?.[1] ?? git(repo, 'log', '-1', '--format=%s');
+        // A local file or stdin has no PR title, so the HEAD commit subject is the title.
+        const title = src.title ?? git(repo, 'log', '-1', '--format=%s');
         claim = claimFromChecks(src.body, title, repo, cfg, findings);
     }
     if (claim?.notProven) {
@@ -1989,8 +1989,11 @@ function saveChoice(kind, { agent, model }) {
 }
 // Why a typed model name is not one the agent lists (opencode models, pi --list-models), or '' when it is listed or the
 // agent has no list to check against (a list that fails is named, and the model is kept as typed).
+function modelList(agent) {
+    return agent === 'opencode' ? ['models'] : agent === 'pi' ? ['--list-models'] : null;
+}
 function unknownModel(agent, model, cfg) {
-    const list = agent === 'opencode' ? ['models'] : agent === 'pi' ? ['--list-models'] : null;
+    const list = modelList(agent);
     const bin = list && agentPath(agent, cfg);
     if (!list || !bin)
         return '';
@@ -1999,8 +2002,13 @@ function unknownModel(agent, model, cfg) {
         process.stderr.write(`${agent} ${list[0]} failed (${(r.error?.message || r.stderr || `exit ${r.status}`).trim().split('\n').at(-1)}), so ${model} is saved unchecked\n`);
         return '';
     }
-    // opencode prints provider/model per line; pi prints a table whose first two columns are provider and model.
-    const names = r.stdout.split('\n').flatMap((l) => { const [a, b] = l.trim().split(/\s+/); return agent === 'pi' && b ? [`${a}/${b}`, b] : [a]; });
+    // opencode prints provider/model per line; pi prints a table whose first two columns are provider and model, under a header row.
+    const names = r.stdout.split('\n').flatMap((l) => {
+        const [a, b] = l.trim().split(/\s+/);
+        if (agent === 'pi' && a === 'provider' && b === 'model')
+            return [];
+        return agent === 'pi' && b ? [`${a}/${b}`, b] : [a];
+    });
     return names.includes(model) ? '' : `${model} is not a model ${agent} lists (${agent} ${list[0]})`;
 }
 const interactive = () => !!process.stdin.isTTY && !!process.stderr.isTTY;
@@ -2060,8 +2068,11 @@ async function pick(kind, cfg) {
                         const why = !typedModel ? 'no model typed' : agent === 'opencode' && !typedModel.includes('/') ? `${typedModel} is not provider/model` : unknownModel(agent, typedModel, cfg);
                         if (why)
                             process.stderr.write(`${why}; type it again\n`);
-                        else
+                        else {
                             model = typedModel;
+                            if (!modelList(agent))
+                                process.stderr.write(`the model was not checked because ${agent} has no model list; run 'done-done doctor --probe' to check it\n`);
+                        }
                     }
                 else
                     process.stderr.write(`${n || 'nothing'} is not 1 or 2\n`);
@@ -2657,7 +2668,7 @@ async function main(argv) {
             await runSteps(rest[0]);
             return PASS;
         }
-        if (cmd === '--version' || cmd === '-v' || cmd === 'version') {
+        if (cmd === '--version') {
             console.log(JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version);
             return PASS;
         }

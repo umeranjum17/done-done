@@ -258,10 +258,10 @@ test('Checks block: form rules, not-proven and trusted config', () => {
   mkdirSync(join(repo, '.agents', 'skills', 'verify-notes'), { recursive: true });
   write(`## Checks\noutcome: x\nrepro: n/a\nproof: \`done-done run shots\`\nevidence: ${files[0]}\n`);
   assert.match(dd('check', '--from', '../pr.md').out, /does not name the project's verify skill verify-notes/);
-  // A local file has no PR title: its first heading, else the HEAD commit subject, is the title, so a fix still needs a repro.
+  // A local file has no PR title, so the HEAD commit subject is its title, and a fix still needs a repro.
   sh('commit', '-q', '--allow-empty', '-m', 'fix: home crash');
   assert.match(dd('check', '--from', '../pr.md').out, /a fix needs a repro, not n\/a/);
-  write(`# docs: home\n\n## Checks\noutcome: x\nrepro: n/a\nproof: \`done-done run shots\`\nevidence: ${files[0]}\n`);
+  sh('commit', '-q', '--allow-empty', '-m', 'docs: home');
   assert.doesNotMatch(dd('check', '--from', '../pr.md').out, /a fix needs a repro/);
 });
 
@@ -2357,11 +2357,12 @@ test('init in a terminal says why it asks again and refuses a model the agent do
   writeFileSync(join(bin, 'pi'), `#!/bin/sh\nprintf 'provider     model                       context\\nopencode-go  muse-spark-1.3-contributor  1.0M\\n'\n`, { mode: 0o755 });
   const cmd = [process.execPath, CLI, 'init'].join(' ');
   // Each list's answers are typed at once, ahead of the prompts: none is dropped while done-done checks the model list.
-  const agentAnswers = ['x', '9', '4', '2', 'muse', 'opencode-go/muse-spark-1.3-contributor'].join('\\n');
+  const agentAnswers = ['x', '9', '4', '2', 'model', 'muse', 'opencode-go/muse-spark-1.3-contributor'].join('\\n');
   const r = spawnSync('/bin/sh', ['-c', `(sleep 2; printf '${agentAnswers}\\n'; sleep 3; printf 'x\\n1\\n1\\n'; sleep 3) | /usr/bin/script -qec "${cmd}" /dev/null`], { cwd: t.repo, env: { ...t.env, PATH: `${bin}:${t.env.PATH}:/usr/bin:/bin` }, encoding: 'utf8', timeout: 60_000 });
   assert.equal(r.status, 0, r.stdout);
   assert.match(r.stdout, /x is not on the list; type a number from 1 to 6/);
   assert.match(r.stdout, /9 is not on the list; type a number from 1 to 6/);
+  assert.match(r.stdout, /model is not a model pi lists \(pi --list-models\); type it again/, 'the table header is not a model');
   assert.match(r.stdout, /muse is not a model pi lists \(pi --list-models\); type it again/);
   assert.match(r.stdout, /x is not on the list; type a number from 1 to 4/, 'the judge list says why too');
   const g = parse(readFileSync(join(t.env.DONE_DONE_HOME, 'config.yaml'), 'utf8'));

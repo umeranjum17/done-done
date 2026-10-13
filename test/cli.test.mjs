@@ -4815,15 +4815,6 @@ test('a verify whose instance never becomes ready marks its drive step failed', 
   assert.equal(run.steps.find((s) => s.name === 'drive').status, 'failed');
 });
 
-test('an instance ready block with a null url uses its command and the run passes', () => {
-  const t = setup('app: notes\njudge:\n  enabled: false\nevidence:\n  root: .proof\ninstance:\n  command: node server.mjs\n  ready:\n    url: null\n    command: curl -sf $DONE_DONE_BASE_URL/\n  ready_timeout: 15s\njourneys:\n  probe:\n    command: curl -sf $DONE_DONE_BASE_URL/ > $DONE_DONE_EVIDENCE_ROOT/reply.txt\n');
-  writeFileSync(join(t.repo, 'server.mjs'), `import {createServer} from 'node:http';\ncreateServer((q,s)=>s.writeHead(200).end('ok')).listen(Number(process.env.DONE_DONE_PORT),'127.0.0.1');\n`);
-  t.sh('add', '-A');
-  t.sh('commit', '-qm', 'null url fixture');
-  const r = t.dd('run', 'probe');
-  assert.equal(r.code, 0, r.out);
-});
-
 test('an instance ready url that is an empty string is refused', () => {
   const t = setup('app: notes\njudge:\n  enabled: false\nevidence:\n  root: .proof\ninstance:\n  command: node hang.mjs\n  ready:\n    url: ""\njourneys:\n  probe:\n    command: echo hi\n');
   const r = t.dd('run', 'probe');

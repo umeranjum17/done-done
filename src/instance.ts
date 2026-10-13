@@ -86,8 +86,8 @@ export type Started = { pgid: number; env: Record<string, string> };
 export async function startInstance(repo: string, inst: Instance, runId: string, scratch: string, baseEnv: NodeJS.ProcessEnv, logFile: string): Promise<Started> {
   const port = await pickPort();
   const baseUrl = `http://127.0.0.1:${port}`;
-  const extra = { DONE_DONE_PORT: String(port), DONE_DONE_BASE_URL: baseUrl, DONE_DONE_RUN_ID: runId, ...instanceHome(scratch), TMPDIR: scratch };
-  const env = { ...baseEnv, ...extra };
+  const portEnv = { DONE_DONE_PORT: String(port), DONE_DONE_BASE_URL: baseUrl };
+  const env = { ...baseEnv, ...portEnv, DONE_DONE_RUN_ID: runId, ...instanceHome(scratch), TMPDIR: scratch };
   const command = inst.command.replaceAll('${RUN_ID}', runId);
   mkdirSync(dirname(logFile), { recursive: true });
   const fd = openSync(logFile, 'a');
@@ -98,14 +98,14 @@ export async function startInstance(repo: string, inst: Instance, runId: string,
   const timeoutMs = parseDuration(inst.ready_timeout)!;
   const byUrl = inst.ready.url !== undefined;
   const ready = byUrl
-    ? await waitUrl(expand(inst.ready.url!, extra as Record<string, string>), timeoutMs)
+    ? await waitUrl(expand(inst.ready.url!, env as Record<string, string>), timeoutMs)
     : await waitCommand(inst.ready.command!.replaceAll('${RUN_ID}', runId), env, repo, timeoutMs);
   if (!ready) {
     stopInstance(pgid);
     const what = byUrl ? `GET ${inst.ready.url} never returned 2xx` : 'readiness command never exited 0';
     throw new Error(`instance not ready within ${inst.ready_timeout}: ${what} (port ${port} owned by this run; the instance was killed)`);
   }
-  return { pgid, env: extra as Record<string, string> };
+  return { pgid, env: portEnv };
 }
 
 export const stopInstance = (pgid: number) => {

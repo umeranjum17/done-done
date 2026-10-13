@@ -1110,7 +1110,7 @@ async function runSteps(dir: string): Promise<void> {
           const inst = await startInstance(at, cfg.instance, rec.run_id, scratch, process.env, join(dir, 'logs', `${fix}instance.log`));
           run.runner!.instance_pgid = inst.pgid;
           saveRun(dir, run);
-          instPort = { DONE_DONE_PORT: inst.env.DONE_DONE_PORT, DONE_DONE_BASE_URL: inst.env.DONE_DONE_BASE_URL };
+          instPort = inst.env;
         } catch (e) {
           return fail(`instance: ${(e as Error).message}`);
         }

@@ -167,14 +167,13 @@ function apply(target: Config, text: string | undefined, file: string, scope: 'g
       const fail = (why: string) => { throw new UsageError(`${file}: instance ${why}`); };
       if (!isMap(value) || typeof v.command !== 'string' || !v.command) fail('needs a command string');
       if (!isMap(v.ready)) fail('needs ready: {url: <http url>} or ready: {command: <shell command>}');
-      else {
-        const r = v.ready as Record<string, unknown>;
-        if ((typeof r.url === 'string') === (typeof r.command === 'string')) fail('needs exactly one of ready.url and ready.command');
-      }
+      const r = v.ready as Record<string, unknown>;
+      const has = (x: unknown): x is string => typeof x === 'string' && x !== '';
+      if (has(r.url) === has(r.command)) fail('needs exactly one of ready.url and ready.command');
       if (v.ready_timeout !== undefined && (typeof v.ready_timeout !== 'string' || parseDuration(v.ready_timeout) === null))
         fail('ready_timeout must be a duration such as 30s, 2m or 1h');
       target.from[key] = scope;
-      (target as Record<string, unknown>)[key] = { command: v.command, ready: v.ready, ready_timeout: (v.ready_timeout as string) ?? '30s' };
+      (target as Record<string, unknown>)[key] = { command: v.command, ready: has(r.url) ? { url: r.url } : { command: r.command }, ready_timeout: (v.ready_timeout as string) ?? '30s' };
       continue;
     }
     if (!ok) throw new UsageError(`${file}: ${key} must be ${want[spec.type] ?? `a ${spec.type}`}`);

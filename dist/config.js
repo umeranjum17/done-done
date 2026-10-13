@@ -129,7 +129,7 @@ function apply(target, text, file, scope) {
                                                         : isMap(value) && Object.values(value).every((j) => j && typeof j.command === 'string');
         const want = {
             journeys: 'a map of name: {command: <string>}',
-            instance: '{command: <string>, ready: {url: <http url>}, ready_timeout: <duration>}',
+            instance: '{command: <string>, ready: {url: <http url>} or {command: <shell command>}, ready_timeout: <duration>}',
             agent: `one of ${AGENTS.join(', ')}, or acp:<target>`,
             agent_config: `a map of <agent>: {model: <string>, effort: <string>} for ${AGENTS.join(', ')}, acp:<target>`,
             args: `a map of <agent>: [<flag>, ...] for ${AGENTS.join(', ')}`,
@@ -145,13 +145,18 @@ function apply(target, text, file, scope) {
         if (key === 'agent' && value === '')
             throw new UsageError(`${file}: agent must not be empty; to leave it unset, remove the key`);
         if (key === 'instance') {
-            // instance: {command, ready: {url}, ready_timeout}. Validated here; the harness owns the port.
+            // instance: {command, ready: {url} or {command}, ready_timeout}. Validated here; the harness owns the port.
             const v = value;
             const fail = (why) => { throw new UsageError(`${file}: instance ${why}`); };
             if (!isMap(value) || typeof v.command !== 'string' || !v.command)
                 fail('needs a command string');
-            if (!isMap(v.ready) || typeof v.ready.url !== 'string')
-                fail('needs ready: {url: <http url>}');
+            if (!isMap(v.ready))
+                fail('needs ready: {url: <http url>} or ready: {command: <shell command>}');
+            else {
+                const r = v.ready;
+                if ((typeof r.url === 'string') === (typeof r.command === 'string'))
+                    fail('needs exactly one of ready.url and ready.command');
+            }
             if (v.ready_timeout !== undefined && (typeof v.ready_timeout !== 'string' || parseDuration(v.ready_timeout) === null))
                 fail('ready_timeout must be a duration such as 30s, 2m or 1h');
             target.from[key] = scope;

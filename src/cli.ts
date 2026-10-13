@@ -454,7 +454,8 @@ async function cmdRun(argv: string[]): Promise<number> {
   if (cfg.instance) {
     scratch = mkdtempSync(join(tmpdir(), 'done-done-instance-'));
     try {
-      inst = await startInstance(repo, cfg.instance, rec.run_id, scratch, process.env);
+      // The app's output goes to instance.log next to the run record, never with the evidence.
+      inst = await startInstance(repo, cfg.instance, rec.run_id, scratch, process.env, join(recordsDir(cfg), `${rec.run_id}.instance.log`));
     } catch (e) {
       rmSync(scratch, { recursive: true, force: true });
       rec.exit = 1;
@@ -1103,7 +1104,7 @@ async function runSteps(dir: string): Promise<void> {
       let instPort: Record<string, string> = {};
       if (cfg.instance) {
         try {
-          const inst = await startInstance(run.repo, cfg.instance, rec.run_id, scratch, process.env);
+          const inst = await startInstance(run.repo, cfg.instance, rec.run_id, scratch, process.env, join(dir, 'logs', 'instance.log'));
           run.runner!.instance_pgid = inst.pgid;
           saveRun(dir, run);
           instPort = { DONE_DONE_PORT: inst.env.DONE_DONE_PORT, DONE_DONE_BASE_URL: inst.env.DONE_DONE_BASE_URL };
@@ -1142,7 +1143,7 @@ async function runSteps(dir: string): Promise<void> {
         try {
           const scratch = join(dir, 'tmp');
           mkdirSync(scratch, { recursive: true });
-          const inst = await startInstance(run.repo, cfg.instance, rec.run_id, scratch, process.env);
+          const inst = await startInstance(run.repo, cfg.instance, rec.run_id, scratch, process.env, join(dir, 'logs', 'instance.log'));
           run.runner!.instance_pgid = inst.pgid;
           instEnv = inst.env;
         } catch (e) {

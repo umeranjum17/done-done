@@ -1,7 +1,7 @@
 import { spawn } from 'node:child_process';
-import { mkdirSync } from 'node:fs';
+import { closeSync, mkdirSync, openSync } from 'node:fs';
 import { createServer } from 'node:net';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { parseDuration } from './config.js';
 // A free local port done-done owns: bind 127.0.0.1:0, read it back, release.
 // A fixed port that is already taken can never be used.
@@ -40,14 +40,57 @@ async function waitUrl(url, timeoutMs) {
         await new Promise((r) => setTimeout(r, 200));
     }
 }
+// One readiness probe, killed when its time is up: async, so the runner's
+// event loop (and heartbeat) keeps running while it waits, and a hung
+// command can never hang the run past the remaining ready_timeout.
+function tryCommand(command, env, cwd, timeoutMs) {
+    return new Promise((resolve) => {
+        // Its own group, so the kill also stops what the shell started.
+        const child = spawn(command, { cwd, shell: true, detached: true, stdio: 'ignore', env });
+        const timer = setTimeout(() => {
+            try {
+                process.kill(-child.pid, 'SIGKILL');
+            }
+            catch { /* already exited */ }
+            resolve(false);
+        }, timeoutMs);
+        child.on('error', () => {
+            clearTimeout(timer);
+            resolve(false);
+        });
+        child.on('close', (code) => {
+            clearTimeout(timer);
+            resolve(code === 0);
+        });
+    });
+}
+async function waitCommand(command, env, cwd, timeoutMs) {
+    const end = Date.now() + timeoutMs;
+    for (;;) {
+        if (await tryCommand(command, env, cwd, Math.max(1, end - Date.now())))
+            return true;
+        if (Date.now() >= end)
+            return false;
+        await new Promise((r) => setTimeout(r, 300));
+    }
+}
 // Start the instance, wait for readiness, or kill it and throw a clear reason.
-export async function startInstance(repo, inst, runId, scratch, baseEnv) {
+// The app's output goes to logFile (in the run folder, never with the evidence),
+// so a failed readiness wait shows what the app said.
+export async function startInstance(repo, inst, runId, scratch, baseEnv, logFile) {
     const port = await pickPort();
     const baseUrl = `http://127.0.0.1:${port}`;
     const extra = { DONE_DONE_PORT: String(port), DONE_DONE_BASE_URL: baseUrl, DONE_DONE_RUN_ID: runId, ...instanceHome(scratch), TMPDIR: scratch };
     const env = { ...baseEnv, ...extra };
     const command = inst.command.replaceAll('${RUN_ID}', runId);
-    const child = spawn(command, { cwd: repo, shell: true, detached: true, stdio: 'ignore', env });
+    let fd;
+    if (logFile) {
+        mkdirSync(dirname(logFile), { recursive: true });
+        fd = openSync(logFile, 'a');
+    }
+    const child = spawn(command, { cwd: repo, shell: true, detached: true, stdio: fd === undefined ? 'ignore' : ['ignore', fd, fd], env });
+    if (fd !== undefined)
+        closeSync(fd);
     const pgid = child.pid;
     const kill = () => {
         try {
@@ -57,10 +100,14 @@ export async function startInstance(repo, inst, runId, scratch, baseEnv) {
     };
     child.unref?.();
     const timeoutMs = parseDuration(inst.ready_timeout);
-    const ready = await waitUrl(expand(inst.ready.url, extra), timeoutMs);
+    const byUrl = inst.ready.url !== undefined;
+    const ready = byUrl
+        ? await waitUrl(expand(inst.ready.url, extra), timeoutMs)
+        : await waitCommand(inst.ready.command.replaceAll('${RUN_ID}', runId), env, repo, timeoutMs);
     if (!ready) {
         kill();
-        throw new Error(`instance not ready within ${inst.ready_timeout}: GET ${inst.ready.url} never returned 2xx (port ${port} owned by this run; the instance was killed)`);
+        const what = byUrl ? `GET ${inst.ready.url} never returned 2xx` : 'readiness command never exited 0';
+        throw new Error(`instance not ready within ${inst.ready_timeout}: ${what} (port ${port} owned by this run; the instance was killed)`);
     }
     return { pgid, env: extra };
 }

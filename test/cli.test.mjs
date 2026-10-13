@@ -4774,7 +4774,7 @@ test('maintain with auto_fix leaves out a cited file the numbered source would p
 
 test('an instance serves the journey on its own port with its own HOME, then stops', () => {
   const t = setup('app: notes\njudge:\n  enabled: false\nevidence:\n  root: .proof\ninstance:\n  command: node server.mjs\n  ready:\n    url: http://127.0.0.1:$DONE_DONE_PORT/health\n  ready_timeout: 15s\njourneys:\n  probe:\n    command: curl -sf $DONE_DONE_BASE_URL/ > $DONE_DONE_EVIDENCE_ROOT/reply.txt && echo "port=$DONE_DONE_PORT home=$HOME base=$DONE_DONE_BASE_URL" >> $DONE_DONE_EVIDENCE_ROOT/reply.txt\n');
-  writeFileSync(join(t.repo, 'server.mjs'), `import {createServer} from 'node:http';\ncreateServer((q,s)=>s.writeHead(200).end('ok')).listen(Number(process.env.DONE_DONE_PORT),'127.0.0.1');\n`);
+  writeFileSync(join(t.repo, 'server.mjs'), `import {createServer} from 'node:http';\nimport {writeSync} from 'node:fs';\nwriteSync(1, 'instance-marker\\n');\ncreateServer((q,s)=>s.writeHead(200).end('ok')).listen(Number(process.env.DONE_DONE_PORT),'127.0.0.1');\n`);
   t.sh('add', '-A');
   t.sh('commit', '-qm', 'instance fixture');
   const r = t.dd('run', 'probe');
@@ -4785,16 +4785,34 @@ test('an instance serves the journey on its own port with its own HOME, then sto
   assert.match(reply, /home=.*done-done-instance-[^/]*\/instance-home\/home/);
   assert.match(reply, new RegExp(`base=http://127.0.0.1:${port}`));
   assert.notEqual(spawnSync('curl', ['-sf', `http://127.0.0.1:${port}/`], { timeout: 8000 }).status, 0, 'the instance stops at run end');
+  const logged = readFileSync(join(t.repo, '.proof', '.done-done', 'runs', `${id}.instance.log`), 'utf8');
+  assert.match(logged, /instance-marker/, 'the app output goes to instance.log next to the run record');
 });
 
-test('an unreadied instance fails the run with its reason and is killed', () => {
+test('a verify journey waits on a readiness command and logs the app in its run folder', () => {
+  const t = setup('app: notes\njudge:\n  enabled: false\nevidence:\n  root: .proof\ninstance:\n  command: node server.mjs\n  ready:\n    command: curl -sf $DONE_DONE_BASE_URL/\n  ready_timeout: 15s\njourneys:\n  shots:\n    command: curl -sf $DONE_DONE_BASE_URL/ && node make-shots.mjs ${RUN_ID}\n');
+  writeFileSync(join(t.repo, 'server.mjs'), `import {createServer} from 'node:http';\nimport {writeSync} from 'node:fs';\nwriteSync(1, 'instance-marker\\n');\ncreateServer((q,s)=>s.writeHead(200).end('ok')).listen(Number(process.env.DONE_DONE_PORT),'127.0.0.1');\n`);
+  t.sh('add', '-A');
+  t.sh('commit', '-qm', 'instance fixture');
+  const r = t.dd('verify', 'shots', '--outcome', 'home and settings render', '--foreground');
+  assert.equal(r.code, 0, r.out);
+  const runFolder = join(t.env.DONE_DONE_HOME, 'runs', 'notes', toon(r).run_id);
+  assert.match(readFileSync(join(runFolder, 'logs', 'instance.log'), 'utf8'), /instance-marker/, 'the app output goes to instance.log in the run folder');
+  assert.ok(!readdirSync(join(t.repo, '.proof', toon(r).run_id)).some((n) => n.includes('instance')), 'never with the evidence');
+});
+
+for (const [ready, why] of [['url: http://127.0.0.1:$DONE_DONE_PORT/health', /GET .* never returned 2xx/], ['command: sleep 60', /readiness command never exited 0/]])
+test(`an unreadied instance (ready ${ready.split(':')[0]}) fails the run with its reason and is killed`, () => {
   const t = setup();
-  writeFileSync(join(t.repo, '.done-done.yaml'), 'app: notes\njudge:\n  enabled: false\nevidence:\n  root: .proof\ninstance:\n  command: node hang.mjs\n  ready:\n    url: http://127.0.0.1:$DONE_DONE_PORT/health\n  ready_timeout: 2s\njourneys:\n  probe:\n    command: echo hi > $DONE_DONE_EVIDENCE_ROOT/out.txt\n');
+  writeFileSync(join(t.repo, '.done-done.yaml'), `app: notes\njudge:\n  enabled: false\nevidence:\n  root: .proof\ninstance:\n  command: node hang.mjs\n  ready:\n    ${ready}\n  ready_timeout: 2s\njourneys:\n  probe:\n    command: echo hi > $DONE_DONE_EVIDENCE_ROOT/out.txt\n`);
   writeFileSync(join(t.repo, 'hang.mjs'), `import {writeFileSync} from 'node:fs';\nwriteFileSync(${JSON.stringify(join(t.dir, 'inst.pid'))}, String(process.pid));\nsetInterval(()=>{}, 1000);\n`);
   t.sh('add', '-A');
   t.sh('commit', '-qm', 'hang fixture');
+  const began = performance.now();
   const r = t.dd('run', 'probe');
+  assert.ok(performance.now() - began < 20000, 'a hung readiness probe is killed at the timeout');
   assert.equal(r.code, 1, r.out);
   assert.match(toon(r).reason, /instance not ready within 2s/);
+  assert.match(toon(r).reason, why);
   assert.throws(() => process.kill(Number(readFileSync(join(t.dir, 'inst.pid'), 'utf8')), 0), 'the instance group is killed');
 });

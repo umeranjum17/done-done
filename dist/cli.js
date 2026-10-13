@@ -10,8 +10,9 @@ import { encode } from '@toon-format/toon';
 import { Document, parseDocument } from 'yaml';
 import { ACPX_INSTALL, askAgent, JUDGES, selectAgent, selectJudge, supported } from './agents.js';
 import { AGENTS, home, loadConfig, parseDuration, UsageError } from './config.js';
-import { backend, judge, judgeable, onPath } from './judge.js';
+import { backend, judge, judgeable, onPath, quote } from './judge.js';
 import { maintainSteps } from './maintain.js';
+import { design, KINDS } from './design.js';
 import { checkMedia } from './media.js';
 const PASS = 0, FAIL = 1, USAGE = 2, INCONCLUSIVE = 3, WAITING = 4;
 // The shape of a journey, so a new user or agent can write one without opening the reference.
@@ -64,6 +65,7 @@ const FLAGS = {
     '--foreground': 'run every step in this process instead of a detached runner (use in CI)',
     '--run <run-id>': 'the run to show (default: the newest run of this checkout)',
     '--probe': 'ask the configured agent one JSON-schema question and require a valid answer (one call at the agent\'s model: its cheap default where it has one, else its own; set agent_config.<agent>.model to choose)',
+    '--mock <screen>=<mock>': 'judge this screen next to its approved mock (repeat per screen; the screen is judged even when not listed)',
     '--step <name>': 'the step log to show (verify: resolve, drive, check, judge, receipt, report; maintain: locate, hygiene, source-wave, reconcile, report)',
     '--limit <n>': 'how many past runs to list (default all)',
     '--agent <agent>': 'also add a SessionStart hook to .claude/settings.json (claude), .codex/hooks.json (codex) or .gemini/settings.json (gemini) that shows `done-done` to each session, or a plugin to .opencode/plugins (opencode) or an extension to .pi/extensions (pi) that adds it to the first message of each session (opt-in)',
@@ -130,6 +132,13 @@ const COMMANDS = {
         usage: [['done-done maintain [--no-wait | --wait | --foreground]', 'check the verify skill against the source in a run: links, index, cited file:line, one read-only reader per feature; edits nothing']],
         flags: ['--wait', '--no-wait', '--foreground'],
         more: [MAINTAIN_TEXT, RUNS_TEXT],
+    },
+    design: {
+        usage: [['done-done design <screens...> [--mock <screen>=<mock>]', 'a judge looks at each PNG/JPEG screen, alone or next to its mock, and fails it on visual defects']],
+        flags: ['--mock <screen>=<mock>'],
+        more: [`design: one judge request per screen (the --judge route, never the author); it fails a screen on any defect it names:
+  ${Object.keys(KINDS).join(', ')}; capture each variant (dark, small width, large font) as its own screen; exit 0 every screen
+  passed, 1 a screen failed, 3 none failed but one is unsure`],
     },
     status: {
         usage: [['done-done status [--run <run-id>]', "show a run's steps, result, findings and next step"]],
@@ -1961,6 +1970,56 @@ async function cmdDoctor(argv) {
     emit(result);
     return missingRequired.length ? USAGE : PASS;
 }
+// The design check: every named screen, and each --mock screen, judged for visual defects.
+async function cmdDesign(argv) {
+    const { values, positionals } = parseArgs({ args: argv, options: { mock: { type: 'string', multiple: true } }, allowPositionals: true });
+    const mocks = new Map();
+    for (const m of values.mock ?? []) {
+        const at = m.indexOf('=');
+        if (at < 1 || at === m.length - 1)
+            throw new UsageError(`--mock ${m} must be <screen>=<mock>`, 'Re-run with --mock <screen file>=<mock file>');
+        mocks.set(resolve(m.slice(0, at)), m.slice(at + 1));
+    }
+    const names = [...new Set([...positionals, ...[...mocks.keys()].filter((p) => !positionals.some((n) => resolve(n) === p))])];
+    if (!names.length)
+        throw new UsageError('design needs at least one screen file', 'Re-run with the screens to check: done-done design <screens...>');
+    const load = (name) => {
+        let bytes;
+        try {
+            bytes = readFileSync(name);
+        }
+        catch (e) {
+            throw new UsageError(`${name}: cannot read (${e.code ?? e.message})`, 'Pass screen and mock files that exist');
+        }
+        return { name, bytes, sha256: sha256(bytes), media: checkMedia(name, bytes) };
+    };
+    const screens = names.map((n) => ({ ...load(n), ...(mocks.has(resolve(n)) && { mock: load(mocks.get(resolve(n))) }) }));
+    let repo;
+    try {
+        repo = repoRoot();
+    }
+    catch {
+        repo = process.cwd();
+    }
+    const cfg = loadConfig(repo);
+    const choice = selectJudge(cfg, selectAgent(cfg));
+    const judged = await design(cfg, choice, screens, join(home(), 'agents'));
+    const count = (v) => judged.filter((j) => j.verdict === v).length;
+    const code = count('fail') ? FAIL : count('unsure') ? INCONCLUSIVE : PASS;
+    const order = ['fail', 'unsure', 'pass'];
+    const rows = cap([...judged].sort((a, b) => order.indexOf(a.verdict) - order.indexOf(b.verdict)));
+    const again = `done-done design ${names.map(quote).join(' ')}${[...values.mock ?? []].map((m) => ` --mock ${quote(m)}`).join('')}`;
+    emit({
+        command: 'design',
+        result: code === PASS ? 'pass' : code === FAIL ? 'fail' : 'inconclusive',
+        judge: { route: choice.route, model: choice.model, independence: choice.independence, author: `${choice.author.agent} (model ${choice.author.model || 'none'})` },
+        counts: { pass: count('pass'), fail: count('fail'), unsure: count('unsure') },
+        screens: rows.items,
+        ...(rows.omitted && { screens_omitted: rows.omitted }),
+        help: code === PASS ? ['Every screen passed the design check'] : code === FAIL ? [`Fix each defect named above, capture the screens again, then re-run: ${again}`] : [`Look at the unsure screens yourself, or capture them as PNG and re-run: ${again}`],
+    });
+    return code;
+}
 // Bare `done-done`: orient a new user or agent with the config state and the next step.
 function cmdBare() {
     let repo;
@@ -2025,6 +2084,8 @@ async function main(argv) {
             return await cmdVerify(rest);
         if (cmd === 'maintain')
             return await cmdMaintain(rest);
+        if (cmd === 'design')
+            return await cmdDesign(rest);
         if (cmd === 'status')
             return cmdStatus(rest);
         if (cmd === 'attach')

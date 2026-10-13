@@ -1944,6 +1944,49 @@ test('auto judge skips a claude route with a relative bin, since the claude-code
   assert.doesNotMatch(choice.detail, /claude-code/);
 });
 
+// The design check: the same judge looks at each screen for visual defects, one tools-off request per screen.
+test('design fails a screen on each defect the judge names, alone or next to its mock, and passes a clean one', () => {
+  const t = setup();
+  mkdirSync(t.env.DONE_DONE_HOME, { recursive: true });
+  writeFileSync(join(t.env.DONE_DONE_HOME, 'config.yaml'), 'agent: claude\n');
+  writeFileSync(join(t.dir, 'mock.png'), screen(3));
+  writeFileSync(join(t.dir, 'blank.png'), blank());
+  const kinds = ['aspect', 'clipped-text', 'overlap', 'off-screen', 'blank-strip', 'layout'];
+  const answer = (flagged = {}) => JSON.stringify(Object.fromEntries(kinds.map((k) => [k, { probabilities: flagged[k] ?? { defect: 0.03, none: 0.97 }, rationale: 'Looked.', personReason: flagged[k] ? `${k} at the header, top left` : 'Nothing of this kind.' }])));
+  // Run from outside any repo, as a project's own capture step might.
+  const design = (reply, ...args) => {
+    const s = stubAgents(t.env, reply);
+    symlinkSync(process.execPath, join(s.bin, 'node'));
+    const r = spawnSync(process.execPath, [CLI, 'design', ...args], { cwd: t.dir, env: s.env, encoding: 'utf8' });
+    return { code: r.status, out: r.stdout + r.stderr, calls: s.calls() };
+  };
+  const bad = design(answer({ aspect: { defect: 0.9, none: 0.1 }, 'blank-strip': { defect: 0.85, none: 0.15 } }), 'screen.png', 'screen2.png', '--mock', 'screen.png=mock.png');
+  assert.equal(bad.code, 1, bad.out);
+  const b = toon(bad);
+  assert.equal(b.result, 'fail');
+  assert.deepEqual([b.judge.route, b.judge.model, b.judge.independence, b.judge.author], ['answerer:opencode', 'opencode-go/muse-spark-1.3-contributor', 'agent', 'claude (model claude-haiku-5-5)']);
+  assert.deepEqual(b.screens.map((s) => [s.path, s.verdict, s.mock ?? null]), [['screen.png', 'fail', 'mock.png'], ['screen2.png', 'fail', null]]);
+  assert.deepEqual(b.screens[0].defects, [{ kind: 'aspect', where: 'aspect at the header, top left' }, { kind: 'blank-strip', where: 'blank-strip at the header, top left' }]);
+  assert.match(b.help[0], /^Fix each defect named above, .*done-done design screen\.png screen2\.png --mock screen\.png=mock\.png$/);
+  assert.equal(bad.calls.length, 2, 'one tools-off request per screen');
+  assert.deepEqual(bad.calls.map((c) => c.attached), [['PNG', 'PNG'], ['PNG']], 'a screen with a mock sends both images; one without, the screen alone');
+  assert.ok(bad.calls.every((c) => JSON.parse(c.permission)['*'] === 'deny' && !/screen2?\.png|mock\.png/.test(c.file) && !c.file.includes(t.dir)), 'every tool is denied, and no path reaches the prompt');
+  assert.match(bad.calls[0].file, /"mock"/);
+  assert.doesNotMatch(bad.calls[1].file, /"mock"/);
+  const ok = design(answer(), 'screen.png');
+  assert.equal(ok.code, 0, ok.out);
+  assert.deepEqual([toon(ok).result, toon(ok).screens[0].verdict, toon(ok).screens[0].defects], ['pass', 'pass', []]);
+  const unsure = design(answer({ layout: { defect: 0.5, none: 0.5 } }), 'screen.png');
+  assert.equal(unsure.code, 3, unsure.out);
+  assert.match(toon(unsure).screens[0].reason, /^not confident enough about layout$/);
+  const empty = design(answer(), 'blank.png');
+  assert.equal(empty.code, 1, empty.out);
+  assert.match(toon(empty).screens[0].reason, /blank frame/);
+  assert.equal(empty.calls.length, 0, 'a blank frame fails without a request');
+  assert.equal(design(answer(), '--mock', 'screen.png').code, 2);
+  assert.match(toon(design(answer(), 'gone.png')).error, /gone\.png: cannot read \(ENOENT\)/);
+});
+
 // doctor: read-only health check. Required items (git, config, evidence root) gate
 // exit 0/2; the skill, agent, judge and ffprobe items are optional and never fail it.
 // An isolated PATH holding only git plus the named stub binaries, so agent/judge/ffprobe

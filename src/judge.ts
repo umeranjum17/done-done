@@ -23,12 +23,6 @@ const OPTIONS: Record<string, string> = {
   wrong: 'The screenshot shows a different screen, an error, a crash, a dialog or overlay (such as a keyboard) hiding the content, or a state that contradicts the outcome.',
   unclear: 'The screenshot cannot settle it: it is unreadable, or the outcome names nothing that could be visible on a screen.',
 };
-// The answer the answerer asks its agent for: the kit's reply shape for the one question.
-const ANSWER_SCHEMA = {
-  type: 'object',
-  properties: { relevance: { type: 'object', properties: { probabilities: { type: 'object', properties: Object.fromEntries(Object.keys(OPTIONS).map((k) => [k, { type: 'number' }])) }, rationale: { type: 'string' }, personReason: { type: 'string' } }, required: ['probabilities'] } },
-  required: ['relevance'],
-};
 const QUESTION: Question = {
   kind: 'choice',
   instructions: 'The image is a screenshot cited as proof that the outcome in the state was achieved. Judge only what is visible in it.',
@@ -37,6 +31,13 @@ const QUESTION: Question = {
   personReason: true,
   images: ['capture'],
 };
+
+// The answer the answerer asks its agent for: the kit's reply shape for each choice question.
+const answerSchema = (questions: Record<string, Question>) => ({
+  type: 'object',
+  properties: Object.fromEntries(Object.entries(questions).map(([k, q]) => [k, { type: 'object', properties: { probabilities: { type: 'object', properties: Object.fromEntries(Object.keys(q.kind === 'choice' ? q.options : {}).map((o) => [o, { type: 'number' }])) }, rationale: { type: 'string' }, personReason: { type: 'string' } }, required: ['probabilities'] }])),
+  required: Object.keys(questions),
+});
 
 export function isExecutable(path: string): boolean {
   try {
@@ -70,7 +71,7 @@ export function claudeLoggedIn(bin: string, configDir: string): boolean {
 }
 
 const KIT = '@byokit/decide@0.8.0';
-const quote = (a: string) => (/^[\w@%+=:,./-]+$/.test(a) ? a : `'${a.replaceAll("'", `'\\''`)}'`);
+export const quote = (a: string) => (/^[\w@%+=:,./-]+$/.test(a) ? a : `'${a.replaceAll("'", `'\\''`)}'`);
 
 // The kit is an optional peer dependency, so a plain install stays small; it loads only when a capture needs judging.
 async function kit() {
@@ -85,11 +86,13 @@ async function kit() {
   }
 }
 
-type Judge = { ask: Backend['ask']; resolve: typeof import('@byokit/decide/slim').resolve; lastError: () => string; signIn: string; signedIn: () => boolean };
+export type Judge = { ask: Backend['ask']; resolve: typeof import('@byokit/decide/slim').resolve; lastError: () => string; signIn: string; signedIn: () => boolean };
 
 // The backend for one judge choice. It checks everything that needs no model call, so doctor can use it too.
-// record: where the answerer writes its agent call record (the claude-code route starts no agent of ours).
-export async function backend(cfg: Config, choice: JudgeChoice, record = () => ''): Promise<Judge & { detail: string }> {
+// record: where the answerer writes its agent call record (the claude-code route starts no agent of ours);
+// questions: what each request asks, so the answerer can ask its agent for that answer shape; attempts: asks per request
+// when the answer is malformed.
+export async function backend(cfg: Config, choice: JudgeChoice, record = () => '', questions: Record<string, Question> = { relevance: QUESTION }, attempts = 1): Promise<Judge & { detail: string }> {
   if (choice.route !== 'claude-code') {
     const bin = onPath(choice.agent);
     if (!bin) throw new UsageError(`judge: ${choice.route} needs ${choice.agent} on PATH`, `Install ${choice.agent}, or set judge.route in ~/.done-done/config.yaml`);
@@ -109,7 +112,7 @@ export async function backend(cfg: Config, choice: JudgeChoice, record = () => '
             writeFileSync(file, Buffer.from(img.dataUrl.slice(img.dataUrl.indexOf(',') + 1), 'base64'), { mode: 0o600 });
             return file;
           });
-          const a = askAgent({ agent: choice.agent, model: choice.model, prompt, schema: ANSWER_SCHEMA, cwd: dir, timeoutMs: TIMEOUT_MS, tools: 'none', attempts: 1, record: record(), files });
+          const a = askAgent({ agent: choice.agent, model: choice.model, prompt, schema: answerSchema(questions), cwd: dir, timeoutMs: TIMEOUT_MS, tools: 'none', attempts, record: record(), files });
           lastError = a.ok ? '' : a.error ?? 'no answer';
           if (!a.ok) throw new Error(lastError);
           return JSON.stringify(a.answer);
@@ -140,11 +143,28 @@ export async function backend(cfg: Config, choice: JudgeChoice, record = () => '
 }
 
 // The image to send: the original when it already fits, else a downscaled PNG; a reason when neither works.
-function prepare(c: Capture): { mime: string; bytes: Buffer } | string {
+export function prepare(c: Capture): { mime: string; bytes: Buffer } | string {
   const mime = `image/${c.media.type}`;
   if (Math.max(c.media.w ?? 0, c.media.h ?? 0) <= MAX_SIDE) return { mime, bytes: c.bytes };
   const small = c.media.type === 'png' ? downscalePng(c.bytes, MAX_SIDE) : undefined;
   return small ? { mime: 'image/png', bytes: small } : `${c.media.type} is ${c.media.w}x${c.media.h} and cannot be downscaled (only 8-bit PNGs that are not extremely long are), so capture a PNG or an image at most ${MAX_SIDE}px on its long side`;
+}
+
+// One request about the named images: each question's answer after the floors, or why the judge did not answer.
+// A signed-out or non-subscription claude-code sign-in is a usage error, since no later request can do better.
+export async function askJudge(cfg: Config, be: Judge, choice: JudgeChoice, state: unknown, questions: Record<string, Question>, images: Record<string, { mime: string; bytes: Buffer }>): Promise<Record<string, ReturnType<Judge['resolve']>> | string> {
+  try {
+    const raw = await be.ask(state, questions, AbortSignal.timeout(TIMEOUT_MS), Object.entries(images).map(([id, i]) => ({ id, mime: i.mime, dataUrl: `data:${i.mime};base64,${i.bytes.toString('base64')}` })));
+    return Object.fromEntries(Object.entries(questions).map(([k, q]) => [k, be.resolve(q, raw[k])]));
+  } catch (e) {
+    const code = (e as { code?: string }).code;
+    const why = be.lastError() || (e as Error).message;
+    // The kit reports a signed-out binary, a bad model id and a used-up plan all as 'process', so ask the binary which.
+    if (choice.route === 'claude-code' && (code === 'subscription_required' || (code === 'process' && !be.signedIn())))
+      throw new UsageError(`judge: ${why} (sign-in ${cfg.judge.claude_code.config_dir})`, `Sign in once with your Claude plan: ${be.signIn}`);
+    const hint = code === 'process' ? ` (check judge.model ${choice.model} and your plan's usage limit)` : '';
+    return `the judge did not answer: ${why}${hint}`;
+  }
 }
 
 export const judgeable = (c: Capture) => c.media.type === 'png' || c.media.type === 'jpeg';
@@ -187,24 +207,15 @@ export async function judge(cfg: Config, choose: () => JudgeChoice, outcome: str
     }
     call = join(records, `judge-${stamp}-${calls}`);
     be ??= await backend(cfg, choice, () => `${call}.agent.json`);
-    let row: Judged;
-    try {
-      const dataUrl = `data:${image.mime};base64,${image.bytes.toString('base64')}`;
-      const raw = await be.ask({ outcome }, { relevance: QUESTION }, AbortSignal.timeout(TIMEOUT_MS), [{ id: 'capture', mime: image.mime, dataUrl }]);
-      const a = be.resolve(QUESTION, raw.relevance);
-      const reason = a.personReason || a.rationale || OPTIONS[String(a.answer)] || '';
-      row = a.abstained ? { path: c.name, sha256: c.sha256, verdict: 'unsure', reason: `not confident enough (${a.reason})`, cached: false }
-        : { path: c.name, sha256: c.sha256, verdict: a.answer === 'correct' ? 'pass' : a.answer === 'wrong' ? 'fail' : 'unsure', reason, cached: false };
-    } catch (e) {
-      const code = (e as { code?: string }).code;
-      const why = be.lastError() || (e as Error).message;
-      // The kit reports a signed-out binary, a bad model id and a used-up plan all as 'process', so ask the binary which.
-      if (route === 'claude-code' && (code === 'subscription_required' || (code === 'process' && !be.signedIn())))
-        throw new UsageError(`judge: ${why} (sign-in ${cfg.judge.claude_code.config_dir})`, `Sign in once with your Claude plan: ${be.signIn}`);
-      const hint = code === 'process' ? ` (check judge.model ${model} and your plan's usage limit)` : '';
-      judged.push({ path: c.name, sha256: c.sha256, verdict: 'unsure', reason: `the judge did not answer: ${why}${hint}`, cached: false });
+    const answers = await askJudge(cfg, be, choice, { outcome }, { relevance: QUESTION }, { capture: image });
+    if (typeof answers === 'string') {
+      judged.push({ path: c.name, sha256: c.sha256, verdict: 'unsure', reason: answers, cached: false });
       continue;
     }
+    const a = answers.relevance;
+    const reason = a.personReason || a.rationale || OPTIONS[String(a.answer)] || '';
+    const row: Judged = a.abstained ? { path: c.name, sha256: c.sha256, verdict: 'unsure', reason: `not confident enough (${a.reason})`, cached: false }
+      : { path: c.name, sha256: c.sha256, verdict: a.answer === 'correct' ? 'pass' : a.answer === 'wrong' ? 'fail' : 'unsure', reason, cached: false };
     try {
       mkdirSync(dir, { recursive: true });
       writeFileSync(`${file}.tmp`, `${JSON.stringify({ verdict: row.verdict, reason: row.reason, route, model })}\n`, { mode: 0o600 });

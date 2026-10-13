@@ -1379,8 +1379,8 @@ function showRun(dir, cfg, command, gone = false) {
         result.evidence = ev.items;
     if (ev.omitted)
         result.evidence_omitted = ev.omitted;
-    if (hasMatrix(cfg.matrix))
-        result.matrix = matrixManifest(cfg.matrix, rec ? evidenceOf(run.repo, cfg, rec) : []);
+    if (rec?.matrix)
+        result.matrix = rec.matrix;
     if (run.receipt)
         result.receipt = run.receipt;
     if (run.fix)

@@ -83,19 +83,16 @@ export type Started = { pgid: number; env: Record<string, string> };
 // Start the instance, wait for readiness, or kill it and throw a clear reason.
 // The app's output goes to logFile (in the run folder, never with the evidence),
 // so a failed readiness wait shows what the app said.
-export async function startInstance(repo: string, inst: Instance, runId: string, scratch: string, baseEnv: NodeJS.ProcessEnv, logFile?: string): Promise<Started> {
+export async function startInstance(repo: string, inst: Instance, runId: string, scratch: string, baseEnv: NodeJS.ProcessEnv, logFile: string): Promise<Started> {
   const port = await pickPort();
   const baseUrl = `http://127.0.0.1:${port}`;
   const extra = { DONE_DONE_PORT: String(port), DONE_DONE_BASE_URL: baseUrl, DONE_DONE_RUN_ID: runId, ...instanceHome(scratch), TMPDIR: scratch };
   const env = { ...baseEnv, ...extra };
   const command = inst.command.replaceAll('${RUN_ID}', runId);
-  let fd: number | undefined;
-  if (logFile) {
-    mkdirSync(dirname(logFile), { recursive: true });
-    fd = openSync(logFile, 'a');
-  }
-  const child = spawn(command, { cwd: repo, shell: true, detached: true, stdio: fd === undefined ? 'ignore' : ['ignore', fd, fd], env });
-  if (fd !== undefined) closeSync(fd);
+  mkdirSync(dirname(logFile), { recursive: true });
+  const fd = openSync(logFile, 'a');
+  const child = spawn(command, { cwd: repo, shell: true, detached: true, stdio: ['ignore', fd, fd], env });
+  closeSync(fd);
   const pgid = child.pid!;
   child.unref?.();
   const timeoutMs = parseDuration(inst.ready_timeout)!;

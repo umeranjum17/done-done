@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, isAbsolute, join, resolve } from 'node:path';
 import { parse } from 'yaml';
+import type { Instance } from './instance.js';
 
 export class UsageError extends Error {
   // The exact next command, when the error has one.
@@ -22,7 +23,7 @@ export type Config = {
   skill: string;
   journeys: Record<string, { command: string; timeout?: string }>;
   // Primitive 1 (run-instance harness): start the app under test on its own port per run. Null when unset: today's behaviour.
-  instance: { command: string; ready: { url?: string; command?: string }; ready_timeout: string } | null;
+  instance: Instance | null;
   evidence: { local_root: string; root: string; allow_dirty: boolean; ignore_paths: string[] };
   checks: { not_proven: 'inconclusive' | 'allow'; fix_title: string };
   // enabled: verify judges unless false (--judge turns it on for a run); check and receipt judge with --judge or true; rerun repeats its source run.

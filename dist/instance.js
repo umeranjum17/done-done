@@ -80,14 +80,10 @@ export async function startInstance(repo, inst, runId, scratch, baseEnv, logFile
     const extra = { DONE_DONE_PORT: String(port), DONE_DONE_BASE_URL: baseUrl, DONE_DONE_RUN_ID: runId, ...instanceHome(scratch), TMPDIR: scratch };
     const env = { ...baseEnv, ...extra };
     const command = inst.command.replaceAll('${RUN_ID}', runId);
-    let fd;
-    if (logFile) {
-        mkdirSync(dirname(logFile), { recursive: true });
-        fd = openSync(logFile, 'a');
-    }
-    const child = spawn(command, { cwd: repo, shell: true, detached: true, stdio: fd === undefined ? 'ignore' : ['ignore', fd, fd], env });
-    if (fd !== undefined)
-        closeSync(fd);
+    mkdirSync(dirname(logFile), { recursive: true });
+    const fd = openSync(logFile, 'a');
+    const child = spawn(command, { cwd: repo, shell: true, detached: true, stdio: ['ignore', fd, fd], env });
+    closeSync(fd);
     const pgid = child.pid;
     child.unref?.();
     const timeoutMs = parseDuration(inst.ready_timeout);

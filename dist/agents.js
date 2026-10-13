@@ -252,6 +252,7 @@ export function selectJudge(cfg, found) {
         throw new UsageError(`judge: judge.route ${route} at model ${model} is the author's own agent and model (${author.agent}), and the judge is never the agent that did the work`, 'Set judge.route or judge.model to another agent or model, or set judge.allow_same: true in ~/.done-done/config.yaml to accept a fresh session of the same one');
     return choice;
 }
+const DRAIN_MS = 500;
 // One agent process. An edit step gets its own process group, so whatever it started (a dev server, a browser) is
 // killed with it when it ends or times out.
 function start(bin, argv, c, cwd, input, env) {
@@ -261,6 +262,7 @@ function start(bin, argv, c, cwd, input, env) {
         let stdout = '';
         let stderr = '';
         let error;
+        let drain;
         const kill = () => {
             try {
                 if (group)
@@ -286,8 +288,15 @@ function start(bin, argv, c, cwd, input, env) {
             c.onSpawn?.(child.pid);
         child.stdout.setEncoding('utf8').on('data', (d) => (stdout += d));
         child.stderr.setEncoding('utf8').on('data', (d) => (stderr += d));
+        child.on('exit', () => {
+            drain = setTimeout(() => {
+                child.stdout.destroy();
+                child.stderr.destroy();
+            }, DRAIN_MS);
+        });
         child.on('close', (status) => {
             clearTimeout(timer);
+            clearTimeout(drain);
             if (group)
                 kill();
             done({ status, stdout, stderr, error });

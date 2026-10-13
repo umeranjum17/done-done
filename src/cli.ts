@@ -1953,26 +1953,21 @@ function saveChoice(kind: Kind, { agent, model }: Choice): string {
   return `${kind === 'agent' ? agent : routeOf(agent)}${model ? ` (model ${model})` : ''} saved to ${file}`;
 }
 
-// Why a typed model is not one the agent lists (only opencode models; pi's list comes back cut short on a pipe), or '' when it is listed or unchecked.
-function modelList(agent: string): string[] | null {
-  return agent === 'opencode' ? ['models'] : null;
-}
-
+// Why a typed model is not one opencode lists, or '' when it is listed or unchecked (only opencode is checked; pi's list comes back cut short on a pipe).
 function unknownModel(agent: string, model: string, cfg: Config): string {
-  const list = modelList(agent);
-  if (!list) return '';
+  if (agent !== 'opencode') return '';
   const bin = agentPath(agent, cfg);
   if (!bin) {
     process.stderr.write(`${model} is saved unchecked because ${agent} is not on PATH; run 'done-done doctor --probe' to check it\n`);
     return '';
   }
-  const r = spawnSync(bin, list, { encoding: 'utf8', timeout: 30_000 });
+  const r = spawnSync(bin, ['models'], { encoding: 'utf8', timeout: 30_000 });
   if (r.status !== 0) {
-    process.stderr.write(`${agent} ${list[0]} failed (${(r.error?.message || r.stderr || `exit ${r.status}`).trim().split('\n').at(-1)}), so ${model} is saved unchecked\n`);
+    process.stderr.write(`${agent} models failed (${(r.error?.message || r.stderr || `exit ${r.status}`).trim().split('\n').at(-1)}), so ${model} is saved unchecked\n`);
     return '';
   }
   // opencode prints one provider/model per line.
-  return r.stdout.split('\n').map((l) => l.trim()).includes(model) ? '' : `${model} is not a model ${agent} lists (${agent} ${list[0]})`;
+  return r.stdout.split('\n').map((l) => l.trim()).includes(model) ? '' : `${model} is not a model ${agent} lists (${agent} models)`;
 }
 
 const interactive = () => !!process.stdin.isTTY && !!process.stderr.isTTY;
@@ -1994,7 +1989,8 @@ async function pick(kind: Kind, cfg: Config): Promise<Choice> {
   try {
     const menu = kind === 'agent' ? [...AGENTS, ACP_TARGET] : JUDGES;
     const label = (a: string) => (a === ACP_TARGET ? `${a} (an agent your acpx bridge starts)` : a);
-    const head = kind === 'agent' ? 'done-done starts a coding agent you choose, and none is set. Agents:' : `done-done judges each screenshot with an agent you choose, never the one that did the work (${cfg.agent || 'not set'}), and none is set. Judges:`;
+    const doer = cfg.agent ? `the one that did the work (${cfg.agent})` : 'the agent that does the work';
+    const head = kind === 'agent' ? 'done-done starts a coding agent you choose, and none is set. Agents:' : `done-done judges each screenshot with an agent you choose, never ${doer}, and none is set. Judges:`;
     process.stderr.write(`${head}\n${menu.map((a, i) => `  ${i + 1}) ${label(a)}\n`).join('')}`);
     for (;;) {
       let agent = '';
@@ -2028,7 +2024,7 @@ async function pick(kind: Kind, cfg: Config): Promise<Choice> {
             if (why) process.stderr.write(`${why}; type it again\n`);
             else {
               model = typedModel;
-              if (!modelList(agent)) process.stderr.write(`the model was not checked because ${agent} has no model list; run 'done-done doctor --probe' to check it\n`);
+              if (agent !== 'opencode') process.stderr.write(`the model was not checked because ${agent} has no model list; run 'done-done doctor --probe' to check it\n`);
             }
           }
         else process.stderr.write(`${n || 'nothing'} is not 1 or 2\n`);

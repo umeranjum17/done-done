@@ -1892,6 +1892,108 @@ test('a rerun refused by the judge preflight exits 2 and creates no run folder',
   assert.deepEqual(readdirSync(runs).sort(), before, 'the refused rerun leaves no new run folder');
 });
 
+test('verify --judge through pi and gemini: each judges tools-off with the capture attached; a right screen passes, a wrong one fails', () => {
+  const t = setup();
+  mkdirSync(t.env.DONE_DONE_HOME, { recursive: true });
+  const verdict = (p) => JSON.stringify({ relevance: { probabilities: p, rationale: 'The list shows the notes.', personReason: 'The list shows the notes.' } });
+  const agents = (p) => {
+    const s = stubPiGemini(t.env, verdict(p));
+    symlinkSync(process.execPath, join(s.env.PATH, 'node'));
+    return s;
+  };
+  const verify = (env, outcome) => {
+    const r = spawnSync(process.execPath, [CLI, 'verify', 'shots', '--outcome', outcome, '--judge', '--foreground'], { cwd: t.repo, env, encoding: 'utf8' });
+    return { code: r.status, out: r.stdout + r.stderr };
+  };
+  // A pi author is judged by gemini under auto; a gemini author by pi at its configured model.
+  for (const [author, judge, model] of [['pi', 'gemini', 'flash-lite'], ['gemini', 'pi', 'vendor/vision-model']]) {
+    writeFileSync(join(t.env.DONE_DONE_HOME, 'config.yaml'), `agent: ${author}\nagent_config:\n  pi: { model: vendor/vision-model }\n`);
+    const right = agents(CORRECT);
+    const ok = verify(right.env, `home and settings render for ${judge}`);
+    assert.equal(ok.code, 0, ok.out);
+    const o = toon(ok);
+    const calls = right.calls();
+    assert.equal(calls.length, 2, 'one tools-off call per capture, none to the author');
+    for (const c of calls) {
+      assert.equal(c.agent, judge);
+      assert.deepEqual(c.attached, ['PNG'], 'each call attaches its one capture');
+      assert.match(c.stdin, new RegExp(`home and settings render for ${judge}`));
+      assert.ok(!c.argv.some((a) => a.includes('home and settings render') || a.includes('.proof')), 'the outcome goes on stdin, never argv or a path');
+      assert.notEqual(c.cwd, t.repo, 'the judge runs in a scratch folder, never the repo');
+      if (judge === 'pi') assert.deepEqual(c.argv, ['-p', '--mode', 'json', '--no-session', '--no-tools', '--no-extensions', '--no-skills', '--no-prompt-templates', '--no-context-files', '--model', model, `@${join(c.cwd, 'capture.png')}`]);
+      else {
+        assert.deepEqual(c.argv, ['-p', 'Follow the instructions on stdin. @capture.png', '-o', 'json', '-m', model, '--approval-mode', 'plan', '--policy', join(c.cwd, 'deny-all.toml'), '--skip-trust']);
+        assert.match(c.policy, /toolName = "\*"\ndecision = "deny"/, 'every tool is denied');
+      }
+    }
+    const runDir = join(t.env.DONE_DONE_HOME, 'runs', 'notes', o.run_id);
+    const judgeLog = decode(readFileSync(join(runDir, 'logs', 'judge.log'), 'utf8'));
+    assert.deepEqual([judgeLog.route, judgeLog.model, judgeLog.independence], [`answerer:${judge}`, model, 'agent']);
+    for (const n of readdirSync(join(runDir, 'agents'))) {
+      const rec = JSON.parse(readFileSync(join(runDir, 'agents', n), 'utf8'));
+      assert.deepEqual([rec.agent, rec.tools, rec.images], [judge, 'none', ['capture.png']], 'the record names the capture and keeps no image bytes');
+    }
+    const bad = verify(agents({ correct: 0.04, wrong: 0.93, unclear: 0.03 }).env, `the settings page shows dark mode on for ${judge}`);
+    assert.equal(bad.code, 1, bad.out);
+    assert.match(toon(bad).reason, /^judge: .*judge says wrong screen/);
+  }
+});
+
+test('a key-only user judges through openai:key: the key goes only to the kit, a right screen passes, a wrong one fails', () => {
+  const t = setup();
+  mkdirSync(t.env.DONE_DONE_HOME, { recursive: true });
+  writeFileSync(join(t.env.DONE_DONE_HOME, 'config.yaml'), 'agent: claude\njudge:\n  route: openai:key\n  model: vision-test-1\n');
+  // No agent CLI on PATH; the network is stubbed at fetch, the kit's only way out, and answers with STUB_VERDICT.
+  const env = pathEnv(t.env, ['ffprobe']);
+  symlinkSync(process.execPath, join(env.PATH, 'node'));
+  const log = join(env.PATH, 'requests.jsonl');
+  const stub = join(env.PATH, 'fetch-stub.mjs');
+  writeFileSync(stub, `import { appendFileSync } from 'node:fs';
+globalThis.fetch = async (url, init) => {
+  const body = JSON.parse(init.body);
+  appendFileSync(${JSON.stringify(log)}, JSON.stringify({ url: String(url), auth: init.headers.authorization, model: body.model, input: JSON.stringify(body.input) }) + '\\n');
+  if (process.env.STUB_VERDICT === '401') return new Response('{"error":{"message":"Incorrect API key"}}', { status: 401 });
+  const probabilities = JSON.parse(process.env.STUB_VERDICT);
+  const pick = Object.keys(probabilities).sort((a, b) => probabilities[b] - probabilities[a])[0];
+  const text = JSON.stringify({ relevance: { probabilities, pick, rationale: 'The list shows the notes.', personReason: 'The list shows the notes.' } });
+  return new Response(JSON.stringify({ status: 'completed', output: [{ type: 'message', content: [{ type: 'output_text', text }] }] }), { status: 200, headers: { 'content-type': 'application/json' } });
+};
+`);
+  const key = 'sk-test-not-a-real-key';
+  const withKey = (p) => ({ ...env, OPENAI_API_KEY: key, NODE_OPTIONS: `--import=${pathToFileURL(stub)}`, STUB_VERDICT: typeof p === 'string' ? p : JSON.stringify(p) });
+  const verify = (e, outcome) => {
+    const r = spawnSync(process.execPath, [CLI, 'verify', 'shots', '--outcome', outcome, '--judge', '--foreground'], { cwd: t.repo, env: e, encoding: 'utf8' });
+    return { code: r.status, out: r.stdout + r.stderr };
+  };
+  const requests = () => readFileSync(log, 'utf8').trim().split('\n').map((l) => JSON.parse(l));
+  const ok = verify(withKey(CORRECT), 'home and settings render');
+  assert.equal(ok.code, 0, ok.out);
+  assert.equal(requests().length, 2, 'one request per capture');
+  assert.ok(requests().every((r) => r.url === 'https://api.openai.com/v1/responses' && r.auth === `Bearer ${key}` && r.model === 'vision-test-1'));
+  assert.ok(requests().every((r) => r.input.includes('data:image/png;base64,') && r.input.includes('home and settings render') && !r.input.includes('.proof')), 'the capture and the outcome, never a path');
+  const runDir = join(t.env.DONE_DONE_HOME, 'runs', 'notes', toon(ok).run_id);
+  const judgeLog = decode(readFileSync(join(runDir, 'logs', 'judge.log'), 'utf8'));
+  assert.deepEqual([judgeLog.route, judgeLog.model, judgeLog.independence, judgeLog.author], ['openai:key', 'vision-test-1', 'agent', 'none (model none)']);
+  const v = t.dd('receipt', '--verify', t.head());
+  assert.deepEqual([toon(v).schema, toon(v).judge.route, toon(v).judge.verdicts.map((x) => x.verdict)], [2, 'openai:key', ['pass', 'pass']]);
+  const bad = verify(withKey({ correct: 0.04, wrong: 0.93, unclear: 0.03 }), 'the settings page shows dark mode on');
+  assert.equal(bad.code, 1, bad.out);
+  assert.match(toon(bad).reason, /^judge: .*judge says wrong screen/);
+  // A refused key is unsure, and the reason names the real cause and where the key comes from.
+  const refused = verify(withKey('401'), 'the home screen shows the sync banner');
+  assert.equal(refused.code, 3, refused.out);
+  assert.match(toon(refused).reason, /the judge did not answer: http 401 \(check judge\.model vision-test-1 and the key in OPENAI_API_KEY\)/);
+  assert.equal(spawnSync('grep', ['-rl', key, t.env.DONE_DONE_HOME, t.repo], { encoding: 'utf8' }).stdout, '', 'the key is written nowhere');
+  // Doctor names a missing key and a missing model with their fixes, and never calls the model.
+  const doctorEnv = { ...env, OPENAI_API_KEY: '' };
+  const judgeRow = toon(doctorIn(t.repo, doctorEnv, 'doctor')).checks.find((c) => c.check === 'judge');
+  assert.deepEqual([judgeRow.status, judgeRow.detail, judgeRow.fix], ['missing', 'judge: openai:key needs your own API key in OPENAI_API_KEY, which is not set', 'Export OPENAI_API_KEY with your key, then re-run this command']);
+  assert.match(toon(doctorIn(t.repo, { ...env, OPENAI_API_KEY: key }, 'doctor')).checks.find((c) => c.check === 'judge').detail, /^openai:key \(model vision-test-1\): OPENAI_API_KEY is set and the judge kit is present; the model is never called$/);
+  writeFileSync(join(t.env.DONE_DONE_HOME, 'config.yaml'), 'agent: claude\njudge:\n  route: openai:key\n');
+  const noModel = toon(doctorIn(t.repo, doctorEnv, 'doctor')).checks.find((c) => c.check === 'judge_choice');
+  assert.deepEqual([noModel.status, noModel.detail], ['missing', 'judge: judge.route openai:key needs judge.model, a model your key can use that reads images']);
+});
+
 test('auto judge skips a claude judge with no sign-in folder, so doctor and verify judge through opencode', () => {
   const t = setup();
   mkdirSync(t.env.DONE_DONE_HOME, { recursive: true });
@@ -2389,7 +2491,7 @@ test('doctor finds agent, judge and ffprobe binaries from PATH; missing optional
   assert.match(f.checks[4].detail, /^claude \(model claude-haiku-5-5; from config\) at .*claude/);
   assert.equal(f.checks[7].status, 'ok', 'auto picks the first agent that can judge and is not the author');
   assert.match(f.checks[7].detail, /^answerer:opencode \(model opencode-go\/muse-spark-1\.3-contributor; judge\.route auto\) judges the author claude \(model claude-haiku-5-5\): a different agent from the author$/);
-  assert.match(f.checks[5].detail, /^answerer:opencode .*: opencode at .* and the judge kit are present; the model is never called/, 'the judge CLI is never run');
+  assert.match(f.checks[5].detail, /^answerer:opencode .*: opencode at .* and the judge kit are present; it judges with every tool off; the model is never called/, 'the judge CLI is never run');
   assert.match(f.checks[6].detail, /found at .*ffprobe/);
   agent('codex');
   const codexOnly = toon(doctorIn(repo, pathEnv(env, ['codex']), 'doctor'));
@@ -2397,13 +2499,13 @@ test('doctor finds agent, judge and ffprobe binaries from PATH; missing optional
   assert.match(codexOnly.checks[4].detail, /^codex \(its own default model; set agent_config\.codex\.model to choose one; from config\) at .*, but done-done cannot start codex yet \(claude, opencode, pi and gemini for now\)/);
   assert.match(codexOnly.checks[4].fix, /ask the user which agent to use and save it: done-done init --agent <agent> --model <model>/);
   assert.equal(codexOnly.checks[7].status, 'missing', 'no installed agent can judge');
-  assert.match(codexOnly.checks[7].detail, /no installed agent can judge \(judge\.route auto looks for claude, opencode\)/);
+  assert.match(codexOnly.checks[7].detail, /no installed agent can judge \(judge\.route auto looks for claude, opencode, pi, gemini\)/);
   agent('opencode');
   const two = toon(doctorIn(repo, pathEnv(env, ['codex', 'opencode']), 'doctor'));
   assert.match(two.checks[4].detail, /^opencode .* at /);
   assert.equal(two.checks[7].status, 'warning', 'the only agent that can judge is the author at its own model: a warning, and the run judges it');
   assert.match(two.checks[7].detail, /^answerer:opencode .* judges the author opencode .*: the author's agent and model in a fresh session \(session-only independence\)$/);
-  assert.match(two.checks[7].fix, /Install another agent that can judge \(claude or opencode\) so the judge is apart from the author/);
+  assert.match(two.checks[7].fix, /Install another agent that can judge \(claude or opencode or pi or gemini\) so the judge is apart from the author/);
   agent('claude');
   const none = doctorIn(repo, pathEnv(env, []), 'doctor');
   assert.equal(none.code, 0, 'missing optionals still exit 0 when every required item is ok');
@@ -2594,11 +2696,11 @@ test('the agent comes from config, and doctor --probe asks it one schema questio
   assert.equal(doctor('agent: opencode\n').by('judge_choice').status, 'warning', 'allow_same runs a session-only judge, and doctor says so');
   routeCfg('');
   writeFileSync(join(env.DONE_DONE_HOME, 'config.yaml'), 'judge:\n  route: answerer:claude\n');
-  assert.match(doctor('').out, /judge\.route must be auto, claude-code \(for claude\), or answerer:<agent> for one of opencode/, 'claude judges through claude-code');
+  assert.match(doctor('').out, /judge\.route must be auto, claude-code \(for claude\), answerer:<agent> for one of opencode, pi, gemini, or a key route \(openai:key\)/, 'claude judges through claude-code');
   writeFileSync(join(env.DONE_DONE_HOME, 'config.yaml'), 'judge:\n  route: answerer:codex\n');
-  assert.match(doctor('').out, /judge\.route must be auto, claude-code \(for claude\), or answerer:<agent> for one of opencode/, 'codex cannot read an image, so it is a config error');
+  assert.match(doctor('').out, /judge\.route must be auto, claude-code \(for claude\), answerer:<agent> for one of opencode, pi, gemini, .*; codex cannot judge yet \(done-done cannot start it\)/, 'codex has no adapter yet, so it is a config error that says why');
   writeFileSync(join(env.DONE_DONE_HOME, 'config.yaml'), 'judge:\n  route: opencode-go\n');
-  assert.match(doctor('').out, /judge\.route must be auto, claude-code \(for claude\), or answerer:<agent>/);
+  assert.match(doctor('').out, /judge\.route must be auto, claude-code \(for claude\), answerer:<agent>/);
   writeFileSync(join(env.DONE_DONE_HOME, 'config.yaml'), 'judge:\n  model: x\n');
   assert.equal(doctor('').by('config').status, 'ok', 'a model under judge.route auto is ignored, not a config error');
   assert.match(doctor('agent: cursor\n').out, /agent must be one of claude, codex, opencode, pi, gemini/);
@@ -2932,7 +3034,8 @@ function stubPiGemini(env, answer = '{"ok":true}', mode = 'ok') {
 const { appendFileSync, readFileSync } = require('node:fs');
 const argv = process.argv.slice(2);
 const stdin = readFileSync(0, 'utf8');
-appendFileSync(${JSON.stringify(log)}, JSON.stringify({ agent: 'pi', argv, stdin, cwd: process.cwd() }) + '\\n');
+const attached = argv.filter((a) => a.startsWith('@')).map((a) => readFileSync(a.slice(1)).subarray(1, 4).toString());
+appendFileSync(${JSON.stringify(log)}, JSON.stringify({ agent: 'pi', argv, stdin, attached, cwd: process.cwd() }) + '\\n');
 const n = readFileSync(${JSON.stringify(log)}, 'utf8').trim().split('\\n').length;
 const text = ${JSON.stringify(mode)} === 'bad' || (${JSON.stringify(mode)} === 'retry' && n === 1) ? 'not json at all' : ${JSON.stringify(fenced)};
 for (const t of ['session', 'agent_start', 'turn_start']) console.log(JSON.stringify({ type: t }));
@@ -2943,7 +3046,9 @@ console.log(JSON.stringify({ type: 'agent_end' }));
 const { appendFileSync, readFileSync } = require('node:fs');
 const argv = process.argv.slice(2);
 const stdin = readFileSync(0, 'utf8');
-appendFileSync(${JSON.stringify(log)}, JSON.stringify({ agent: 'gemini', argv, stdin, cwd: process.cwd() }) + '\\n');
+const policy = argv.includes('--policy') ? readFileSync(argv[argv.indexOf('--policy') + 1], 'utf8') : undefined;
+const attached = (argv[1].match(/@\\S+/g) ?? []).map((a) => readFileSync(a.slice(1)).subarray(1, 4).toString());
+appendFileSync(${JSON.stringify(log)}, JSON.stringify({ agent: 'gemini', argv, stdin, policy, attached, cwd: process.cwd() }) + '\\n');
 // A signed-out gemini (seen 13 Oct): the stack of its auth error, a warning, then the one useful line in red.
 if (${JSON.stringify(mode)} === 'auth') {
   process.stderr.write('Error authenticating: FatalCancellationError: Authentication cancelled by user.\\n    at initOauthClient (file:///gemini/bundle/chunk.js:1:1)\\n  exitCode: 130\\n}\\nSkill conflict detected: a skill overrides another\\n\\u001b[31mAuthentication cancelled by user.\\u001b[0m\\nUpdate available: 0.57.0\\n');
@@ -2970,7 +3075,7 @@ test('doctor --probe asks pi on stdin (never in argv) with tools off and a scrat
   assert.match(call.stdin, /connectivity probe/, 'the prompt goes on stdin (the schema is enforced by done-done, then asked again)');
   assert.match(call.stdin, /"required":\["ok"\]/, 'the first try already states the schema');
   assert.ok(!call.argv.some((a) => a.includes('connectivity probe')), 'never in argv');
-  assert.deepEqual(call.argv, ['-p', '--mode', 'json', '--no-session', '--no-tools'], 'no model is passed, so pi runs its own default');
+  assert.deepEqual(call.argv, ['-p', '--mode', 'json', '--no-session', '--no-tools', '--no-extensions', '--no-skills', '--no-prompt-templates', '--no-context-files'], 'no model is passed, so pi runs its own default');
   assert.notEqual(call.cwd, repo, 'a tool-less probe runs in a scratch dir, never the repo');
   const record = d.checks.find((x) => x.check === 'probe').detail.match(/record (\S+)$/)[1];
   assert.equal(statSync(record).mode & 0o777, 0o600);
@@ -3011,7 +3116,8 @@ test('doctor --probe asks gemini with the prompt on stdin, and reports a signed-
   const [call] = s.calls();
   assert.equal(call.agent, 'gemini');
   assert.match(call.stdin, /connectivity probe/);
-  assert.deepEqual(call.argv, ['-p', 'Follow the instructions on stdin.', '-o', 'json', '-m', 'flash-lite', '--approval-mode', 'plan', '--skip-trust']);
+  assert.deepEqual(call.argv, ['-p', 'Follow the instructions on stdin.', '-o', 'json', '-m', 'flash-lite', '--approval-mode', 'plan', '--policy', join(call.cwd, 'deny-all.toml'), '--skip-trust']);
+  assert.equal(call.policy, '[[rule]]\ntoolName = "*"\ndecision = "deny"\npriority = 999\n', 'a tool-less call denies every tool, not only edits as plan mode does');
   assert.ok(!call.argv.some((a) => a.includes('connectivity probe')), 'never in argv');
   assert.notEqual(call.cwd, repo, 'a tool-less probe runs in a scratch dir, never the repo');
   const out = stubPiGemini(env, '{"ok":true}', 'auth');
@@ -3045,7 +3151,7 @@ test('agent_config.pi.model is passed to pi as --model', () => {
   writeFileSync(join(env.DONE_DONE_HOME, 'config.yaml'), 'agent: pi\nagent_config:\n  pi: { model: vendor/some-model }\n');
   const d = toon(doctorIn(repo, s.env, 'doctor', '--probe'));
   assert.match(d.checks.find((x) => x.check === 'agent').detail, /^pi \(model vendor\/some-model; from config\)/);
-  assert.deepEqual(s.calls()[0].argv, ['-p', '--mode', 'json', '--no-session', '--no-tools', '--model', 'vendor/some-model']);
+  assert.deepEqual(s.calls()[0].argv, ['-p', '--mode', 'json', '--no-session', '--no-tools', '--no-extensions', '--no-skills', '--no-prompt-templates', '--no-context-files', '--model', 'vendor/some-model']);
 });
 
 test('gemini edit steps run with auto_edit, never yolo, and read steps stay in plan mode', async () => {

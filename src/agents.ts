@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync
 import { tmpdir } from 'node:os';
 import { dirname, isAbsolute, join } from 'node:path';
 import { stripVTControlCharacters } from 'node:util';
-import { AGENTS, ANSWERER_JUDGES, CHEAP, type Config, EFFORT_FLAGS, parseDuration, UsageError } from './config.js';
+import { AGENTS, ANSWERER_JUDGES, CHEAP, type Config, EFFORT_FLAGS, KEY_ROUTES, parseDuration, UsageError } from './config.js';
 import { claudeLoggedIn, isExecutable, onPath } from './judge.js';
 
 // How done-done starts a coding agent for one step: a fresh, single-shot session that
@@ -24,7 +24,7 @@ export type AgentCall = {
   timeoutMs: number;
   tools: 'none' | 'read' | 'edit'; // none for the judge and most readers; read for the claude reader
   record: string; // where the call record is written
-  files?: string[]; // images attached to the prompt, for the answerer judge
+  images?: { name: string; bytes: Buffer }[]; // attached to the prompt for the answerer judge, written into the call's scratch folder
   attempts?: number; // asks allowed for a bad tool-less answer, default ASK_ATTEMPTS
 };
 export type AgentAnswer = { ok: boolean; answer?: Record<string, unknown>; error?: string; record?: string; recordError?: string };
@@ -48,7 +48,8 @@ class ProviderError extends Error {
     this.detail = `${prefix}${text.slice(0, 500)}${suffix}`;
   }
 }
-type Adapter = { argv: (c: AgentCall, dir: string) => string[]; answer: (stdout: string, c: AgentCall) => unknown; file?: boolean; hint?: string; env?: (c: AgentCall) => Record<string, string> };
+// files: name -> text the call needs in its scratch folder (gemini's deny-all policy).
+type Adapter = { argv: (c: AgentCall, dir: string) => string[]; answer: (stdout: string, c: AgentCall) => unknown; file?: boolean; hint?: string; env?: (c: AgentCall) => Record<string, string>; files?: (c: AgentCall) => Record<string, string> };
 
 // The answer object in an agent's free text: the first top-level '{'..'}' span that parses to an object with every
 // required key, skipping braces and quotes in narration. With no such span, the last span that parsed is returned, so
@@ -102,6 +103,7 @@ const ACP: Adapter = {
 };
 export const ACPX_INSTALL = 'Install the acpx ACP bridge (npm install -g acpx, https://github.com/openclaw/acpx), then re-run: done-done doctor';
 
+const PI_TOOL_LESS = ['--no-tools', '--no-extensions', '--no-skills', '--no-prompt-templates', '--no-context-files'];
 const ADAPTERS: Record<string, Adapter> = {
   // claude -p: --json-schema puts the validated object in structured_output; --tools '' turns every tool off.
   claude: {
@@ -118,7 +120,7 @@ const ADAPTERS: Record<string, Adapter> = {
   // and the answer is the JSON object in the text parts of its JSON event stream.
   opencode: {
     file: true,
-    argv: (c, dir) => ['run', 'Follow the attached instructions.', '--format', 'json', '-m', c.model, '-f', join(dir, 'prompt.md'), ...(c.files ?? []).flatMap((f) => ['-f', f])],
+    argv: (c, dir) => ['run', 'Follow the attached instructions.', '--format', 'json', '-m', c.model, '-f', join(dir, 'prompt.md'), ...(c.images ?? []).flatMap((i) => ['-f', join(dir, i.name)])],
     answer: (out, c) => {
       const events = out.split('\n').filter((l) => l.startsWith('{')).map((l) => JSON.parse(l));
       const error = events.find((e) => e.type === 'error');
@@ -134,10 +136,13 @@ const ADAPTERS: Record<string, Adapter> = {
   },
   // pi -p reads the prompt on stdin (probed 12 Oct: with no positional message, stdin becomes the user
   // message); --mode json streams JSONL events whose assistant message_end holds the answer text,
-  // --no-session keeps the probe ephemeral.
+  // --no-session keeps the probe ephemeral. An @<file> argument attaches an image to that message.
+  // --no-tools turns every built-in and extension tool off (probed 13 Oct: a canary file outside the cwd went unread).
+  // A tool-less call also loads no extensions, skills, prompt templates or context files: they would add the user's own
+  // context to a fresh judge, and extension loading took 2 minutes on a real setup (probed 13 Oct), past the judge's timeout.
   // Pi has no permission gate for edit steps, so doctor warns about it. Without a model, pi runs its own default.
   pi: {
-    argv: (c) => ['-p', '--mode', 'json', '--no-session', ...(c.tools === 'edit' ? [] : ['--no-tools']), ...(c.model ? ['--model', c.model] : [])],
+    argv: (c, dir) => ['-p', '--mode', 'json', '--no-session', ...(c.tools === 'edit' ? [] : PI_TOOL_LESS), ...(c.model ? ['--model', c.model] : []), ...(c.images ?? []).map((i) => `@${join(dir, i.name)}`)],
     answer: (out, c) => {
       let text = '';
       let failure = '';
@@ -159,10 +164,15 @@ const ADAPTERS: Record<string, Adapter> = {
   // gemini -p text is appended to stdin, so -p carries only a fixed trailer and the prompt goes on stdin;
   // -o json prints one object {response, stats, error?} (its headless.md). plan mode is read-only, so a
   // headless call never blocks on an approval prompt; auto_edit (edits approved, shell still asks) is only for edit steps.
+  // plan mode still reads files, so a tool-less call also loads a deny-all --policy, which replaces the user's own
+  // policy folder and removes every tool, MCP ones too, from the model (its policy-engine.md). An @<file> in the -p text
+  // attaches an image: the CLI reads it itself, outside the policy, and only inside the cwd, the call's scratch folder.
   // --skip-trust is only for the tool-less probe in its scratch folder (the headless path in its trusted-folders.md): done-done
   // never runs interactively, so the trust dialog could never be answered there. Repo calls keep Gemini's trust gate.
   gemini: {
-    argv: (c) => ['-p', 'Follow the instructions on stdin.', '-o', 'json', '-m', c.model, '--approval-mode', c.tools === 'edit' ? 'auto_edit' : 'plan', ...(c.tools === 'none' ? ['--skip-trust'] : [])],
+    argv: (c, dir) => ['-p', ['Follow the instructions on stdin.', ...(c.images ?? []).map((i) => `@${i.name}`)].join(' '), '-o', 'json', '-m', c.model, '--approval-mode', c.tools === 'edit' ? 'auto_edit' : 'plan',
+      ...(c.tools === 'none' ? ['--policy', join(dir, 'deny-all.toml'), '--skip-trust'] : [])],
+    files: (c): Record<string, string> => (c.tools === 'none' ? { 'deny-all.toml': '[[rule]]\ntoolName = "*"\ndecision = "deny"\npriority = 999\n' } : {}),
     hint: 'if gemini refused this folder as untrusted, trust it in Gemini CLI first, then retry',
     answer: (out, c) => {
       const r = JSON.parse(out);
@@ -222,8 +232,9 @@ export function agentPath(agent: string, cfg?: Pick<Config, 'acpx_path' | 'agent
 }
 
 // The judge: a fresh, tools-off, single-shot call through BYOKit, never the author's agent and model unless the user
-// accepts that. claude judges through the kit's claude-code route; any other agent whose CLI reads images, through
-// the kit's answerer backend over that CLI. independence: agent (another agent), model (the author's agent at
+// accepts that. claude judges through the kit's claude-code route; any other agent whose CLI reads images with every
+// tool off, through the kit's answerer backend over that CLI; a key route (openai:key) through the kit's own backend on
+// the user's API key, with no agent CLI. independence: agent (another agent), model (the author's agent at
 // another model) or session-only (the author's agent and model in a fresh session).
 export type JudgeChoice = { route: string; agent: string; model: string; independence: 'agent' | 'model' | 'session-only'; from: 'config' | 'auto'; author: { agent: string; model: string } };
 
@@ -237,14 +248,13 @@ const claudeReady = (cfg: Config) => {
 const routeOf = (agent: string) => (agent === 'claude' ? 'claude-code' : `answerer:${agent}`);
 const canJudge = (agent: string) => agent === 'claude' || ANSWERER_JUDGES.includes(agent);
 export const JUDGES = AGENTS.filter(canJudge);
-
 export function selectJudge(cfg: Config, found: { agent: string; model: string; path: string }): JudgeChoice {
   const author = found.path ? found : { agent: 'none', model: '', path: '' };
   // acp:claude-code is claude for independence; an author with no known model is never apart by model.
   const same = knownAgentOf(author.agent);
-  const pick = (agent: string, model: string, from: JudgeChoice['from']): JudgeChoice => {
+  const pick = (agent: string, model: string, from: JudgeChoice['from'], route = routeOf(agent)): JudgeChoice => {
     const independence = agent !== same ? 'agent' : author.model && model !== author.model ? 'model' : 'session-only';
-    return { route: routeOf(agent), agent, model, independence, from, author: { agent: author.agent, model: author.model } };
+    return { route, agent, model, independence, from, author: { agent: author.agent, model: author.model } };
   };
   const route = cfg.judge.route;
   if (route === 'auto') {
@@ -254,16 +264,22 @@ export function selectJudge(cfg: Config, found: { agent: string; model: string; 
     const other = ready.find((a) => a !== same);
     if (other) return pick(other, modelFor(cfg, other), 'auto');
     if (ready.includes(same)) return pick(same, CHEAP[same].model, 'auto');
-    throw new UsageError(`judge: no installed agent can judge (judge.route auto looks for ${JUDGES.join(', ')})`, 'Install one of them, or set judge.route in ~/.done-done/config.yaml');
+    throw new UsageError(`judge: no installed agent can judge (judge.route auto looks for ${JUDGES.join(', ')})`, `Install one of them, or set judge.route to a key route (${Object.keys(KEY_ROUTES).join(', ')}) with judge.model in ~/.done-done/config.yaml`);
   }
-  const agent = route === 'claude-code' ? 'claude' : route.slice('answerer:'.length);
-  if (route !== 'claude-code' && !ANSWERER_JUDGES.includes(agent)) throw new UsageError(`judge: done-done cannot judge through ${agent} yet (done-done cannot send its CLI an image)`, `Set judge.route to claude-code or answerer:<one of ${ANSWERER_JUDGES.join(', ')}>`);
-  // The author's own agent defaults to its cheap model, to be apart by model, as under auto.
-  const model = cfg.judge.model || (agent === same ? CHEAP[agent]?.model : modelFor(cfg, agent)) || '';
-  if (!model) throw new UsageError(`judge: no model for ${route}`, `Set judge.model in ~/.done-done/config.yaml`);
-  const choice = pick(agent, model, 'config');
+  let choice: JudgeChoice;
+  if (Object.hasOwn(KEY_ROUTES, route)) {
+    if (!cfg.judge.model) throw new UsageError(`judge: judge.route ${route} needs judge.model, a model your key can use that reads images`, 'Set judge.model in ~/.done-done/config.yaml');
+    choice = pick(route, cfg.judge.model, 'config', route);
+  } else {
+    const agent = route === 'claude-code' ? 'claude' : route.slice('answerer:'.length);
+    if (route !== 'claude-code' && !ANSWERER_JUDGES.includes(agent)) throw new UsageError(`judge: done-done cannot judge through ${agent} yet (done-done cannot send its CLI an image with every tool off)`, `Set judge.route to claude-code or answerer:<one of ${ANSWERER_JUDGES.join(', ')}>`);
+    // The author's own agent defaults to its cheap model, to be apart by model, as under auto.
+    const model = cfg.judge.model || (agent === same ? CHEAP[agent]?.model : modelFor(cfg, agent)) || '';
+    if (!model) throw new UsageError(`judge: no model for ${route}`, `Set judge.model in ~/.done-done/config.yaml`);
+    choice = pick(agent, model, 'config');
+  }
   if (choice.independence === 'session-only' && !cfg.judge.allow_same)
-    throw new UsageError(`judge: judge.route ${route} at model ${model} is the author's own agent and model (${author.agent}), and the judge is never the agent that did the work`, 'Set judge.route or judge.model to another agent or model, or set judge.allow_same: true in ~/.done-done/config.yaml to accept a fresh session of the same one');
+    throw new UsageError(`judge: judge.route ${route} at model ${choice.model} is the author's own agent and model (${author.agent}), and the judge is never the agent that did the work`, 'Set judge.route or judge.model to another agent or model, or set judge.allow_same: true in ~/.done-done/config.yaml to accept a fresh session of the same one');
   return choice;
 }
 
@@ -281,6 +297,8 @@ export function askAgent(c: AgentCall): AgentAnswer {
     dir = mkdtempSync(join(tmpdir(), 'done-done-agent-'));
     cwd = c.tools === 'none' ? dir : c.cwd;
     if (!adapter) throw new Error(`no adapter for ${c.agent} yet`);
+    for (const i of c.images ?? []) writeFileSync(join(dir, i.name), i.bytes, { mode: 0o600 });
+    for (const [name, text] of Object.entries(adapter.files?.(c) ?? {})) writeFileSync(join(dir, name), text, { mode: 0o600 });
     const bin = c.path;
     if (!bin) throw new Error(c.agent.startsWith('acp:') ? `${c.agent} needs acpx, and acpx is not startable; ${ACPX_INSTALL}` : notStartable(c.agent, c.override));
     let lastError = '';
@@ -323,10 +341,10 @@ export function askAgent(c: AgentCall): AgentAnswer {
   } finally {
     if (dir) rmSync(dir, { recursive: true, force: true });
   }
-  // The record holds what ran and what came back, never the prompt text.
-  const { prompt, ...call } = c;
+  // The record holds what ran and what came back, never the prompt text or an image.
+  const { prompt, images, ...call } = c;
   try {
-    const record = { ...call, cwd, prompt_bytes: Buffer.byteLength(prompt), argv: argv('<tmp>'), ms: Date.now() - started, exit: res?.status ?? null, attempts, ...out, error: failure, stderr: String(res?.stderr ?? '').slice(-2000) };
+    const record = { ...call, ...(images && { images: images.map((i) => i.name) }), cwd, prompt_bytes: Buffer.byteLength(prompt), argv: argv('<tmp>'), ms: Date.now() - started, exit: res?.status ?? null, attempts, ...out, error: failure, stderr: String(res?.stderr ?? '').slice(-2000) };
     mkdirSync(dirname(c.record), { recursive: true });
     writeFileSync(c.record, `${JSON.stringify(record, null, 2)}\n`, { mode: 0o600 });
     out = { ...out, record: c.record };

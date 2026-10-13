@@ -254,6 +254,8 @@ ${agents}  # codex and pi have no cheap default: they run their own default mode
 # ~/.chrome-devtools-axi; install chrome-devtools-mcp to a fixed prefix and set CHROME_DEVTOOLS_AXI_MCP_PATH, so npx is not run:
 #   codex: [--add-dir, ${homedir()}/.chrome-devtools-axi]
 # Adding ${homedir()}/.npm instead lets npx run, but the agent can then change packages npx runs later outside the sandbox.
+# Codex's commands cannot see your other processes, so a chrome-devtools-axi session you already use looks dead to them and the
+# drive collides with it: have the recipe give each drive its own, export CHROME_DEVTOOLS_AXI_SESSION=done-done-$DONE_DONE_RUN_ID.
 agent_args_override: {}
 
 # A binary per agent instead of the one on PATH, e.g. claude: /opt/claude/bin/claude.

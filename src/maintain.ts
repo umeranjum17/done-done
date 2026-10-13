@@ -27,6 +27,8 @@ const CHURN_MAX = 500;
 const FEATURE_CHARS = 20_000;
 // ponytail: a bare name can match many tracked files, so one feature's cited source is capped at 60,000 characters; upgrade to ranking files by citation count when a repo needs more.
 const CITED_CHARS = 60_000;
+// ponytail: the left-out notice names the first 20 files it skipped and counts the rest; list them all if a reader needs them.
+const LEFT_NAMED = 20;
 // Findings that mean the pass could not finish, so the result is blocked, not drift.
 const BLOCKING = new Set(['coverage', 'repo-changed']);
 // Notices are listed in the run but do not make the result drift.
@@ -255,13 +257,17 @@ export async function maintainSteps<S>(run: { repo: string; findings?: Finding[]
     for (const m of cites(text)) {
       for (const p of citedFiles(repo, tracked, m[1])) {
         if (seen.has(p) || left.has(p)) continue;
+        if (capped) {
+          left.add(p);
+          continue;
+        }
         const body = citedText(repo, p);
         if (body === undefined) {
           left.add(p);
           continue;
         }
         const kept = body.length > FEATURE_CHARS ? `${body.slice(0, FEATURE_CHARS)}\n[truncated after ${FEATURE_CHARS} characters]` : body;
-        if (capped || total + kept.length > CITED_CHARS) {
+        if (total + kept.length > CITED_CHARS) {
           capped = true;
           left.add(p);
           continue;
@@ -273,7 +279,8 @@ export async function maintainSteps<S>(run: { repo: string; findings?: Finding[]
     }
     const parts = [...seen].map(([p, body]) => `\n\nCited source ${p}:\n${body}`);
     if (left.size) {
-      const names = [...left].join(', ');
+      const shown = [...left].slice(0, LEFT_NAMED);
+      const names = left.size > shown.length ? `${shown.join(', ')}, +${left.size - shown.length} more` : shown.join(', ');
       add({ kind: 'truncated', file: feature, what: `${left.size} cited files were left out (${names}): they cannot be read, or the cited source is capped at ${CITED_CHARS} characters` });
       parts.push(`\n\n[truncated: the cited source for ${feature} is capped at ${CITED_CHARS} characters and skips unreadable files, so ${left.size} cited files are left out: ${names}]`);
     }

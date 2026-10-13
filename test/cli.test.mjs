@@ -2943,7 +2943,7 @@ test('maintain caps the source a tool-less reader gets at 60,000 characters and 
   writeFileSync(join(env.DONE_DONE_HOME, 'config.yaml'), 'agent: pi\n');
   const skill = join(repo, '.agents', 'skills', 'verify-notes');
   mkdirSync(join(skill, 'features'), { recursive: true });
-  for (const d of ['a', 'b', 'c', 'd']) {
+  for (const d of ['a', 'b', 'c', 'd', ...Array.from({ length: 24 }, (_, i) => `e${i}`)]) {
     mkdirSync(join(repo, d), { recursive: true });
     writeFileSync(join(repo, d, 'index.ts'), `export const ${d} = 1;\n${'x'.repeat(19_000)}\n`);
   }
@@ -2955,11 +2955,14 @@ test('maintain caps the source a tool-less reader gets at 60,000 characters and 
   const r = doctorIn(repo, s.env, 'maintain', '--foreground');
   const m = toon(r);
   assert.deepEqual([r.code, m.result], [0, 'clean'], r.out);
-  assert.ok(m.findings.some((f) => f.kind === 'truncated' && /1 cited files were left out/.test(f.what)), r.out);
+  assert.ok(m.findings.some((f) => f.kind === 'truncated' && /25 cited files were left out/.test(f.what) && /, \+5 more\)/.test(f.what)), r.out);
   const reader = s.calls().find((c) => c.stdin.includes('Feature file'));
-  assert.equal(reader.stdin.split('Cited source ').length - 1, 3, 'three of the four cited files fit under the cap');
+  assert.equal(reader.stdin.split('Cited source ').length - 1, 3, 'three of the 28 cited files fit under the cap');
   assert.ok(reader.stdin.length < 70_000);
-  assert.match(reader.stdin, /so 1 cited files are left out/);
+  assert.match(reader.stdin, /so 25 cited files are left out: /);
+  const named = reader.stdin.match(/left out: ([^\]]*)\]/)[1].split(', ');
+  assert.equal(named.length, 21, 'the notice names 20 files and counts the rest');
+  assert.equal(named[20], '+5 more');
 });
 
 test('maintain blocks an unreadable features folder instead of failing the run', { skip: process.getuid?.() === 0 && 'root reads files whatever their mode' }, () => {

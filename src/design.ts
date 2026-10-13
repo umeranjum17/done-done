@@ -1,10 +1,13 @@
 import type { Question } from '@byokit/decide';
+import jpeg from 'jpeg-js';
 import type { JudgeChoice } from './agents.js';
 import type { Config } from './config.js';
 import { askJudge, backend, type Capture, type Judge, judgeable, prepare } from './judge.js';
+import { pngPixels } from './media.js';
 
 // The design check: one judge request per screen, alone or next to its approved mock, with one question per defect
 // kind. It goes through the same BYOKit routes and judge choice as the relevance judge, so the judge is never the author.
+// A blank strip along an edge is also measured from the pixels, since that is a fact a cheap model can explain away.
 
 export type Screen = Capture & { mock?: Capture };
 export type Defect = { kind: string; where: string };
@@ -37,6 +40,64 @@ const MOCK = ' The image "mock" is the approved design for that screen. Answer a
 const questions = (mock: boolean): Record<string, Question> =>
   Object.fromEntries(Object.entries(KINDS).map(([kind, k]) => [kind, { kind: 'choice', instructions: `Write the rationale first: ${k.look}. ${SCREEN}${mock ? MOCK : ''}`, options: { defect: k.defect, none: NONE }, floor: FLOOR, personReason: true, images: mock ? ['screen', 'mock'] : ['screen'] }]));
 
+// A measured blank strip: a band along a whole edge, at least STRIP.min of that side deep, in one colour (each channel
+// within STRIP.tolerance of the edge line's colour) with nothing in it (at most STRIP.content of its pixels off that
+// colour), and at least STRIP.contrast apart from the screen's main colour on some channel. The band grows inward while
+// at least half of each line is its colour, so a nav rail or a bar holds its icons or title and counts as content; a
+// band that reaches halfway in is the screen's own background (a whole uniform screen is the blank-frame check's).
+// ponytail: one fixed threshold set; it misses a strip close to the main colour (a black bar on a near-black dark screen)
+// and fails a deliberately empty side panel. The judge's blank-strip question stays the second signal; tune STRIP, or
+// let a mock exempt a band, when that shows up.
+const STRIP = { min: 0.02, tolerance: 24, contrast: 64, content: 0.005 };
+
+function pixels(c: Capture): { w: number; h: number; rgb: Uint8Array } | undefined {
+  if (c.media.type === 'png') return pngPixels(c.bytes);
+  try {
+    const { width, height, data } = jpeg.decode(c.bytes, { useTArray: true, formatAsRGBA: false });
+    return { w: width, h: height, rgb: data };
+  } catch {
+    return undefined; // a JPEG this decoder cannot read is left to the judge
+  }
+}
+
+export function edgeStrips(c: Capture): Defect[] {
+  const p = c.media.status === 'ok' && judgeable(c) ? pixels(c) : undefined;
+  if (!p) return [];
+  const { w, h, rgb } = p;
+  // The screen's main colour: its most common colour, at 16 levels per channel.
+  const counts = new Uint32Array(4096);
+  for (let i = 0; i < rgb.length; i += 3) counts[((rgb[i] >> 4) << 8) | ((rgb[i + 1] >> 4) << 4) | (rgb[i + 2] >> 4)]++;
+  const top = counts.indexOf(Math.max(...counts));
+  const main = [(top >> 8) * 16 + 8, ((top >> 4) & 15) * 16 + 8, (top & 15) * 16 + 8];
+  const out: Defect[] = [];
+  for (const edge of ['left', 'right', 'top', 'bottom'] as const) {
+    const side = edge === 'left' || edge === 'right';
+    const depth = side ? w : h; // how far in a band can reach
+    const span = side ? h : w; // the length of the edge
+    // The pixel offset `d` lines in from this edge, `s` along it.
+    const at = (d: number, s: number) => 3 * (side ? s * w + (edge === 'left' ? d : w - 1 - d) : (edge === 'top' ? d : h - 1 - d) * w + s);
+    const colour = [0, 1, 2].map((k) => {
+      let sum = 0;
+      for (let s = 0; s < span; s++) sum += rgb[at(0, s) + k];
+      return Math.round(sum / span);
+    });
+    const off = (i: number) => colour.some((v, k) => Math.abs(rgb[i + k] - v) > STRIP.tolerance);
+    let deep = 0;
+    let stray = 0;
+    for (; deep < depth / 2; deep++) {
+      let miss = 0;
+      for (let s = 0; s < span; s++) if (off(at(deep, s))) miss++;
+      if (miss > span / 2) break;
+      stray += miss;
+    }
+    if (deep >= depth / 2 || deep < depth * STRIP.min || stray > deep * span * STRIP.content) continue;
+    if (colour.every((v, k) => Math.abs(v - main[k]) < STRIP.contrast)) continue;
+    const hex = `#${colour.map((v) => v.toString(16).padStart(2, '0')).join('')}`;
+    out.push({ kind: 'blank-strip', where: `${edge} edge: a plain ${hex} band ${deep} px deep (${Math.round((100 * deep) / depth)}% of the ${side ? 'width' : 'height'}), full ${side ? 'height' : 'width'}, with nothing in it` });
+  }
+  return out;
+}
+
 // Why a file cannot be judged, or its image as sent.
 function image(c: Capture): { mime: string; bytes: Buffer } | string {
   if (c.media.status !== 'ok') return `${c.name}: ${c.media.why}`;
@@ -58,24 +119,25 @@ export async function design(cfg: Config, choice: JudgeChoice, screens: Screen[]
       out.push({ ...row, verdict: 'fail', defects: [], reason: `${s.name}: ${s.media.why}` });
       continue;
     }
+    // A measured strip fails the screen even when the judge cannot be asked or does not answer.
+    const defects = edgeStrips(s);
+    let reason: string | undefined;
     const shot = image(s);
     const mock = s.mock && image(s.mock);
-    if (typeof shot === 'string' || typeof mock === 'string') {
-      out.push({ ...row, verdict: 'unsure', defects: [], reason: `not judged: ${typeof shot === 'string' ? shot : mock}` });
-      continue;
+    if (typeof shot === 'string' || typeof mock === 'string') reason = `not judged: ${typeof shot === 'string' ? shot : mock}`;
+    else {
+      const withMock = !!mock;
+      call = `${records}/design-${stamp}-${n + 1}`;
+      if (!backends.has(withMock)) backends.set(withMock, await backend(cfg, choice, () => `${call}.agent.json`, questions(withMock), ASK_ATTEMPTS));
+      const answers = await askJudge(cfg, backends.get(withMock)!, choice, { screen: withMock ? 'a screenshot next to its approved mock' : 'a screenshot' }, questions(withMock), { screen: shot, ...(mock && { mock }) });
+      if (typeof answers === 'string') reason = answers;
+      else {
+        defects.push(...Object.entries(answers).filter(([, a]) => a.answer === 'defect').map(([kind, a]) => ({ kind, where: (a.personReason || a.rationale || 'not named').slice(0, 200) })));
+        const unsure = Object.entries(answers).filter(([, a]) => a.abstained).map(([kind]) => kind);
+        if (unsure.length) reason = `not confident enough about ${unsure.join(', ')}`;
+      }
     }
-    const withMock = !!mock;
-    call = `${records}/design-${stamp}-${n + 1}`;
-    if (!backends.has(withMock)) backends.set(withMock, await backend(cfg, choice, () => `${call}.agent.json`, questions(withMock), ASK_ATTEMPTS));
-    const answers = await askJudge(cfg, backends.get(withMock)!, choice, { screen: withMock ? 'a screenshot next to its approved mock' : 'a screenshot' }, questions(withMock), { screen: shot, ...(mock && { mock }) });
-    if (typeof answers === 'string') {
-      out.push({ ...row, verdict: 'unsure', defects: [], reason: answers });
-      continue;
-    }
-    const defects = Object.entries(answers).filter(([, a]) => a.answer === 'defect').map(([kind, a]) => ({ kind, where: (a.personReason || a.rationale || 'not named').slice(0, 200) }));
-    const unsure = Object.entries(answers).filter(([, a]) => a.abstained).map(([kind]) => kind);
-    const reason = unsure.length ? `not confident enough about ${unsure.join(', ')}` : undefined;
-    out.push({ ...row, verdict: defects.length ? 'fail' : unsure.length ? 'unsure' : 'pass', defects, ...(reason && { reason }) });
+    out.push({ ...row, verdict: defects.length ? 'fail' : reason ? 'unsure' : 'pass', defects, ...(reason && { reason }) });
   }
   return out;
 }

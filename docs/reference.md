@@ -217,9 +217,10 @@ done-done design shots/home.png --mock shots/home.png=design/home.png
   | `clipped-text` | text is cut off at an edge or by its container, or cut mid-word without an ellipsis |
   | `overlap` | elements cover each other, or content sits under the status bar or system bars |
   | `off-screen` | an element is pushed past the left, right or top edge (content that scrolls below the bottom is fine) |
-  | `blank-strip` | a blank, black or solid band where the app should paint, such as a black bar down one side |
+  | `blank-strip` | a blank, black or solid band where the app should paint, such as a black bar down one side; also measured from the pixels, below |
   | `layout` | elements misaligned, squeezed, badly wrapped or stacked wrongly, or text unreadable against its background |
 
+- **Measured strips.** A blank strip is also measured from the pixels of each PNG or JPEG screen, before and apart from the judge: a band along a whole edge, at least 2% of that side deep, in one plain colour with nothing in it, and clearly apart from the screen's main colour. It fails the screen as `blank-strip` with its edge, colour and depth (`left edge: a plain #151815 band 132 px deep (12% of the width), full height, with nothing in it`), even when the judge is unsure or does not answer. A nav rail or bar that holds icons or a title is content, not a strip, and a screen that is all one colour is the blank-frame check's. The measure misses a strip close to the screen's main colour (a black bar on a near-black screen); the judge's question still covers it.
 - **Mocks.** `--mock <screen>=<mock>` sends the screen and its approved mock in the same request, and the judge reports a difference from the mock as a defect of its kind (a moved, missing or resized element is `layout`); live data such as names, numbers and times is not a defect, and an element shaped as in the mock is not stretched. Repeat `--mock` per screen; a screen named only in `--mock` is still checked. Without a mock, the screen is judged alone.
 - **Variants.** `design` judges the screens it is given and captures nothing. Capture each variant your change touches (dark theme, small width, large font) as its own screen and pass them all; a name such as `home.dark.png` or `home.large-font.png` keeps them apart, and each variant takes its own `--mock`. Pass the raw capture: the judge reads everything in the image as the app, so a device frame or letterbox band fails as a `blank-strip`.
 - **From a verify flow.** Run it on the screens a journey writes, after the capture, so a failing screen fails the journey and the `verify` run with it: `journeys: { shots: { command: "node capture.mjs && done-done design $DONE_DONE_EVIDENCE_ROOT/*.png" } }`. Or run it as its own CI step on the captured screens.
@@ -227,7 +228,7 @@ done-done design shots/home.png --mock shots/home.png=design/home.png
 | Verdict | Result | Exit |
 |---|---|---|
 | every screen `pass` | pass | 0 |
-| a screen `fail`: the judge named a defect, or the file is empty, truncated or a blank frame | fail | 1 |
+| a screen `fail`: the judge named a defect, a blank strip was measured, or the file is empty, truncated or a blank frame | fail | 1 |
 | no fail, but a screen `unsure`: the judge was less than 70% sure about a kind, did not answer, or could not be sent the screen (not a PNG or JPEG, or a JPEG over 1280 px) | inconclusive | 3 |
 
 The result lists each screen (failing first, then unsure, then passing; `--full` for more than five) with its `verdict`, its `mock` when it had one, its `defects` (each a `kind` and `where`: the element and where it is on the screen) and a `reason` when it is unsure, plus the `judge` block (route, model, independence and author) and the counts. A missing screen or mock file, or a `--mock` without `=`, is a usage error (exit 2). The judge reads only what is visible, so a wide logo mark that is meant to be wide can fail without a mock; pass its mock to settle it.

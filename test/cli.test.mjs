@@ -1778,6 +1778,7 @@ test('without the optional kit, --judge is a config error naming the npx command
   cpSync(join(root, 'package.json'), join(pkg, 'package.json'));
   mkdirSync(join(pkg, 'node_modules', '@toon-format'), { recursive: true });
   symlinkSync(join(root, 'node_modules', 'yaml'), join(pkg, 'node_modules', 'yaml'));
+  symlinkSync(join(root, 'node_modules', 'jpeg-js'), join(pkg, 'node_modules', 'jpeg-js'));
   symlinkSync(join(root, 'node_modules', '@toon-format', 'toon'), join(pkg, 'node_modules', '@toon-format', 'toon'));
   const args = ['check', '--judge', '--outcome', "Umer's notes list shows three notes", files[0]];
   const plain = spawnSync(process.execPath, [join(pkg, 'dist', 'cli.js'), ...args], { cwd: j.repo, env: j.env, encoding: 'utf8' });
@@ -1985,6 +1986,35 @@ test('design fails a screen on each defect the judge names, alone or next to its
   assert.equal(empty.calls.length, 0, 'a blank frame fails without a request');
   assert.equal(design(answer(), '--mock', 'screen.png').code, 2);
   assert.match(toon(design(answer(), 'gone.png')).error, /gone\.png: cannot read \(ENOENT\)/);
+});
+
+test('design measures a blank strip along an edge, but not a nav rail with icons or a uniform frame', () => {
+  const t = setup();
+  mkdirSync(t.env.DONE_DONE_HOME, { recursive: true });
+  writeFileSync(join(t.env.DONE_DONE_HOME, 'config.yaml'), 'agent: claude\n');
+  // A light screen with a few dark text lines; the judge stub says every kind is clean, so only the pixels can fail it.
+  const light = [245, 240, 230];
+  const text = (x, y) => x >= 60 && x < 220 && y % 30 >= 10 && y % 30 < 16;
+  writeFileSync(join(t.dir, 'strip.png'), png(240, 160, (x, y) => (x < 24 ? [20, 22, 20] : text(x, y) ? [40, 40, 40] : light)));
+  writeFileSync(join(t.dir, 'rail.png'), png(240, 160, (x, y) => (x < 48 ? (x >= 14 && x < 34 && y % 40 >= 10 && y % 40 < 30 ? [220, 220, 220] : [30, 30, 36]) : text(x, y) ? [40, 40, 40] : light)));
+  writeFileSync(join(t.dir, 'uniform.png'), png(240, 160, () => [20, 22, 20]));
+  const clean = JSON.stringify(Object.fromEntries(['aspect', 'clipped-text', 'overlap', 'off-screen', 'blank-strip', 'layout'].map((k) => [k, { probabilities: { defect: 0.02, none: 0.98 }, rationale: 'Looked.', personReason: 'Nothing of this kind.' }])));
+  const s = stubAgents(t.env, clean);
+  symlinkSync(process.execPath, join(s.bin, 'node'));
+  const design = (...args) => {
+    const r = spawnSync(process.execPath, [CLI, 'design', '--full', ...args], { cwd: t.dir, env: s.env, encoding: 'utf8' });
+    return { code: r.status, out: r.stdout + r.stderr };
+  };
+  const strip = design('strip.png');
+  assert.equal(strip.code, 1, strip.out);
+  assert.deepEqual(toon(strip).screens[0].defects, [{ kind: 'blank-strip', where: 'left edge: a plain #141614 band 24 px deep (10% of the width), full height, with nothing in it' }]);
+  const rail = design('rail.png');
+  assert.equal(rail.code, 0, rail.out);
+  assert.deepEqual(toon(rail).screens[0].defects, [], 'a dark rail that holds icons is content, not a strip');
+  const uniform = design('uniform.png');
+  assert.equal(uniform.code, 1, uniform.out);
+  assert.match(toon(uniform).screens[0].reason, /blank frame/);
+  assert.deepEqual(toon(uniform).screens[0].defects, [], 'a whole uniform screen is the blank-frame check, not a strip');
 });
 
 // doctor: read-only health check. Required items (git, config, evidence root) gate

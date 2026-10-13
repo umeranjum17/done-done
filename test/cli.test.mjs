@@ -3242,3 +3242,27 @@ test('rerun refuses a maintain run with a usage error that points to done-done m
   assert.match(toon({ out: re.stdout }).error, /is a maintain run, which cannot be rerun/);
   assert.match(toon({ out: re.stdout }).help[0], /done-done maintain$/);
 });
+
+test('abort of a running maintain run also ends its agent child', async () => {
+  const { repo, env, sh } = setup();
+  const s = stubAgents(env);
+  const pidFile = join(s.bin, 'agent.pid');
+  writeFileSync(join(s.bin, 'claude'), `#!${process.execPath}
+const { writeFileSync } = require('node:fs');
+writeFileSync(${JSON.stringify(pidFile)}, String(process.pid));
+setTimeout(() => {}, 30_000);
+`, { mode: 0o755 });
+  const skill = join(repo, '.agents', 'skills', 'verify-notes');
+  mkdirSync(join(skill, 'features'), { recursive: true });
+  writeFileSync(join(skill, 'SKILL.md'), '# verify-notes\n');
+  writeFileSync(join(skill, 'features', 'README.md'), '# features\n\n- [Home](home.md)\n');
+  writeFileSync(join(skill, 'features', 'home.md'), '# Home\n');
+  sh('add', '-A');
+  sh('commit', '-qm', 'skill');
+  const id = toon(doctorIn(repo, s.env, 'maintain', '--no-wait')).run_id;
+  for (let i = 0; i < 200 && !existsSync(pidFile); i++) await new Promise((r) => setTimeout(r, 50));
+  const agent = Number(readFileSync(pidFile, 'utf8'));
+  const ab = spawnSync(process.execPath, [CLI, 'abort', '--run', id], { cwd: repo, env: { ...s.env, PATH: process.env.PATH }, encoding: 'utf8' });
+  assert.equal(ab.status, 0, ab.stdout + ab.stderr);
+  assert.ok(await groupGone(agent), 'the agent child outlived the aborted run');
+});

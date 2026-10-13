@@ -1256,9 +1256,14 @@ async function cmdAbort(argv) {
     }
     if (latest.runner) {
         try {
-            process.kill(latest.runner.pid, 'SIGKILL');
+            process.kill(-latest.runner.pid, 'SIGKILL');
         }
-        catch { /* exited since the check */ }
+        catch {
+            try {
+                process.kill(latest.runner.pid, 'SIGKILL');
+            }
+            catch { /* exited since the check */ }
+        }
         await waitGone(latest.runner.pid);
     }
     const after = loadRun(dir);

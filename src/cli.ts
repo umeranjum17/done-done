@@ -1230,7 +1230,9 @@ async function cmdAbort(argv: string[]): Promise<number> {
     return FAIL;
   }
   if (latest.runner) {
-    try { process.kill(latest.runner.pid, 'SIGKILL'); } catch { /* exited since the check */ }
+    try { process.kill(-latest.runner.pid, 'SIGKILL'); } catch {
+      try { process.kill(latest.runner.pid, 'SIGKILL'); } catch { /* exited since the check */ }
+    }
     await waitGone(latest.runner.pid);
   }
   const after = loadRun(dir);

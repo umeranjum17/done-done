@@ -2,6 +2,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import { mkdirSync, openSync, closeSync } from 'node:fs';
 import { createServer } from 'node:net';
 import { dirname, join } from 'node:path';
+import { parseDuration } from './config.js';
 
 // A run-instance harness: each run starts the app under test on its own port,
 // with its own HOME/XDG folders, waits until ready, and kills it at run end.
@@ -77,7 +78,7 @@ export async function startInstance(repo: string, inst: Instance, runId: string,
     try { process.kill(-pgid, 'SIGKILL'); } catch { /* already exited */ }
   };
   child.unref?.();
-  const timeoutMs = timeoutOf(inst.ready_timeout);
+  const timeoutMs = parseDuration(inst.ready_timeout)!;
   const ready = inst.ready.url !== undefined
     ? await waitUrl(expand(inst.ready.url, extra as Record<string, string>), timeoutMs)
     : waitCommand(expand(inst.ready.command!, extra as Record<string, string>).replaceAll('${RUN_ID}', runId), env, repo, timeoutMs);
@@ -91,9 +92,4 @@ export async function startInstance(repo: string, inst: Instance, runId: string,
 
 export const stopInstance = (pgid: number) => {
   try { process.kill(-pgid, 'SIGKILL'); } catch { /* already exited */ }
-};
-
-const timeoutOf = (text: string): number => {
-  const m = /^(\d+)(s|m|h)$/.exec(text);
-  return m ? Number(m[1]) * { s: 1000, m: 60_000, h: 3_600_000 }[m[2] as 's' | 'm' | 'h'] : 30_000;
 };

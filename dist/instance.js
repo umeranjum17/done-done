@@ -2,6 +2,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import { mkdirSync, openSync, closeSync } from 'node:fs';
 import { createServer } from 'node:net';
 import { dirname, join } from 'node:path';
+import { parseDuration } from './config.js';
 // A free local port done-done owns: bind 127.0.0.1:0, read it back, release.
 // A fixed port that is already taken can never be used.
 export const pickPort = () => new Promise((resolve, reject) => {
@@ -73,7 +74,7 @@ export async function startInstance(repo, inst, runId, scratch, baseEnv, logFile
         catch { /* already exited */ }
     };
     child.unref?.();
-    const timeoutMs = timeoutOf(inst.ready_timeout);
+    const timeoutMs = parseDuration(inst.ready_timeout);
     const ready = inst.ready.url !== undefined
         ? await waitUrl(expand(inst.ready.url, extra), timeoutMs)
         : waitCommand(expand(inst.ready.command, extra).replaceAll('${RUN_ID}', runId), env, repo, timeoutMs);
@@ -89,8 +90,4 @@ export const stopInstance = (pgid) => {
         process.kill(-pgid, 'SIGKILL');
     }
     catch { /* already exited */ }
-};
-const timeoutOf = (text) => {
-    const m = /^(\d+)(s|m|h)$/.exec(text);
-    return m ? Number(m[1]) * { s: 1000, m: 60_000, h: 3_600_000 }[m[2]] : 30_000;
 };

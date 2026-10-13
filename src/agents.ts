@@ -52,7 +52,9 @@ class ProviderError extends Error {
   }
 }
 // files: name -> text the call needs in its scratch folder (gemini's deny-all policy).
-type Adapter = { argv: (c: AgentCall, dir: string) => string[]; answer: (stdout: string, c: AgentCall) => unknown; file?: boolean; hint?: string; env?: (c: AgentCall) => Record<string, string>; files?: (c: AgentCall) => Record<string, string> };
+// editOnly: the agent cannot run a tool-less call, so only an edit step may start it; the reason is what the caller shows.
+// editNote: what an edit step's prompt adds about how this agent's own shell runs commands.
+type Adapter = { argv: (c: AgentCall, dir: string) => string[]; answer: (stdout: string, c: AgentCall) => unknown; file?: boolean; hint?: string; editOnly?: string; editNote?: string; env?: (c: AgentCall) => Record<string, string>; files?: (c: AgentCall) => Record<string, string> };
 
 // The answer object in an agent's free text: the first top-level '{'..'}' span that parses to an object with every
 // required key, skipping braces and quotes in narration. With no such span, the last span that parsed is returned, so
@@ -167,6 +169,36 @@ const ADAPTERS: Record<string, Adapter> = {
       return extractJsonObject(text, c.schema.required);
     },
   },
+  // codex exec with no prompt argument reads it on stdin; --json streams JSONL events whose last agent_message holds the
+  // answer, and --ephemeral keeps no session. An edit step runs in codex's workspace-write sandbox, which writes only the
+  // repo, the run's folders (--add-dir) and $TMPDIR; it may use the network, since the drive launches the app and talks
+  // to it, and it keeps the user's config.toml. Without a model, codex runs its own default.
+  // A tool-less call is refused: probed live 13 Oct, codex with the user's config.toml kept its MCP server, which read a
+  // canary file outside the folder, and --disable does not turn off its multi-agent tools.
+  codex: {
+    editOnly: 'codex cannot run tool-less: with your config.toml it keeps its MCP tools, which read files outside the folder',
+    // Seen live 13 Oct: each sandboxed command runs in its own process namespace, so a server or browser bridge started in the
+    // background by one command was gone by the next one, and a drive that launched the app and then browsed it captured nothing.
+    editNote: 'Your shell sandbox ends every process a command started, background ones too, when that command ends. So start what a task needs (an app, a server, a browser bridge), use it, save what it produces and stop it within one shell command (a script in $TMPDIR is fine).',
+    argv: (c) => ['exec', '--json', '--ephemeral', ...(c.model ? ['-m', c.model] : []),
+      '--sandbox', 'workspace-write', '-c', 'sandbox_workspace_write.network_access=true', ...(c.dirs ?? []).flatMap((d) => ['--add-dir', d])],
+    answer: (out, c) => {
+      let text = '';
+      let failed = '';
+      let error = '';
+      for (const line of out.split('\n')) {
+        if (!line.startsWith('{')) continue;
+        const e = JSON.parse(line);
+        if (e.type === 'item.completed' && e.item?.type === 'agent_message') text = String(e.item.text ?? '');
+        if (e.type === 'turn.failed') failed = String(e.error?.message ?? JSON.stringify(e));
+        if (e.type === 'error') error = String(e.message ?? JSON.stringify(e));
+      }
+      // A failed turn has no answer; an error event (a retried stream) fails the call only when the agent said nothing.
+      const why = failed || (text ? '' : error);
+      if (why) throw new ProviderError(why);
+      return extractJsonObject(text, c.schema.required);
+    },
+  },
   // gemini -p text is appended to stdin, so -p carries only a fixed trailer and the prompt goes on stdin;
   // -o json prints one object {response, stats, error?} (its headless.md). plan mode is read-only, so a
   // headless call never blocks on an approval prompt; auto_edit (edits approved) plus the shell tool is only for edit steps,
@@ -198,7 +230,7 @@ export function selectAgent(cfg: Config): AgentRun {
 }
 
 // The agents a user can pick, and the error that tells a calling agent to ask the user rather than pick one itself.
-export const agentChoices = () => [...AGENTS.filter(supported), 'acp:<target>'];
+export const agentChoices = () => [...AGENTS, 'acp:<target>'];
 // The error a command gives when the agent or the judge is not set: the ask, the choices, and the command that saves the answer.
 const askError = (kind: 'agent' | 'judge', choices: string, rule: string, save: string) =>
   new UsageError(`no ${kind} is set: ask the user which ${kind} to use (${choices}); ${rule}`, `Save the user's answer: ${save}`);
@@ -222,10 +254,8 @@ export function knownAgentOf(agent: string): string {
 }
 
 const adapterFor = (agent: string): Adapter | undefined => (agent.startsWith('acp:') ? ACP : Object.hasOwn(ADAPTERS, agent) ? ADAPTERS[agent] : undefined);
-
-export function supported(agent: string) {
-  return !!adapterFor(agent);
-}
+// Why an agent cannot run a tool-less call, '' when it can.
+export const editOnlyReason = (agent: string): string => adapterFor(agent)?.editOnly ?? '';
 
 // A binary from config: a bare name is looked up on PATH, an absolute path is used when it is an executable file.
 export const findBin = (bin: string) => (isAbsolute(bin) ? (isExecutable(bin) ? bin : '') : onPath(bin));
@@ -351,6 +381,7 @@ export async function askAgent(c: AgentCall): Promise<AgentAnswer> {
     dir = mkdtempSync(join(tmpdir(), 'done-done-agent-'));
     cwd = c.tools === 'none' ? dir : c.cwd;
     if (!adapter) throw new Error(`no adapter for ${c.agent} yet`);
+    if (adapter.editOnly && c.tools !== 'edit') throw new Error(adapter.editOnly);
     for (const i of c.images ?? []) writeFileSync(join(dir, i.name), i.bytes, { mode: 0o600 });
     for (const [name, text] of Object.entries(adapter.files?.(c) ?? {})) writeFileSync(join(dir, name), text, { mode: 0o600 });
     const bin = c.path;
@@ -360,7 +391,8 @@ export async function askAgent(c: AgentCall): Promise<AgentAnswer> {
       attempts++;
       // An ask-again names what was wrong with the last answer.
       const schemaTrailer = `\n\nAnswer with only one JSON object that matches this JSON schema, and no other text:\n${JSON.stringify(c.schema)}\n`;
-      const promptText = (attempts === 1 ? c.prompt : `${c.prompt}\n\nYour previous answer was not valid (${lastError}).`) + schemaTrailer;
+      const prompt = c.tools === 'edit' && adapter.editNote ? `${c.prompt}\n\n${adapter.editNote}` : c.prompt;
+      const promptText = (attempts === 1 ? prompt : `${prompt}\n\nYour previous answer was not valid (${lastError}).`) + schemaTrailer;
       if (adapter.file) writeFileSync(join(dir, 'prompt.md'), promptText, { mode: 0o600 });
       res = await start(bin, argv(dir), c, cwd, adapter.file ? '' : promptText, { ...process.env, ...c.env, ...adapter.env?.(c) });
       if (res.error) throw res.error;

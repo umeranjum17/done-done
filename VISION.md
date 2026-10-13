@@ -41,8 +41,17 @@ Custom behaviour from a project becomes a new primitive in done-done.
 
 ## Works with
 
-- **sign-off.** When sign-off is present, done-done sends asks, reports and evidence through its communication contract.
+- **sign-off.** sign-off owns the communication contract: the schema doc and the validator. When sign-off is present, done-done consumes them and sends asks, reports and evidence through the contract. Without sign-off, done-done works alone.
 - **learn-from-mistakes.** It reads failed, overridden and waiting runs.
 - **[Firstmate](https://github.com/kunchenguid/firstmate).** A supervisor can call done-done. A supervisor is not necessary.
 - **[no-mistakes](https://github.com/kunchenguid/no-mistakes).** done-done uses the same config shape and the same fix-loop idea.
 - **quota-axi and lavish-axi.** These follow the same Kun tool patterns.
+
+### The communication contract
+
+These four rules keep every report and evidence card the same on the board, so the user does less work.
+
+1. **One strict, versioned schema per message kind.** The kinds that cross tools are ask, report, evidence, gate or approval, and retro finding. sign-off owns the contract doc and a validator. A post that does not match is refused with a clear fix message. It is never shown half-broken.
+2. **Every producer emits exactly that shape.** done-done evidence and gates, learn-from-mistakes reports and findings, and any project all use the same shape.
+3. **Shared conformance tests.** Each kind has a fixture. Each tool's CI runs the fixtures against the validator.
+4. **Each skill teaches the exact command and shape.** It gives one worked example, so agents use the tool right the first time.

@@ -8,7 +8,8 @@ wherever this text or the skill says `done-done`. If done-done cannot run, repor
 1. If the repo has no `.done-done.yaml`, run `done-done init`. Then record a journey that drives the real app and
    writes its screenshots, recordings or logs into `$DONE_DONE_EVIDENCE_ROOT` (done-done sets it to the run's own
    folder): `done-done init --journey <name> -- <command>`, so the recipe lives in the repo and anyone can re-run the
-   proof. Commit `.done-done.yaml` and the journey script.
+   proof. Commit `.done-done.yaml` and the journey script. If `init` says no agent is set, ask the user which agent
+   and model to use and run the command it prints; never choose one yourself.
 2. Commit your change, then run `done-done run <journey>` from the repo root. Proof only counts from a clean,
    committed tree.
 3. Write a Checks block (the shape `done-done --help` prints) that cites the run's files by the paths `run` printed:

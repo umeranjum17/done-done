@@ -109,7 +109,7 @@ cd your-app
 done-done init
 ```
 
-`init` writes a minimal `.done-done.yaml` (only if you don't already have one) that names your app. A plain `init` never overwrites an existing config. It also scaffolds a verify skill at `.agents/skills/verify-<app>` from the repo's own files, for your agent to finish with one live drive. Evidence lives outside the repo, in `~/.done-done/evidence/<app>`, so it outlives the checkout that captured it. Then describe how to capture proof — swap the command for whatever drives your real app and saves screenshots, recordings or logs:
+`init` writes a minimal `.done-done.yaml` (only if you don't already have one) that names your app, and a commented global `~/.done-done/config.yaml` (only if there is none). done-done never picks the coding agent it starts: `init` asks you in a terminal, or takes `--agent <agent> --model <model>`. The config keys are in the [reference](docs/reference.md#config). A plain `init` never overwrites an existing config. It also scaffolds a verify skill at `.agents/skills/verify-<app>` from the repo's own files, for your agent to finish with one live drive. Evidence lives outside the repo, in `~/.done-done/evidence/<app>`, so it outlives the checkout that captured it. Then describe how to capture proof — swap the command for whatever drives your real app and saves screenshots, recordings or logs:
 
 ```yaml
 journeys:
@@ -119,7 +119,7 @@ journeys:
 
 The command runs from the repo root with `DONE_DONE_EVIDENCE_ROOT` (a new folder for this run in the evidence root) and `DONE_DONE_RUN_ID` set, and `${RUN_ID}` in it is replaced. A run that writes nothing into its folder fails.
 
-Optional: `done-done init --agent <claude|codex|opencode|gemini|pi>` adds a session hook or plugin to the repo that shows each session the bare `done-done` state. Each agent's file and behavior are in the [reference](docs/reference.md#set-up-a-repo).
+Optional: `done-done init --hook <claude|codex|opencode|gemini|pi>` adds a session hook or plugin to the repo that shows each session the bare `done-done` state. Each agent's file and behavior are in the [reference](docs/reference.md#set-up-a-repo).
 
 Record the recipe in the repo so anyone can re-run the proof, then commit it (and `.claude/settings.json`, `.codex/hooks.json`, `.gemini/settings.json`, `.opencode/plugins/done-done.js` or `.pi/extensions/done-done.js` if you added a hook):
 
@@ -131,7 +131,7 @@ git commit -m "Add done-done"
 
 A `run -- <command>` whose command matches no recorded journey still runs, but its result hints that the recipe is not in the repo.
 
-At any point, `done-done doctor` checks the setup and changes nothing except the `--probe` call record: git, a valid `.done-done.yaml`, a writable evidence root (all required), plus the verify skill, your coding agent and its model (`agent:` in config, or the first agent on PATH that done-done can start; see [Agents](docs/reference.md#agents)), the judge setup and `ffprobe` (all optional). Each item reports `ok`, `warning` (the judge runs but is not another agent, or pi has no permission gate; never fails doctor) or `missing` with the exact fix command (see [Agents](docs/reference.md#agents)). `done-done doctor --probe` also asks the agent one question to prove it answers (the agent itself may keep its own session files).
+At any point, `done-done doctor` checks the setup and changes nothing except the `--probe` call record. Each item reports `ok`, `warning` or `missing` with the exact fix command; an agent you have not set yet is `missing`, with the command that saves your choice. `done-done doctor --probe` also asks the agent one question to prove it answers. The items are listed in the [reference](docs/reference.md#check-the-setup).
 
 `done-done maintain` keeps the verify skill true and edits nothing: it checks the skill's links and feature index, checks that every `file:line` it cites exists, and has your coding agent read the source for each feature, read-only, to report drift. It ends `clean`, `drift` with the findings to fix, or `blocked` ([reference](docs/reference.md#keep-the-verify-skill-true)).
 

@@ -147,7 +147,7 @@ evidence: <paths of the evidence files, or "not proven: <cause>">
 - all four lines must be present;
 - `proof` names a command or path;
 - if the repo has its verify skill (`.agents/skills/verify-<app>`), `proof` names it (`verify-<app>`); otherwise `proof` names some `verify-` skill or says "no verify skill";
-- a fix PR needs a repro (checked against the PR title, so only for a PR URL; a local file has no title).
+- a fix PR needs a repro (checked against the PR title; a local file or stdin uses the HEAD commit subject as its title).
 
 **Each cited file must pass these checks:**
 

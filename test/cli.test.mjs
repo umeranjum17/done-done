@@ -1872,7 +1872,7 @@ test('without the optional kit, --judge is a config error naming the npx command
   assert.equal(plain.status, 2, plain.stdout + plain.stderr);
   const e = toon({ out: plain.stdout });
   assert.match(e.error, /needs the optional @byokit\/decide@0\.8\.0 kit/);
-  assert.equal(e.help[0], `Run this check with the kit: npx -y --allow-git=all -p github:umeranjum17/done-done-axi -p @byokit/decide@0.8.0 done-done-axi check --judge --outcome 'Umer'\\''s notes list shows three notes' ${files[0]}`);
+  assert.equal(e.help[0], `Run this check with the kit: npx -y -p done-done-axi -p @byokit/decide@0.8.0 done-done-axi check --judge --outcome 'Umer'\\''s notes list shows three notes' ${files[0]}`);
   assert.equal(j.calls().length, 0);
   writeFileSync(join(j.env.DONE_DONE_HOME, 'config.yaml'), readFileSync(join(j.env.DONE_DONE_HOME, 'config.yaml'), 'utf8').replace('  model: claude-test-1\n', ''));
   assert.equal(j.dd(...args).code, 0);
@@ -2349,15 +2349,16 @@ test('with no judge set, verify in a terminal asks from a list, saves the pick a
   assert.ok(s.calls().length === 2 && s.calls().every((c) => c.agent === 'opencode'), 'the picked judge judged each capture');
 });
 
-// The pick list says why it asks again, and a typed model must be one the agent lists (pi --list-models).
+// The pick list says why it asks again, a typed model must be one the agent lists (pi --list-models), and answers typed ahead are kept.
 test('init in a terminal says why it asks again and refuses a model the agent does not list', { skip: !existsSync('/usr/bin/script') && 'no script(1)' }, () => {
   const t = setup();
   const bin = join(t.dir, 'bin');
   mkdirSync(bin);
   writeFileSync(join(bin, 'pi'), `#!/bin/sh\nprintf 'provider     model                       context\\nopencode-go  muse-spark-1.3-contributor  1.0M\\n'\n`, { mode: 0o755 });
   const cmd = [process.execPath, CLI, 'init'].join(' ');
-  const answers = ['x', '9', '4', '2', 'muse', 'opencode-go/muse-spark-1.3-contributor', 'x', '1', '1'].map((a) => `sleep 1; echo ${a};`).join(' ');
-  const r = spawnSync('/bin/sh', ['-c', `(${answers} sleep 2) | /usr/bin/script -qec "${cmd}" /dev/null`], { cwd: t.repo, env: { ...t.env, PATH: `${bin}:${t.env.PATH}:/usr/bin:/bin` }, encoding: 'utf8', timeout: 60_000 });
+  // Each list's answers are typed at once, ahead of the prompts: none is dropped while done-done checks the model list.
+  const agentAnswers = ['x', '9', '4', '2', 'muse', 'opencode-go/muse-spark-1.3-contributor'].join('\\n');
+  const r = spawnSync('/bin/sh', ['-c', `(sleep 2; printf '${agentAnswers}\\n'; sleep 3; printf 'x\\n1\\n1\\n'; sleep 3) | /usr/bin/script -qec "${cmd}" /dev/null`], { cwd: t.repo, env: { ...t.env, PATH: `${bin}:${t.env.PATH}:/usr/bin:/bin` }, encoding: 'utf8', timeout: 60_000 });
   assert.equal(r.status, 0, r.stdout);
   assert.match(r.stdout, /x is not on the list; type a number from 1 to 6/);
   assert.match(r.stdout, /9 is not on the list; type a number from 1 to 6/);

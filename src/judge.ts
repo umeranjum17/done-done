@@ -85,7 +85,7 @@ async function kit() {
     // A verify run's detached runner has no command of the user's to repeat, so it names the rerun of its run.
     const [cmd, dir] = process.argv.slice(2);
     const again = cmd === '__runner' ? ['rerun', '--run', basename(dir)] : process.argv.slice(2);
-    throw new UsageError(`judge: the judge needs the optional ${KIT} kit, which is not installed`, `${cmd === 'check' || cmd === 'receipt' ? 'Run this check' : 'Run it again'} with the kit: npx -y --allow-git=all -p github:umeranjum17/done-done-axi -p ${KIT} done-done-axi ${again.map(quote).join(' ')}`);
+    throw new UsageError(`judge: the judge needs the optional ${KIT} kit, which is not installed`, `${cmd === 'check' || cmd === 'receipt' ? 'Run this check' : 'Run it again'} with the kit: npx -y -p done-done-axi -p ${KIT} done-done-axi ${again.map(quote).join(' ')}`);
   }
 }
 

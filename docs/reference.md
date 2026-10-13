@@ -196,7 +196,7 @@ done-done check --judge --from pr-body.md                       # check and rece
   done-done never reads, copies or stores a credential. The kit is an optional peer dependency, so a plain install stays small; the judge needs it and Node 22.18 or later. Without it, a judged `check` or `receipt` exits 2 with the command to run the same check with the kit, and `verify` with the command to rerun its run with the kit:
 
   ```sh
-  npx -y --allow-git=all -p github:umeranjum17/done-done-axi -p @byokit/decide@0.8.0 done-done-axi check --judge --from pr-body.md
+  npx -y -p done-done-axi -p @byokit/decide@0.8.0 done-done-axi check --judge --from pr-body.md
   ```
 
   In a project that installs done-done-axi, `npm install -D @byokit/decide@0.8.0` adds it for good. For the `claude-code` route, sign in once:

@@ -216,7 +216,7 @@ const COMMANDS = {
 const rows = (pairs, width = Math.max(...pairs.map(([a]) => a.length)) + 3) => pairs.map(([a, b]) => `  ${a}${' '.repeat(Math.max(3, width - a.length))}${b}`).join('\n');
 const GLOBAL_TEXT = `global flags: --json (JSON instead of TOON), --full (do not truncate lists), --help (this command's usage), --version (done-done's version)
 exit codes: 0 pass, 1 fail (also a run overridden at its gate), 2 usage or config error, 3 inconclusive, 4 the run is still running or a verify run waits at its gate (verify, maintain, rerun, status, respond)`;
-const USAGE_TEXT = `install: npm install -g --prefix ~/.local --allow-git=all github:umeranjum17/done-done-axi (installs done-done-axi and done-done), or run npx -y --allow-git=all github:umeranjum17/done-done-axi <command>
+const USAGE_TEXT = `install: npm install -g --prefix ~/.local done-done-axi (installs done-done-axi and done-done), or run npx -y done-done-axi <command>
 usage:
 ${rows([['done-done', "show this repo's config state and the next step"], ...Object.values(COMMANDS).flatMap((c) => c.usage)], 46)}
 ${GLOBAL_TEXT}
@@ -2008,9 +2008,17 @@ const missing = (kind) => (kind === 'agent' ? noAgent() : noJudge());
 // In a terminal the user picks the agent (or the judge) and its model from a list; done-done never picks for them.
 async function pick(kind, cfg) {
     const rl = createInterface({ input: process.stdin, output: process.stderr });
-    const closed = new AbortController();
-    rl.on('close', () => closed.abort());
-    const ask = async (q) => (await rl.question(q, { signal: closed.signal })).trim();
+    // Lines are read in order, so an answer typed while done-done checks a model list is kept, not dropped.
+    // ponytail: each pick has its own interface, so answers typed ahead past the agent list into the judge list are dropped; share one interface if that matters.
+    const lines = rl[Symbol.asyncIterator]();
+    const ask = async (q) => {
+        rl.setPrompt(q);
+        rl.prompt();
+        const line = await lines.next();
+        if (line.done)
+            throw new Error('the terminal closed');
+        return line.value.trim();
+    };
     try {
         const menu = kind === 'agent' ? [...AGENTS, ACP_TARGET] : JUDGES;
         const label = (a) => (a === ACP_TARGET ? `${a} (an agent your acpx bridge starts)` : a);

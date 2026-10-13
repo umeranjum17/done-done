@@ -62,13 +62,13 @@ npx skills add umeranjum17/done-done-axi --skill done-done -a <agent> -y
 The skill lands in this project (`.claude/skills/done-done/` for Claude Code, `.agents/skills/done-done/` for Codex, opencode, Pi and Gemini CLI) next to a `skills-lock.json`: commit both so teammates and CI get it too. Or add `-g` to install it once for all your projects (for example `~/.claude/skills/` for Claude Code) and leave the project untouched.
 
 That is the entire setup - no npm install needed.
-
-Headless `opencode run` refuses folders outside the repo, and done-done keeps its config and evidence in `~/.done-done`, so run it with `--auto` (or allow `~/.done-done` in opencode's `external_directory` permission).
-The skill tells your agent to use `done-done` if it is on PATH and otherwise run the GitHub package through `npx`, so the CLI comes along on demand:
+The skill tells your agent to use `done-done` if it is on PATH and otherwise run the npm package through `npx`, so the CLI comes along on demand:
 
 ```sh
-npx -y --allow-git=all github:umeranjum17/done-done-axi --help
+npx -y done-done-axi --help
 ```
+
+Headless `opencode run` refuses folders outside the repo, and done-done keeps its config and evidence in `~/.done-done`, so run it with `--auto` (or allow `~/.done-done` in opencode's `external_directory` permission).
 
 The skill stays a short stub and sends the agent to `--help` and the bare command for current instructions, so an installed copy cannot go stale against a newer CLI.
 
@@ -89,20 +89,12 @@ The skill is the recommended path, but it is not the only one.
 **1. Install**
 
 ```sh
-npm install -g --prefix ~/.local --allow-git=all github:umeranjum17/done-done-axi
-```
-
-`--prefix ~/.local` installs into your home folder, so it needs no `sudo`. `--allow-git=all` is needed on npm 12, which blocks GitHub installs by default (verified accepted on npm 10). This installs two names for the same CLI: `done-done-axi` and the short `done-done` used below. If `command -v done-done` prints nothing, add `~/.local/bin` to your `PATH`: `export PATH="$HOME/.local/bin:$PATH"`.
-
-To skip the install, run `npx -y --allow-git=all github:umeranjum17/done-done-axi` wherever this README says `done-done`.
-
-Once done-done-axi is published to npm, the registry line takes over as the install:
-
-```sh
 npm install -g --prefix ~/.local done-done-axi
 ```
 
-<!-- TODO(dd-npm-name): when done-done-axi is published to npm, flip the primary back to the registry line above and make `npx -y done-done-axi` the skip-the-install path. -->
+`--prefix ~/.local` installs into your home folder, so it needs no `sudo`. This installs two names for the same CLI: `done-done-axi` and the short `done-done` used below. If `command -v done-done` prints nothing, add `~/.local/bin` to your `PATH`: `export PATH="$HOME/.local/bin:$PATH"`.
+
+To skip the install, run `npx -y done-done-axi` wherever this README says `done-done`.
 
 **2. Set it up in your app's repo**
 
@@ -175,11 +167,11 @@ Every answer is an exit code: **0** pass, **1** fail (or overridden at the gate)
 
 [Firstmate](https://github.com/kunchenguid/firstmate) hands tasks to agent workers and merges their work. done-done ships what those workers need to prove each task, and what the merge needs to check that proof, in [`integrations/firstmate/`](integrations/firstmate/).
 
-Install the skill once per machine for your workers' agent (the same `-a` values), install the CLI from GitHub, and copy two files from it into your Firstmate home:
+Install the skill once per machine for your workers' agent (the same `-a` values), install the CLI from npm, and copy two files from it into your Firstmate home:
 
 ```sh
 npx skills add umeranjum17/done-done-axi --skill done-done -g -a <agent> -y
-npm install -g --allow-git=all github:umeranjum17/done-done-axi
+npm install -g done-done-axi
 cat "$(npm root -g)/done-done-axi/integrations/firstmate/brief-include.md" >> "$FM_HOME/config/brief-include.md"
 cp "$(npm root -g)/done-done-axi/integrations/firstmate/merge-gate" "$FM_HOME/config/merge-gate"
 ```

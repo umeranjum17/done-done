@@ -56,10 +56,10 @@ export function matrixManifest(m: Matrix, files: string[]) {
 export function checkMatrix(v: unknown): string {
   if (!isMap(v)) return 'a mapping with optional theme, width, form and skip';
   for (const k of Object.keys(v)) if (!['theme', 'width', 'form', 'skip'].includes(k)) return `unknown key ${k} (theme, width, form, skip)`;
-  const names = (a: unknown) => Array.isArray(a) && a.length && a.every((t) => typeof t === 'string' && t);
+  const names = (a: unknown) => Array.isArray(a) && a.length && a.every((t) => typeof t === 'string' && /^[A-Za-z0-9_-]+$/.test(t));
   const widths = (a: unknown) => Array.isArray(a) && a.length && a.every((w) => Number.isInteger(w) && (w as number) > 0);
-  if (v.theme !== undefined && !names(v.theme)) return 'theme must be a non-empty list of names';
-  if (v.form !== undefined && !names(v.form)) return 'form must be a non-empty list of names';
+  if (v.theme !== undefined && !names(v.theme)) return `theme must be a non-empty list of names of letters, digits, - and _: ${JSON.stringify(v.theme)}`;
+  if (v.form !== undefined && !names(v.form)) return `form must be a non-empty list of names of letters, digits, - and _: ${JSON.stringify(v.form)}`;
   if (v.width !== undefined && !widths(v.width)) return 'width must be a non-empty list of CSS pixel widths, e.g. [390, 1280]';
   if (v.skip !== undefined && !Array.isArray(v.skip)) return 'skip must be a list of partial cells with a reason';
   for (const s of (v.skip ?? []) as unknown[]) {

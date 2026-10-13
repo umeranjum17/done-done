@@ -49,12 +49,12 @@ export function checkMatrix(v) {
     for (const k of Object.keys(v))
         if (!['theme', 'width', 'form', 'skip'].includes(k))
             return `unknown key ${k} (theme, width, form, skip)`;
-    const names = (a) => Array.isArray(a) && a.length && a.every((t) => typeof t === 'string' && t);
+    const names = (a) => Array.isArray(a) && a.length && a.every((t) => typeof t === 'string' && /^[A-Za-z0-9_-]+$/.test(t));
     const widths = (a) => Array.isArray(a) && a.length && a.every((w) => Number.isInteger(w) && w > 0);
     if (v.theme !== undefined && !names(v.theme))
-        return 'theme must be a non-empty list of names';
+        return `theme must be a non-empty list of names of letters, digits, - and _: ${JSON.stringify(v.theme)}`;
     if (v.form !== undefined && !names(v.form))
-        return 'form must be a non-empty list of names';
+        return `form must be a non-empty list of names of letters, digits, - and _: ${JSON.stringify(v.form)}`;
     if (v.width !== undefined && !widths(v.width))
         return 'width must be a non-empty list of CSS pixel widths, e.g. [390, 1280]';
     if (v.skip !== undefined && !Array.isArray(v.skip))

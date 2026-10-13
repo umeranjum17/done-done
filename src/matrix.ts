@@ -16,14 +16,13 @@ export function expandMatrix(m: Matrix): Cell[] {
 }
 
 // A skip entry is a partial cell: it drops every cell agreeing on each axis it names.
+const hits = (s: Cell, c: Cell) => (s.theme === undefined || s.theme === c.theme) && (s.width === undefined || s.width === c.width) && (s.form === undefined || s.form === c.form);
+
 export function splitMatrix(m: Matrix): { required: Cell[]; skipped: { cell: Cell; reason: string }[] } {
   const required: Cell[] = [];
   const skipped: { cell: Cell; reason: string }[] = [];
   for (const cell of expandMatrix(m)) {
-    const hit = (m.skip ?? []).find((s) =>
-      (s.theme === undefined || s.theme === cell.theme) &&
-      (s.width === undefined || s.width === cell.width) &&
-      (s.form === undefined || s.form === cell.form));
+    const hit = (m.skip ?? []).find((s) => hits(s, cell));
     if (hit) skipped.push({ cell, reason: hit.reason });
     else required.push(cell);
   }
@@ -70,6 +69,7 @@ export function checkMatrix(v: unknown): string {
     if ((s.theme !== undefined && !names([s.theme])) || (s.form !== undefined && !names([s.form])) || (s.width !== undefined && !widths([s.width])))
       return 'a skip entry names theme, width and form as the axes do';
     if (typeof s.reason !== 'string' || !s.reason.trim()) return 'each skip entry needs a reason';
+    if (!expandMatrix(v as Matrix).some((c) => hits(s as Cell, c))) return `skip ${cellName(s as Cell)} matches no cell`;
   }
   if (!splitMatrix(v as Matrix).required.length) return 'every cell is skipped, so there is nothing to capture';
   return '';

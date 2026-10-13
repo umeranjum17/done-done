@@ -41,6 +41,7 @@ export const isAgent = (v: unknown) => AGENTS.includes(v as string) || (typeof v
 // whatever the vendor; any other model runs only when the user names it. gemini's is the CLI's own
 // `flash-lite` alias (its cli-reference.md: the fastest model for simple tasks). pi and acp:<target> have no public
 // cheap alias, so they run their own configured default model, and agent_config.<agent>.model caps their cost.
+// As a judge, pi has no default: answerer:pi needs judge.model or agent_config.pi.model, a model that reads images.
 export const CHEAP: Record<string, { model: string; effort?: string }> = {
   claude: { model: 'claude-haiku-5-5', effort: 'low' },
   opencode: { model: 'opencode-go/muse-spark-1.3-contributor', effort: 'low' },

@@ -882,9 +882,18 @@ const createOnce = (path) => {
     }
 };
 const evidenceOf = (repo, cfg, rec) => rec.files.map((f) => citable(repo, join(cfg.evidence.root, f.path)));
+// Every run of an app, from any checkout of it. A run.json that cannot be read stops the command, never skipped silently.
+const runsIn = (root) => (existsSync(root) ? readdirSync(root).filter((n) => existsSync(join(root, n, 'run.json'))).map((n) => {
+    try {
+        return loadRun(join(root, n));
+    }
+    catch (e) {
+        throw new UsageError(`cannot read the run record ${join(root, n, 'run.json')}: ${e.message}`, `Fix or remove ${join(root, n)}, then run this again`);
+    }
+}) : []);
 // Default run: the newest run of this checkout, as status does.
 function pickId(root, repo, cmd, cfg, id) {
-    const mine = existsSync(root) ? readdirSync(root).filter((n) => existsSync(join(root, n, 'run.json'))).map((n) => loadRun(join(root, n))).filter((r) => r.repo === repo) : [];
+    const mine = runsIn(root).filter((r) => r.repo === repo);
     const found = id ?? mine.sort((a, b) => a.created.localeCompare(b.created)).pop()?.run_id;
     if (!found)
         throw new UsageError(`no runs for ${cfg.app} in this checkout yet`, `Start one: done-done verify ${Object.keys(cfg.journeys).length > 1 ? '<journey> ' : ''}--outcome "<what a user can now do>"`);
@@ -956,13 +965,15 @@ Outcome to prove: ${run.claim}
 1. Read the verify skill ${join(skill, 'SKILL.md')} (how to launch, check, drive, capture and clean up this app) and ${recipe}.
 2. Launch the app as the skill says, then drive that feature through the real user path, step by step as its recipe says.
    Never add steps or data to make the outcome look true: capture what that path shows, even when it contradicts the outcome.
-3. Save PNG screenshots of what a user sees, the action and the resulting state, into ${evidence} (also in $DONE_DONE_EVIDENCE_ROOT). Save nothing else there, and never edit a capture.
+3. Save PNG screenshots of what a user sees once the path is done (the resulting state the outcome is about) into ${evidence} (also in $DONE_DONE_EVIDENCE_ROOT).
+   The judge checks every screenshot there against the outcome, so a screenshot of an earlier step (such as an empty or half-filled form) fails the drive: keep those in ${scratch}. Save nothing else there, and never edit a capture.
 4. Stop everything you started.
 
 Do not change any file in the repository. Do not run done-done: it refuses inside a drive, and done-done answers the run after you stop. Put logs and other scratch files in ${scratch} (also in $TMPDIR), never in /tmp.
 Keep working until all four steps are done: your next message without a tool call ends the drive and must be the answer.
 If you cannot launch the app or reach the feature, say why in blocker and save no capture.
-Answer with feature (the feature file you drove, such as features/<name>.md), captures (the file names you saved) and blocker ("" when you drove it).`;
+Answer with feature (the feature file you drove, such as features/<name>.md), captures (the file names you saved) and blocker ("" when you drove it),
+for example {"feature":"features/<name>.md","captures":["<name>.png"],"blocker":""}.`;
 }
 function saveRun(dir, run) {
     run.updated = now();
@@ -1303,6 +1314,19 @@ async function preflightJudge(cfg, needsAgent = true) {
     return selectJudge(cfg, cfg.agent ? selectAgent(cfg) : NO_AUTHOR);
 }
 const NO_AUTHOR = { agent: '', model: '' };
+// A run waiting at its gate is the user's call, so a new verify or rerun is refused until the user answers that run or it is
+// aborted: starting another would go around its gate. Only a run of this checkout counts, keyed by its claim id, else the branch it
+// started on; a run with neither (recorded by an older build) blocks every new run in this checkout.
+function refuseParked(cfg, repo, claim) {
+    const parked = runsIn(runsRoot(cfg.app)).filter((r) => {
+        const key = r.claim_id ?? r.branch;
+        return r.kind === 'verify' && r.status === 'awaiting_approval' && r.repo === repo && (key === claim || key === undefined);
+    }).map((r) => r.run_id);
+    if (!parked.length)
+        return;
+    const id = parked[0];
+    throw new UsageError(`run ${parked.join(', ')} waiting at its gate for the user's answer blocks this run, which would go around that gate`, `Show the user its findings and captures (done-done status --run ${id}), then answer with their choice: done-done respond --run ${id} --action approve|skip|fix [--reason "<why>"], or stop it: done-done abort --run ${id}`);
+}
 async function cmdVerify(argv) {
     const { values, positionals } = parseArgs({
         args: argv,
@@ -1330,8 +1354,10 @@ async function cmdVerify(argv) {
         throw new UsageError(`unknown journey ${journey}; .done-done.yaml defines: ${names.join(', ') || 'none'}`);
     if (values['claim-id']?.trim() === '')
         throw new UsageError('--claim-id needs a non-empty id');
-    if (!values['claim-id'] && !git(repo, 'branch', '--show-current'))
+    const branch = git(repo, 'branch', '--show-current');
+    if (!values['claim-id'] && !branch)
         throw new UsageError('HEAD is detached, so no branch names this claim; pass --claim-id <id>');
+    refuseParked(cfg, repo, values['claim-id'] ?? branch);
     const drive = journey === null ? await agentDrive(repo, cfg, values.feature) : undefined;
     // verify starts done-done's own judge by default; --no-judge or judge.enabled: false turns it off. An agent drive is judged too, since the author never grades its own captures.
     const judging = !values['no-judge'] && (!!drive || !!values.judge || cfg.judge.enabled !== false);
@@ -1343,7 +1369,7 @@ async function cmdVerify(argv) {
     mkdirSync(join(dir, 'logs'), { recursive: true });
     const created = now();
     const run = {
-        schema: 2, run_id: id, kind: 'verify', app: cfg.app, repo, journey, ...drive, claim: values.outcome, claim_id: values['claim-id'] ?? null, judge: judging, status: 'pending',
+        schema: 2, run_id: id, kind: 'verify', app: cfg.app, repo, journey, ...drive, claim: values.outcome, claim_id: values['claim-id'] ?? null, branch, judge: judging, status: 'pending',
         steps: STEPS.map((name) => ({ name, status: 'pending' })), created, updated: created,
         inputs: inputsOf(repo, cfg, journey, drive?.author),
     };
@@ -1460,6 +1486,8 @@ async function cmdRerun(argv) {
     const group = src.runner?.journey_pgid;
     if (['pending', 'running'].includes(src.status) && group && alive(-group))
         throw new UsageError(`the journey of run ${srcId} is still running, so it cannot be rerun yet`, `Read it: done-done status --run ${srcId}`);
+    // The rerun keeps its source's claim and branch, so the gate it is checked against is the source's.
+    refuseParked(cfg, src.repo, src.claim_id ?? src.branch);
     // A source run with no journey is driven again by the author agent config names now; schema 2 runs before PR 4 always had a journey.
     const journey = src.journey ?? null;
     const drive = journey === null ? await agentDrive(src.repo, cfg, src.feature) : undefined;
@@ -1480,7 +1508,7 @@ async function cmdRerun(argv) {
         return s && reused(name) && s.status === 'completed' ? { ...s } : { name, status: 'pending' };
     });
     const created = now();
-    const run = { schema: 2, run_id: id, kind: src.kind, app: cfg.app, repo: src.repo, journey, ...drive, claim: src.claim, claim_id: src.claim_id, judge: judging, status: 'pending', inputs, steps, created, updated: created, ...(driveReuse && src.record && { record: src.record }) };
+    const run = { schema: 2, run_id: id, kind: src.kind, app: cfg.app, repo: src.repo, journey, ...drive, claim: src.claim, claim_id: src.claim_id, branch: src.branch, judge: judging, status: 'pending', inputs, steps, created, updated: created, ...(driveReuse && src.record && { record: src.record }) };
     saveRun(dir, run);
     for (const s of steps) {
         const f = join(root, srcId, 'logs', `${s.name}.log`);
@@ -1605,8 +1633,7 @@ function cmdRespond(argv) {
     }
 }
 function runsOf(repo, cfg) {
-    const root = runsRoot(cfg.app);
-    return existsSync(root) ? readdirSync(root).filter((x) => existsSync(join(root, x, 'run.json'))).map((x) => loadRun(join(root, x))).filter((r) => r.repo === repo).sort((a, b) => b.created.localeCompare(a.created)) : [];
+    return runsIn(runsRoot(cfg.app)).filter((r) => r.repo === repo).sort((a, b) => b.created.localeCompare(a.created));
 }
 function cmdHistory(argv) {
     const { values } = parseArgs({ args: argv, options: { limit: { type: 'string' } } });
@@ -1719,7 +1746,7 @@ function detectApp(repo) {
             : api ? 'plain HTTP (curl)'
                 : 'TODO(live drive)';
     const observe = web
-        ? 'screenshots of the action and the resulting state, plus the console log'
+        ? 'screenshots of the resulting state the outcome is about'
         : cliish
             ? 'terminal transcripts, exit codes and side effects (files written, rows inserted)'
             : api
@@ -1775,7 +1802,7 @@ ${found.join('\n')}
 
 ## Evidence
 
-Capture ${d.observe}. Exercise the real user path, not internal setters; capture the action and the resulting state, not just the final screen; verify side effects alongside what is visible. Evidence goes to the run folder \`done-done run\` prints.
+Capture ${d.observe}. Exercise the real user path, not internal setters; done-done's judge checks every screenshot in the run folder against the outcome, so save only screenshots of the resulting state there and keep any of earlier steps outside it; verify side effects alongside what is visible. Evidence goes to the run folder \`done-done run\` prints.
 
 ## Cleanup
 

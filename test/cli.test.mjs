@@ -2265,6 +2265,21 @@ test('init --agent names the repo config agent that overrides the one it saves',
   assert.equal(readFileSync(join(repo, '.done-done.yaml'), 'utf8'), 'app: notes\nagent: claude\n', 'the repo file is not written');
 });
 
+test('init --agent puts the key before the first top-level key when the example comment is gone', () => {
+  const { dir, dd } = bareRepo();
+  dd('init');
+  const globalYml = join(dir, 'home', 'config.yaml');
+  writeFileSync(globalYml, readFileSync(globalYml, 'utf8').replace(/^# agent: opencode\n/m, ''));
+  const r = dd('init', '--agent', 'opencode', '--model', 'opencode-go/test-model');
+  assert.equal(r.code, 0, r.out);
+  const text = readFileSync(globalYml, 'utf8');
+  const lines = text.split('\n');
+  const agentAt = lines.findIndex((l) => l.startsWith('agent: '));
+  assert.ok(agentAt >= 0 && agentAt < lines.findIndex((l) => l.startsWith('agent_config:')), 'the key lands before agent_config, not at the end');
+  assert.equal(parse(text).agent, 'opencode');
+  assert.equal(parse(text).agent_config.opencode.model, 'opencode-go/test-model');
+});
+
 test('agent "" is refused in the repo and the global config; removing the key leaves it unset', () => {
   const { repo, env, dd } = setup('app: notes\nagent: ""\n');
   const inRepo = dd('init');

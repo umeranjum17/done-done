@@ -223,7 +223,7 @@ judge: done-done's own agent, a fresh one on your own plan through BYOKit, says 
   the outcome; a wrong screen fails, an unsure answer is inconclusive. verify judges by default (judge.enabled: false turns
   that off; --judge turns it on for one run); rerun repeats its source run's judge choice (--no-judge turns it off for a run);
   check and receipt start no model unless --judge or judge.enabled: true. The judge is the one the user set (judge.route:
-  claude-code; answerer:<agent> through the CLI of codex, opencode, pi or gemini with every tool off; or openai:key with judge.model
+  claude-code; answerer:<agent> through the CLI of opencode, pi or gemini with every tool off; or openai:key with judge.model
   on your own OPENAI_API_KEY), never the agent and model that did the work; with none set, done-done asks in a terminal or
   stops (exit 2) with the command that saves it.
 

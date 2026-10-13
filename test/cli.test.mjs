@@ -2076,7 +2076,7 @@ test('a rerun refused by the judge preflight exits 2 and creates no run folder',
   assert.deepEqual(readdirSync(runs).sort(), before, 'the refused rerun leaves no new run folder');
 });
 
-test('verify --judge through pi, gemini and codex: each judges tools-off with the capture attached; a right screen passes, a wrong one fails', () => {
+test('verify --judge through pi and gemini: each judges tools-off with the capture attached; a right screen passes, a wrong one fails', () => {
   const t = setup();
   mkdirSync(t.env.DONE_DONE_HOME, { recursive: true });
   const verdict = (p) => JSON.stringify({ relevance: { probabilities: p, rationale: 'The list shows the notes.', personReason: 'The list shows the notes.' } });
@@ -2089,10 +2089,9 @@ test('verify --judge through pi, gemini and codex: each judges tools-off with th
     const r = spawnSync(process.execPath, [CLI, 'verify', 'shots', '--outcome', outcome, '--judge', '--foreground'], { cwd: t.repo, env, encoding: 'utf8' });
     return { code: r.status, out: r.stdout + r.stderr };
   };
-  // The user names the judge: a pi author is judged by gemini at its cheap model; a gemini author by pi, and a pi author by
-  // codex, each at its configured model.
-  for (const [author, judge, model] of [['pi', 'gemini', 'flash-lite'], ['gemini', 'pi', 'vendor/vision-model'], ['pi', 'codex', 'codex-vision-model']]) {
-    writeFileSync(join(t.env.DONE_DONE_HOME, 'config.yaml'), `agent: ${author}\nagent_config:\n  pi: { model: vendor/vision-model }\n  codex: { model: codex-vision-model }\njudge:\n  route: answerer:${judge}\n`);
+  // The user names the judge: a pi author is judged by gemini at its cheap model; a gemini author by pi, each at its configured model.
+  for (const [author, judge, model] of [['pi', 'gemini', 'flash-lite'], ['gemini', 'pi', 'vendor/vision-model']]) {
+    writeFileSync(join(t.env.DONE_DONE_HOME, 'config.yaml'), `agent: ${author}\nagent_config:\n  pi: { model: vendor/vision-model }\njudge:\n  route: answerer:${judge}\n`);
     const right = agents(CORRECT);
     const ok = verify(right.env, `home and settings render for ${judge}`);
     assert.equal(ok.code, 0, ok.out);
@@ -2106,7 +2105,6 @@ test('verify --judge through pi, gemini and codex: each judges tools-off with th
       assert.ok(!c.argv.some((a) => a.includes('home and settings render') || a.includes('.proof')), 'the outcome goes on stdin, never argv or a path');
       assert.notEqual(c.cwd, t.repo, 'the judge runs in a scratch folder, never the repo');
       if (judge === 'pi') assert.deepEqual(c.argv, ['-p', '--mode', 'json', '--no-session', '--no-tools', '--no-extensions', '--no-skills', '--no-prompt-templates', '--no-context-files', '--model', model, `@${join(c.cwd, 'capture.png')}`]);
-      else if (judge === 'codex') assert.deepEqual(c.argv, ['exec', '-i', join(c.cwd, 'capture.png'), '--json', '--ephemeral', '-m', model, ...CODEX_TOOL_LESS]);
       else {
         assert.deepEqual(c.argv, ['-p', 'Follow the instructions on stdin. @capture.png', '-o', 'json', '-m', model, '--approval-mode', 'plan', '--policy', join(c.cwd, 'deny-all.toml'), '--skip-trust']);
         assert.match(c.policy, /toolName = "\*"\ndecision = "deny"/, 'every tool is denied');
@@ -2202,7 +2200,7 @@ test('with no judge set, verify stops with the ask (exit 2, the choices, the sav
   };
   const v = run('verify', 'shots', '--outcome', 'home and settings render', '--foreground');
   assert.equal(v.code, 2, v.out);
-  assert.equal(toon(v).error, 'no judge is set: ask the user which judge to use (claude, codex, opencode, pi, gemini); never pick one for them, and never the agent that did the work');
+  assert.equal(toon(v).error, 'no judge is set: ask the user which judge to use (claude, opencode, pi, gemini); never pick one for them, and never the agent that did the work');
   assert.equal(toon(v).help[0], "Save the user's answer: done-done init --judge <agent> --judge-model <model>, e.g. done-done init --judge opencode --judge-model opencode-go/muse-spark-1.3-contributor");
   assert.ok(!existsSync(join(t.env.DONE_DONE_HOME, 'runs', 'notes')), 'no run starts');
   assert.equal(s.calls().length, 0, 'no agent is started or picked, though claude and opencode are both on PATH');
@@ -2250,7 +2248,7 @@ test('init --judge saves the user\'s judge, refuses one done-done cannot judge t
   writeFileSync(join(t.env.DONE_DONE_HOME, 'config.yaml'), 'agent: opencode\n');
   const bad = t.dd('init', '--judge', 'acp:gemini');
   assert.equal(bad.code, 2, bad.out);
-  assert.match(toon(bad).error, /^done-done cannot judge through acp:gemini; it judges through claude, codex, opencode, pi, gemini$/);
+  assert.match(toon(bad).error, /^done-done cannot judge through acp:gemini; it judges through claude, opencode, pi, gemini$/);
   const same = t.dd('init', '--judge', 'opencode', '--judge-model', 'opencode-go/muse-spark-1.3-contributor');
   assert.equal(same.code, 2, same.out);
   assert.match(toon(same).error, /^judge: the judge opencode \(model opencode-go\/muse-spark-1\.3-contributor\) is the author's own agent and model \(opencode\)/);
@@ -2307,9 +2305,9 @@ test('with no judge set, verify in a terminal asks from a list, saves the pick a
   symlinkSync(process.execPath, join(s.bin, 'node'));
   const cmd = [process.execPath, CLI, 'verify', 'shots', '--outcome', "'home and settings render'", '--foreground'].join(' ');
   // The answers come one at a time, as a person types them.
-  const r = spawnSync('/bin/sh', ['-c', `(sleep 2; echo 3; sleep 1; echo 1; sleep 1) | /usr/bin/script -qec "${cmd}" /dev/null`], { cwd: t.repo, env: { ...s.env, PATH: `${s.env.PATH}:/usr/bin:/bin` }, encoding: 'utf8', timeout: 60_000 });
+  const r = spawnSync('/bin/sh', ['-c', `(sleep 2; echo 2; sleep 1; echo 1; sleep 1) | /usr/bin/script -qec "${cmd}" /dev/null`], { cwd: t.repo, env: { ...s.env, PATH: `${s.env.PATH}:/usr/bin:/bin` }, encoding: 'utf8', timeout: 60_000 });
   assert.equal(r.status, 0, r.stdout);
-  assert.match(r.stdout, /none is set\. Judges:\r?\n {2}1\) claude\r?\n {2}2\) codex\r?\n {2}3\) opencode/);
+  assert.match(r.stdout, /none is set\. Judges:\r?\n {2}1\) claude\r?\n {2}2\) opencode\r?\n {2}3\) pi/);
   assert.match(r.stdout, /Models for the opencode judge:\r?\n {2}1\) opencode-go\/muse-spark-1\.3-contributor \(cheap\)/);
   assert.match(r.stdout, /answerer:opencode \(model opencode-go\/muse-spark-1\.3-contributor\) saved to /);
   const g = parse(readFileSync(join(t.env.DONE_DONE_HOME, 'config.yaml'), 'utf8'));
@@ -2816,7 +2814,7 @@ test('judge.route must name a judge, and judge.model is the judge\'s model', () 
   writeFileSync(join(env.DONE_DONE_HOME, 'config.yaml'), "agent: claude\njudge:\n  route: ''\n");
   assert.match(toon(doctorIn(repo, pathEnv(env, ['claude']), 'doctor')).checks[1].detail, /judge\.route must not be empty; to leave it unset, remove the key$/);
   writeFileSync(join(env.DONE_DONE_HOME, 'config.yaml'), 'agent: claude\njudge:\n  route: answerer:acp:gemini\n');
-  assert.match(toon(doctorIn(repo, pathEnv(env, ['claude']), 'doctor')).checks[1].detail, /judge\.route must be claude-code \(for claude\), answerer:<agent> for one of codex, opencode, pi, gemini, or a key route \(openai:key\)/);
+  assert.match(toon(doctorIn(repo, pathEnv(env, ['claude']), 'doctor')).checks[1].detail, /judge\.route must be claude-code \(for claude\), answerer:<agent> for one of opencode, pi, gemini, or a key route \(openai:key\)/);
   writeFileSync(join(env.DONE_DONE_HOME, 'config.yaml'), 'agent: opencode\njudge:\n  route: claude-code\n  model: x\n');
   const d = toon(doctorIn(repo, pathEnv(env, ['claude']), 'doctor'));
   assert.equal(d.checks[1].status, 'ok');
@@ -2962,7 +2960,7 @@ test('the agent comes from config, and doctor --probe asks it one schema questio
   assert.equal(doctor('agent: opencode\n').by('judge_choice').status, 'warning', 'allow_same runs a session-only judge, and doctor says so');
   routeCfg('');
   writeFileSync(join(env.DONE_DONE_HOME, 'config.yaml'), 'judge:\n  route: answerer:claude\n');
-  assert.match(doctor('').out, /judge\.route must be claude-code \(for claude\), answerer:<agent> for one of codex, opencode, pi, gemini, or a key route \(openai:key\)/, 'claude judges through claude-code');
+  assert.match(doctor('').out, /judge\.route must be claude-code \(for claude\), answerer:<agent> for one of opencode, pi, gemini, or a key route \(openai:key\)/, 'claude judges through claude-code');
   writeFileSync(join(env.DONE_DONE_HOME, 'config.yaml'), 'judge:\n  route: answerer:acp:gemini\n');
   assert.match(doctor('').out, /judge\.route must be .*; an acp:<target> agent cannot judge, since done-done cannot send it an image/, 'an acp agent cannot judge, and the config error says why');
   writeFileSync(join(env.DONE_DONE_HOME, 'config.yaml'), 'judge:\n  route: opencode-go\n');
@@ -3420,26 +3418,17 @@ test('doctor --probe asks gemini with the prompt on stdin, and reports a signed-
   assert.match(probe.fix, /Check that gemini is signed in and can use model flash-lite/);
 });
 
-const CODEX_TOOL_LESS = ['--ignore-user-config', '--ignore-rules', '--skip-git-repo-check', '--sandbox', 'read-only', '-c', 'web_search="disabled"', ...['shell_tool', 'unified_exec', 'view_image', 'apps', 'plugins', 'browser_use', 'browser_use_external', 'computer_use', 'in_app_browser', 'multi_agent', 'image_generation', 'hooks', 'goals', 'tool_suggest', 'sleep_tool', 'skill_mcp_dependency_install'].flatMap((f) => ['--disable', f])];
-
-test('doctor --probe asks codex on stdin with every tool off, and shows a failed turn\'s own message', () => {
+test('doctor --probe refuses codex, which cannot run tool-less, and starts no codex call', () => {
   const { repo, env } = setup();
   mkdirSync(env.DONE_DONE_HOME, { recursive: true });
   writeFileSync(join(env.DONE_DONE_HOME, 'config.yaml'), 'agent: codex\nagent_config:\n  codex: { model: gpt-test, effort: low }\n');
   const s = stubPiGemini(env);
   const r = doctorIn(repo, s.env, 'doctor', '--probe');
-  assert.equal(r.code, 0, r.out);
+  assert.equal(r.code, 2, r.out);
   const d = toon(r);
   assert.match(d.checks.find((x) => x.check === 'agent').detail, /^codex \(model gpt-test; from config\) at /);
-  assert.equal(d.checks.find((x) => x.check === 'probe').status, 'ok', 'the answer is the last agent message, not the narration before it');
-  const [call] = s.calls();
-  assert.match(call.stdin, /connectivity probe[\s\S]*"required":\["ok"\]/);
-  assert.ok(!call.argv.some((a) => a.includes('connectivity probe')), 'never in argv');
-  assert.deepEqual(call.argv, ['exec', '--json', '--ephemeral', '-m', 'gpt-test', ...CODEX_TOOL_LESS, '-c', 'model_reasoning_effort="low"']);
-  assert.notEqual(call.cwd, repo, 'a tool-less probe runs in a scratch dir, never the repo');
-  const failed = doctorIn(repo, stubPiGemini(env, '{"ok":true}', 'auth').env, 'doctor', '--probe');
-  assert.equal(failed.code, 2, failed.out);
-  assert.match(toon(failed).checks.find((x) => x.check === 'probe').detail, /^codex did not answer: codex exited 1: The 'x' model is not supported when using Codex with a ChatGPT account\.; record /);
+  assert.match(d.checks.find((x) => x.check === 'probe').detail, /^codex did not answer: codex cannot run tool-less: with your config\.toml it keeps its MCP tools/);
+  assert.deepEqual(s.calls(), [], 'no tool-less call reaches codex');
 });
 
 test('doctor warns that pi has no permission gate', () => {
@@ -3481,19 +3470,38 @@ test('gemini edit steps run with auto_edit, never yolo, and read steps stay in p
   assert.equal(edit.argv[edit.argv.indexOf('--approval-mode') + 1], 'auto_edit');
   assert.equal(read.argv[read.argv.indexOf('--approval-mode') + 1], 'plan');
   assert.ok(!edit.argv.includes('--skip-trust') && !read.argv.includes('--skip-trust'), 'a repo step keeps Gemini trust gate');
-  // A codex edit step writes only the repo and the run's folders, and keeps the user's own codex config; a read step is tool-less.
+  // A codex edit step writes only the repo and the run's folders, and keeps the user's own codex config; a read step is refused.
   process.env.PATH = s.env.PATH;
+  let refused;
   try {
     const codex = { ...call, agent: 'codex', model: 'gpt-test', path: join(s.env.PATH, 'codex') };
     await askAgent({ ...codex, tools: 'edit', dirs: ['/evidence/run-1', '/scratch'] });
-    await askAgent({ ...codex, tools: 'read' });
+    refused = await askAgent({ ...codex, tools: 'read' });
   } finally {
     process.env.PATH = old;
   }
-  const [codexEdit, codexRead] = s.calls().slice(2);
+  const [codexEdit] = s.calls().slice(2);
   assert.deepEqual(codexEdit.argv, ['exec', '--json', '--ephemeral', '-m', 'gpt-test', '--sandbox', 'workspace-write', '-c', 'sandbox_workspace_write.network_access=true', '--add-dir', '/evidence/run-1', '--add-dir', '/scratch']);
   assert.equal(codexEdit.cwd, repo);
-  assert.deepEqual(codexRead.argv, ['exec', '--json', '--ephemeral', '-m', 'gpt-test', ...CODEX_TOOL_LESS]);
+  assert.equal(refused.ok, false);
+  assert.match(refused.error, /^codex cannot run tool-less/);
+  assert.equal(s.calls().length, 3, 'a refused read step starts no codex');
+});
+
+test('a codex edit step shows the API error codex wrote, as the other agents do', async () => {
+  const { repo, env } = setup();
+  const s = stubPiGemini(env, '{"ok":true}', 'auth');
+  const { askAgent } = await import(pathToFileURL(join(dirname(fileURLToPath(import.meta.url)), '..', 'dist', 'agents.js')).href);
+  const old = process.env.PATH;
+  process.env.PATH = s.env.PATH;
+  let r;
+  try {
+    r = await askAgent({ agent: 'codex', model: 'x', path: join(s.env.PATH, 'codex'), prompt: 'p', schema: { type: 'object', properties: { ok: { type: 'boolean' } }, required: ['ok'] }, cwd: repo, timeoutMs: 60_000, record: join(s.env.PATH, 'rec.json'), tools: 'edit' });
+  } finally {
+    process.env.PATH = old;
+  }
+  assert.equal(r.ok, false);
+  assert.match(r.error, /is not supported when using Codex with a ChatGPT account/);
 });
 
 test('opencode read calls get a deny-all permission and no read allowance', async () => {

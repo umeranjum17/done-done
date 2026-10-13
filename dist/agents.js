@@ -93,23 +93,6 @@ const ACP = {
 };
 export const ACPX_INSTALL = 'Install the acpx ACP bridge (npm install -g acpx, https://github.com/openclaw/acpx), then re-run: done-done doctor';
 const PI_TOOL_LESS = ['--no-tools', '--no-extensions', '--no-skills', '--no-prompt-templates', '--no-context-files'];
-// codex has no single tools-off flag: a tool-less call ignores the user's config.toml (its MCP servers, plugins and hooks),
-// turns off every feature that adds a tool, and keeps the read-only sandbox, so the apply_patch tool left over cannot write.
-// Probed live on codex-cli 0.159.2 (13 Oct): it listed only apply_patch and a clock tool, a canary file outside the
-// cwd went unread, and its writes were refused.
-// ponytail: a feature a later codex adds is on until this list names it; re-run the canary on a codex upgrade.
-const CODEX_TOOL_LESS = ['--ignore-user-config', '--ignore-rules', '--skip-git-repo-check', '--sandbox', 'read-only', '-c', 'web_search="disabled"',
-    ...['shell_tool', 'unified_exec', 'view_image', 'apps', 'plugins', 'browser_use', 'browser_use_external', 'computer_use', 'in_app_browser', 'multi_agent',
-        'image_generation', 'hooks', 'goals', 'tool_suggest', 'sleep_tool', 'skill_mcp_dependency_install'].flatMap((f) => ['--disable', f])];
-// codex reports an API error as the API's JSON text (seen 13 Oct: a model a ChatGPT sign-in cannot use): show its own message.
-const apiMessage = (text) => {
-    try {
-        return String(JSON.parse(text).error?.message ?? text);
-    }
-    catch {
-        return text; // Plain text already.
-    }
-};
 const ADAPTERS = {
     // claude -p: --json-schema puts the validated object in structured_output; --tools '' turns every tool off.
     // An edit step accepts edits only in cwd and --add-dir folders, and may run commands (the drive launches the app).
@@ -180,12 +163,15 @@ const ADAPTERS = {
         },
     },
     // codex exec with no prompt argument reads it on stdin; --json streams JSONL events whose last agent_message holds the
-    // answer, and --ephemeral keeps no session. -i attaches an image to the prompt, outside every tool. An edit step runs
-    // in codex's workspace-write sandbox, which writes only the repo, the run's folders (--add-dir) and $TMPDIR; it may use
-    // the network, since the drive launches the app and talks to it. Without a model, codex runs its own default.
+    // answer, and --ephemeral keeps no session. An edit step runs in codex's workspace-write sandbox, which writes only the
+    // repo, the run's folders (--add-dir) and $TMPDIR; it may use the network, since the drive launches the app and talks
+    // to it, and it keeps the user's config.toml. Without a model, codex runs its own default.
+    // A tool-less call is refused: probed live 13 Oct, codex with the user's config.toml kept its MCP server, which read a
+    // canary file outside the folder, and --disable does not turn off its multi-agent tools.
     codex: {
+        editOnly: 'codex cannot run tool-less: with your config.toml it keeps its MCP tools, which read files outside the folder',
         argv: (c, dir) => ['exec', ...(c.images ?? []).flatMap((i) => ['-i', join(dir, i.name)]), '--json', '--ephemeral', ...(c.model ? ['-m', c.model] : []),
-            ...(c.tools === 'edit' ? ['--sandbox', 'workspace-write', '-c', 'sandbox_workspace_write.network_access=true', ...(c.dirs ?? []).flatMap((d) => ['--add-dir', d])] : CODEX_TOOL_LESS)],
+            '--sandbox', 'workspace-write', '-c', 'sandbox_workspace_write.network_access=true', ...(c.dirs ?? []).flatMap((d) => ['--add-dir', d])],
         answer: (out, c) => {
             let text = '';
             let failed = '';
@@ -204,7 +190,7 @@ const ADAPTERS = {
             // A failed turn has no answer; an error event (a retried stream) fails the call only when the agent said nothing.
             const why = failed || (text ? '' : error);
             if (why)
-                throw new ProviderError(apiMessage(why));
+                throw new ProviderError(why);
             return extractJsonObject(text, c.schema.required);
         },
     },
@@ -378,6 +364,8 @@ export async function askAgent(c) {
         cwd = c.tools === 'none' ? dir : c.cwd;
         if (!adapter)
             throw new Error(`no adapter for ${c.agent} yet`);
+        if (adapter.editOnly && c.tools !== 'edit')
+            throw new Error(adapter.editOnly);
         for (const i of c.images ?? [])
             writeFileSync(join(dir, i.name), i.bytes, { mode: 0o600 });
         for (const [name, text] of Object.entries(adapter.files?.(c) ?? {}))

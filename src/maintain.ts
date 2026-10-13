@@ -294,9 +294,10 @@ export async function maintainSteps<S>(run: { repo: string; findings?: Finding[]
   // Only claude reads the repo with its own tools: its read tools refuse paths outside it, while the other agents'
   // tools cannot be trusted that way, so they get the cited source from plain code.
   const toolless = agent.agent !== 'claude';
-  const geminiBlock = agent.path && agent.agent === 'gemini' ? 'source-wave: gemini cannot read tool-less yet, since its none mode is read-only plan mode, not tool-free; use claude, codex, opencode, pi or acp' : '';
-  if (geminiBlock) add({ kind: 'coverage', file: rel(featDir), what: geminiBlock });
-  const agentBlock = !agent.path ? `source-wave: no agent done-done can start (${notStartable(agent.agent, agent.override)}); run done-done doctor` : geminiBlock;
+  const toollessBlock = agent.path && agent.agent === 'gemini' ? 'source-wave: gemini cannot read tool-less yet, since its none mode is read-only plan mode, not tool-free; use claude, codex, opencode, pi or acp'
+    : agent.path && agent.agent === 'codex' ? 'source-wave: codex cannot read tool-less yet, since its MCP tools stay on with your config.toml; use claude, opencode, pi or acp' : '';
+  if (toollessBlock) add({ kind: 'coverage', file: rel(featDir), what: toollessBlock });
+  const agentBlock = !agent.path ? `source-wave: no agent done-done can start (${notStartable(agent.agent, agent.override)}); run done-done doctor` : toollessBlock;
   let calls = 0;
   const record = (name: string) => join(dir, 'agents', `${++calls}-${name}.json`);
   const read = agentBlock ? [] : features.slice(0, MAX_CALLS - 1);

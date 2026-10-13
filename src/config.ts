@@ -32,8 +32,8 @@ export type Config = {
 // The coding agents a user can set as agent.
 export const AGENTS = ['claude', 'codex', 'opencode', 'pi', 'gemini'];
 // The agents whose CLI can read an attached image with every tool off, so they judge through the answerer route;
-// claude judges through claude-code. An acp:<target> agent cannot be sent an image.
-export const ANSWERER_JUDGES = ['codex', 'opencode', 'pi', 'gemini'];
+// claude judges through claude-code. An acp:<target> agent cannot be sent an image. codex cannot run tools-off, so it does not judge.
+export const ANSWERER_JUDGES = ['opencode', 'pi', 'gemini'];
 // BYOKit key routes: a judge on the user's own API key, read from this environment variable, with no agent CLI.
 export const KEY_ROUTES: Record<string, string> = { 'openai:key': 'OPENAI_API_KEY' };
 // Or acp:<target>, any agent the user's acpx bridge can start; the target is one argv word, so it never reads as a flag.
@@ -42,7 +42,7 @@ export const isAgent = (v: unknown) => AGENTS.includes(v as string) || (typeof v
 // whatever the vendor; any other model runs only when the user names it. gemini's is the CLI's own
 // `flash-lite` alias (its cli-reference.md: the fastest model for simple tasks). codex, pi and acp:<target> have no public
 // cheap alias, so they run their own configured default model, and agent_config.<agent>.model caps their cost.
-// As a judge, codex and pi have no default: answerer:<agent> needs judge.model or agent_config.<agent>.model, a model that reads images.
+// As a judge, pi has no default: answerer:<agent> needs judge.model or agent_config.<agent>.model, a model that reads images.
 export const CHEAP: Record<string, { model: string; effort?: string }> = {
   claude: { model: 'claude-haiku-5-5', effort: 'low' },
   opencode: { model: 'opencode-go/muse-spark-1.3-contributor', effort: 'low' },

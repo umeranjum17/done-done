@@ -389,8 +389,9 @@ export async function askAgent(c: AgentCall): Promise<AgentAnswer> {
     let lastError = '';
     for (;;) {
       attempts++;
-      // An ask-again names what was wrong with the last answer.
-      const schemaTrailer = `\n\nAnswer with only one JSON object that matches this JSON schema, and no other text:\n${JSON.stringify(c.schema)}\n`;
+      // An ask-again names what was wrong with the last answer. The trailer ends on words, not the schema: a weak model
+      // (Go Muse, 13 Oct) copied a schema that closed the prompt back as its answer.
+      const schemaTrailer = `\n\nAnswer with only one JSON object that matches this JSON schema:\n${JSON.stringify(c.schema)}\nThat object holds your own values, never the schema itself, and you send no other text.\n`;
       const prompt = c.tools === 'edit' && adapter.editNote ? `${c.prompt}\n\n${adapter.editNote}` : c.prompt;
       const promptText = (attempts === 1 ? prompt : `${prompt}\n\nYour previous answer was not valid (${lastError}).`) + schemaTrailer;
       if (adapter.file) writeFileSync(join(dir, 'prompt.md'), promptText, { mode: 0o600 });

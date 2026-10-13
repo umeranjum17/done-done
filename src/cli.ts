@@ -1136,30 +1136,33 @@ async function runSteps(dir: string): Promise<void> {
       const failed: string[] = [];
       rec.exit = 0;
       let timedOut = false;
-      for (const cell of cells) {
-      // An async child keeps the heartbeat going while the journey runs. The journey gets its own process group, so a
-      // timeout or a dead runner can kill it and everything it started.
-      const child = spawn(rec.command!, { cwd: at, shell: true, detached: true, stdio: ['ignore', fd, fd], env: { ...process.env, DONE_DONE_RUN_ID: rec.run_id, DONE_DONE_EVIDENCE_ROOT: runDir(cfg, rec.run_id), ...(matrix ? cellEnv(cell) : {}) } });
-      run.runner!.journey_pgid = child.pid;
-      saveRun(dir, run);
-      let cellTimedOut = false;
+      let running: number | undefined;
+      // The timeout bounds the whole verify run's journey: it kills the cell running now and stops the loop.
       const timer = setTimeout(() => {
-        cellTimedOut = true;
-        killGroup(child.pid!);
-      }, limit!);
-      const code = await new Promise<number>((done) => child.on('close', (c) => done(c ?? 1)));
-      clearTimeout(timer);
-      if (cellTimedOut) {
         timedOut = true;
-        failed.push(`${cellName(cell)} (timed out after ${timeout})`);
-        if (!rec.exit) rec.exit = 1;
-        break;
+        if (running) killGroup(running);
+      }, limit!);
+      for (const cell of cells) {
+        if (timedOut) break;
+        // An async child keeps the heartbeat going while the journey runs. The journey gets its own process group, so a
+        // timeout or a dead runner can kill it and everything it started.
+        const child = spawn(rec.command!, { cwd: at, shell: true, detached: true, stdio: ['ignore', fd, fd], env: { ...process.env, DONE_DONE_RUN_ID: rec.run_id, DONE_DONE_EVIDENCE_ROOT: runDir(cfg, rec.run_id), ...(matrix ? cellEnv(cell) : {}) } });
+        run.runner!.journey_pgid = child.pid;
+        running = child.pid;
+        saveRun(dir, run);
+        const code = await new Promise<number>((done) => child.on('close', (c) => done(c ?? 1)));
+        running = undefined;
+        if (timedOut) {
+          failed.push(`${cellName(cell)} (timed out after ${timeout})`);
+          if (!rec.exit) rec.exit = 1;
+          break;
+        }
+        if (code !== 0) {
+          if (!rec.exit) rec.exit = code;
+          failed.push(`${cellName(cell)} (exit ${code})`);
+        }
       }
-      if (code !== 0) {
-        if (!rec.exit) rec.exit = code;
-        failed.push(`${cellName(cell)} (exit ${code})`);
-      }
-      }
+      clearTimeout(timer);
       closeSync(fd);
       const sealed = closeRun(at, cfg, rec);
       if (!fix) run.record = join(recordsDir(cfg), `${rec.run_id}.json`);

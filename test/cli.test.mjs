@@ -1936,6 +1936,7 @@ test('verify judges by default with the judge the user set: opencode judges a cl
   const re = spawnSync(process.execPath, [CLI, 'rerun', '--run', b.run_id], { cwd: t.repo, env: right.env, encoding: 'utf8' });
   assert.equal(re.status, 4, re.stdout + re.stderr);
   assert.deepEqual(toon({ out: re.stdout }).steps.map((x) => [x.name, x.status]).slice(3, 6), [['judge', 'failed'], ['gate', 'awaiting_approval'], ['receipt', 'pending']]);
+  assert.equal(t.dd('respond', '--run', toon({ out: re.stdout }).run_id, '--action', 'fix').code, 1);
   // The author's own agent and model as the judge is a usage error before any run starts, unless allow_same accepts it.
   // Another claim, since run b still waits at its gate on this one.
   writeFileSync(join(t.env.DONE_DONE_HOME, 'config.yaml'), 'agent: opencode\njudge:\n  route: answerer:opencode\n');

@@ -131,7 +131,7 @@ git commit -m "Add done-done"
 
 A `run -- <command>` whose command matches no recorded journey still runs, but its result hints that the recipe is not in the repo.
 
-At any point, `done-done doctor` checks the setup and changes nothing except the `--probe` call record: git, a valid `.done-done.yaml`, a writable evidence root (all required), plus the verify skill, your coding agent and its model (`agent:` in config, or the first agent on PATH that done-done can start; see [Agents](docs/reference.md#agents)), the judge setup and `ffprobe` (all optional). Each item reports `ok` or `missing` with the exact fix command (pi adds a `warning` row, see [Agents](docs/reference.md#agents)). `done-done doctor --probe` also asks the agent one question to prove it answers (the agent itself may keep its own session files).
+At any point, `done-done doctor` checks the setup and changes nothing except the `--probe` call record: git, a valid `.done-done.yaml`, a writable evidence root (all required), plus the verify skill, your coding agent and its model (`agent:` in config, or the first agent on PATH that done-done can start; see [Agents](docs/reference.md#agents)), the judge setup and `ffprobe` (all optional). Each item reports `ok`, `warning` (the judge runs but is not another agent, or pi has no permission gate; never fails doctor) or `missing` with the exact fix command (see [Agents](docs/reference.md#agents)). `done-done doctor --probe` also asks the agent one question to prove it answers (the agent itself may keep its own session files).
 
 **3. Run it, then check it**
 
@@ -159,7 +159,7 @@ Run `done-done` with no arguments to see the current config and the next step.
 - ♻️ **Not reused**: Proof made only of files already used for a different claim fails, and so does citing the same file twice. A claim is named by `--claim-id <id>`, which defaults to your branch, so rewording it keeps its proof. Several claims on one branch each need their own `--claim-id`.
 - 🧾 **Honest claims**: Reads a pull request's `## Checks` block — from a file, a URL, or stdin — and makes sure every line is filled in.
 - 📌 **Verifiable later**: `receipt` records a passing check against the exact commit and the sha256 of every file it cited; `receipt --verify` re-checks it from any checkout of that commit on the same machine (a merge gate or a fresh clone), or in CI once the evidence folder is copied there ([how](docs/reference.md#where-proof-lives)).
-- 👀 **Shows the outcome** (opt-in): `--judge` asks a model on your own Claude plan whether each screenshot is the right screen for the claim (cheap Haiku by default; set `judge.model` for another); a wrong screen fails.
+- 👀 **Shows the outcome** (opt-in): `--judge` asks a fresh, tools-off model on your own plan (Claude Code, or an agent CLI such as opencode) whether each screenshot is the right screen for the claim; the judge is a different agent from the author when one is installed (with only the author's agent, a different cheap model, or a fresh session of the same model when that is the same), and a wrong screen fails.
 - 🔒 **Safe in CI**: `--trusted-ref origin/main` reads the rules from your main branch, so a pull request can't loosen them.
 
 Every answer is an exit code: **0** pass, **1** fail, **2** usage or config error, **3** can't tell either way, **4** a `verify` or `rerun` run is still running.

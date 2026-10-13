@@ -12,6 +12,8 @@ export class UsageError extends Error {
 }
 // The coding agents done-done can start, in the order `agent: auto` looks for them on PATH.
 export const AGENTS = ['claude', 'codex', 'opencode', 'pi', 'gemini'];
+// The agents whose CLI can read an attached image, so they judge through the answerer route; claude judges through claude-code.
+export const ANSWERER_JUDGES = ['opencode'];
 // Or acp:<target>, any agent the user's acpx bridge can start; the target is one argv word, so it never reads as a flag.
 const isAgent = (v) => AGENTS.includes(v) || (typeof v === 'string' && /^acp:[A-Za-z0-9][\w.-]*$/.test(v));
 // The cost guard is this table: a default model for an agent here is always its cheap one, never a flagship,
@@ -34,9 +36,8 @@ const KEYS = {
     'checks.fix_title': { scope: 'repo', type: 'string' },
     'judge.enabled': { scope: 'repo', type: 'boolean' },
     'judge.model': { scope: 'global', type: 'string' },
-    'judge.bin': { scope: 'global', type: 'string' },
-    'judge.config_dir': { scope: 'global', type: 'string' },
-    'judge.route': { scope: 'global', type: 'string' },
+    'judge.route': { scope: 'global', type: 'route' },
+    'judge.claude_code': { scope: 'global', type: 'claude_code' },
     'judge.allow_same': { scope: 'global', type: 'boolean' },
 };
 const SECTIONS = new Set(['evidence', 'checks', 'judge']);
@@ -87,15 +88,19 @@ function apply(target, text, file, scope) {
             : spec.type === 'boolean' ? typeof value === 'boolean'
                 : spec.type === 'string[]' ? Array.isArray(value) && value.every((v) => typeof v === 'string')
                     : spec.type === 'agent' ? value === 'auto' || [value].flat().every(isAgent) && [value].flat().length > 0
-                        : spec.type === 'agent_config' ? !!value && typeof value === 'object' && Object.entries(value).every(([a, c]) => isAgent(a) && !!c && typeof c === 'object' && Object.entries(c).every(([k, m]) => k === 'model' && typeof m === 'string'))
-                            : !!value && typeof value === 'object' && Object.values(value).every((j) => j && typeof j.command === 'string');
-        const want = { journeys: 'a map of name: {command: <string>}', agent: `auto, or one or a list of ${AGENTS.join(', ')}, acp:<target>`, agent_config: `a map of <agent>: {model: <string>} for ${AGENTS.join(', ')}, acp:<target>` };
+                        : spec.type === 'route' ? typeof value === 'string' && (['', 'auto', 'claude-code'].includes(value) || ANSWERER_JUDGES.some((a) => value === `answerer:${a}`))
+                            : spec.type === 'claude_code' ? !!value && typeof value === 'object' && !Array.isArray(value) && Object.entries(value).every(([k, v]) => ['bin', 'config_dir'].includes(k) && typeof v === 'string')
+                                : spec.type === 'agent_config' ? !!value && typeof value === 'object' && Object.entries(value).every(([a, c]) => isAgent(a) && !!c && typeof c === 'object' && Object.entries(c).every(([k, m]) => k === 'model' && typeof m === 'string'))
+                                    : !!value && typeof value === 'object' && Object.values(value).every((j) => j && typeof j.command === 'string');
+        const want = { journeys: 'a map of name: {command: <string>}', agent: `auto, or one or a list of ${AGENTS.join(', ')}, acp:<target>`, agent_config: `a map of <agent>: {model: <string>} for ${AGENTS.join(', ')}, acp:<target>`, route: `auto, claude-code (for claude), or answerer:<agent> for one of ${ANSWERER_JUDGES.join(', ')}`, claude_code: 'a map with bin and config_dir, each a string' };
         if (!ok)
             throw new UsageError(`${file}: ${key} must be ${want[spec.type] ?? `a ${spec.type}`}`);
         if (key === 'checks.not_proven' && value !== 'inconclusive' && value !== 'allow')
             throw new UsageError(`${file}: checks.not_proven must be inconclusive or allow`);
         const [a, b] = key.split('.');
-        if (b)
+        if (key === 'judge.claude_code')
+            target.judge.claude_code = { ...target.judge.claude_code, ...value };
+        else if (b)
             target[a][b] = value;
         else if (key === 'agent')
             target.agent = value === 'auto' ? 'auto' : [value].flat();
@@ -125,7 +130,7 @@ function defaultConfig(repo) {
         journeys: {},
         evidence: { local_root: join(home(), 'evidence'), root: '', allow_dirty: false, ignore_paths: [] },
         checks: { not_proven: 'inconclusive', fix_title: '^(fix|bugfix|hotfix)\\b' },
-        judge: { enabled: false, model: CHEAP_MODELS.claude, bin: '', config_dir: join(home(), 'claude'), route: '', allow_same: false },
+        judge: { enabled: false, route: 'auto', model: '', allow_same: false, claude_code: { bin: '', config_dir: join(home(), 'claude') } },
         trusted: false,
     };
 }
@@ -138,10 +143,11 @@ export function loadConfig(repo, projectText) {
     const projectFile = join(repo, '.done-done.yaml');
     apply(cfg, projectText ?? readOptional(projectFile), projectFile, 'repo');
     cfg.skill ||= `.agents/skills/verify-${cfg.app}`;
+    cfg.judge.route ||= 'auto';
     const tilde = (p) => p.replace(/^~(?=\/|$)/, homedir());
     const local = tilde(cfg.evidence.local_root);
-    cfg.judge.bin = tilde(cfg.judge.bin);
-    cfg.judge.config_dir = tilde(cfg.judge.config_dir);
+    cfg.judge.claude_code.bin = tilde(cfg.judge.claude_code.bin);
+    cfg.judge.claude_code.config_dir = tilde(cfg.judge.claude_code.config_dir);
     // A relative root is under the repo (and dies with the checkout); an absolute one is used as-is.
     cfg.evidence.root = cfg.evidence.root ? resolve(repo, cfg.evidence.root) : join(local, cfg.app);
     return cfg;

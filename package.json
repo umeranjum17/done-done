@@ -16,7 +16,7 @@
     "test": "tsc && node --test && test -z \"$(git status --porcelain --untracked-files=all -- dist)\""
   },
   "dependencies": { "@toon-format/toon": "^4.4.0", "yaml": "^2.9.1" },
-  "peerDependencies": { "@byokit/decide": "0.6.5" },
+  "peerDependencies": { "@byokit/decide": "^0.8.0" },
   "peerDependenciesMeta": { "@byokit/decide": { "optional": true } },
-  "devDependencies": { "@byokit/decide": "0.6.5", "@types/node": "^26.6.5", "typescript": "^7.0.2" }
+  "devDependencies": { "@byokit/decide": "^0.8.0", "@types/node": "^26.6.5", "typescript": "^7.0.2" }
 }

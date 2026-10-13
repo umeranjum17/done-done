@@ -12,7 +12,7 @@ import { Document, parseDocument } from 'yaml';
 import { ACPX_INSTALL, agentChoices, agentRun, askAgent, findBin, JUDGES, knownAgentOf, modelFor, noAgent, noJudge, notStartable, routeOf, selectAgent, selectJudge, supported, type AgentAnswer, type JudgeChoice } from './agents.js';
 import { AGENTS, CHEAP, type Config, globalConfigText, home, isAgent, loadConfig, parseDuration, UsageError } from './config.js';
 import { backend, type Capture, judge, judgeable, type Judged, onPath, quote } from './judge.js';
-import { type Finding as MaintainFinding, maintainSteps, type MaintainResult } from './maintain.js';
+import { type Finding as MaintainFinding, maintainSteps, type MaintainResult, refuseSameSession } from './maintain.js';
 import { design, KINDS } from './design.js';
 import { checkMedia } from './media.js';
 
@@ -1341,7 +1341,7 @@ async function cmdMaintain(argv: string[]): Promise<number> {
   // auto_fix: the agent the user set fixes the skill and the judge the user set (never that agent and model) triages, so both are set now.
   if (cfg.auto_fix.maintain) {
     if (cfg.agent.startsWith('acp:')) throw new UsageError(`${cfg.agent} cannot fix the verify skill: done-done runs ACP agents with every tool denied`, `Set auto_fix.maintain: 0 to report only, or set agent: to one of ${AGENTS.filter(supported).join(', ')}`);
-    await preflightJudge(cfg);
+    refuseSameSession(await preflightJudge(cfg));
   }
   const id = newRunId(git(repo, 'rev-parse', 'HEAD'));
   const dir = join(runsRoot(cfg.app), id);

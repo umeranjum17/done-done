@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto';
 import { accessSync, closeSync, constants, existsSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, readlinkSync, readSync, realpathSync, statSync } from 'node:fs';
 import { dirname, extname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { askAgent, notStartable, selectAgent, selectJudge, supported } from './agents.js';
+import { UsageError } from './config.js';
 import { askJudge, backend } from './judge.js';
 // Plan 1.5 shared rules: a per-run call cap and a per-call timeout (agent_timeout) stop runaway cost.
 const MAX_CALLS = 30;
@@ -276,16 +277,17 @@ async function pass(run, dir, cfg, h, prefix = '') {
                     left.add(p);
                     continue;
                 }
-                const cut = body.length > FEATURE_CHARS ? `\n[truncated after ${FEATURE_CHARS} characters]` : '';
-                const kept = `${body.slice(0, FEATURE_CHARS)}${cut}`;
+                // Numbered lines, so a reader with no tools cites the line it read rather than a guess; the caps count this text.
+                const numbered = body.split('\n').map((l, i) => `${i + 1}: ${l}`).join('\n');
+                const cut = numbered.length > FEATURE_CHARS ? `\n[truncated after ${FEATURE_CHARS} characters]` : '';
+                const kept = `${numbered.slice(0, FEATURE_CHARS)}${cut}`;
                 if (total + kept.length > CITED_CHARS) {
                     capped = true;
                     left.add(p);
                     continue;
                 }
                 total += kept.length;
-                // Numbered lines, so a reader with no tools cites the line it read rather than a guess.
-                seen.set(p, `${body.slice(0, FEATURE_CHARS).split('\n').map((l, i) => `${i + 1}: ${l}`).join('\n')}${cut}`);
+                seen.set(p, kept);
             }
         }
         const parts = [...seen].map(([p, body]) => `\n\nCited source ${p}:\n${body}`);
@@ -427,8 +429,9 @@ const TRIAGE_ATTEMPTS = 3;
 const EXCERPT_LINES = 20;
 const FIX_SCHEMA = { type: 'object', properties: { summary: { type: 'string' }, blocker: { type: 'string' } }, required: ['summary', 'blocker'] };
 // The lines around a cited source line (a repo path or a bare file name, as a reader cites it), numbered, for the judge.
+// A bare name can match several files: the excerpt is from the first one that has the cited line, as citeWhy accepts.
 const excerpt = (repo, tracked, s) => {
-    const file = s && citedFiles(repo, tracked, s.file)[0];
+    const file = s && citedFiles(repo, tracked, s.file).find((p) => !citeProblem(repo, p, s.line));
     const text = file && citedText(repo, file);
     if (!s || !text)
         return '';
@@ -461,6 +464,12 @@ const tryText = (p) => {
         return '';
     }
 };
+// The judge on the fix path is never the fixer's own agent and model, even when judge.allow_same accepts it for verify.
+export function refuseSameSession(choice) {
+    if (choice.independence === 'session-only')
+        throw new UsageError(`judge: the judge ${choice.agent} (model ${choice.model}) is the fixer's own agent and model, and the judge is never the agent that did the work; judge.allow_same does not apply to maintain fixes`, 'Ask the user for another judge agent or model and save it: done-done init --judge <agent> --judge-model <model>');
+    return choice;
+}
 // Every path the fixer changed in the worktree since `base`: tracked edits (and commits), new files, ignored ones too.
 const changedSince = (wt, base) => [...new Set([...git(wt, 'diff', '--name-only', '-z', base).split('\0'), ...git(wt, 'ls-files', '--others', '-z').split('\0')])].filter(Boolean);
 async function fix(run, dir, cfg, h, tries, sources) {
@@ -470,7 +479,7 @@ async function fix(run, dir, cfg, h, tries, sources) {
     if (git(repo, 'status', '--porcelain', '--untracked-files=all', '--', skill))
         return { result: 'blocked', reason: `fix: ${skill} has uncommitted changes, and maintain fixes the committed skill; commit them, then run again` };
     const agent = selectAgent(cfg);
-    const choice = selectJudge(cfg, agent);
+    const choice = refuseSameSession(selectJudge(cfg, agent));
     const checkout = repoState(repo);
     const wt = join(dir, 'fix');
     const scratch = join(dir, 'tmp');

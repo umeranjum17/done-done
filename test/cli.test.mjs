@@ -4408,7 +4408,7 @@ const pi = argv[0] === '-p';
 const prompt = pi ? readFileSync(0, 'utf8') : readFileSync(argv[argv.indexOf('-f') + 1], 'utf8');
 const mode = readFileSync(${JSON.stringify(join(e.PATH, 'mode'))}, 'utf8').trim();
 const role = pi ? 'judge' : /You fix the verification skill/.test(prompt) ? 'fixer' : /read-only source reader/.test(prompt) ? 'reader' : 'reconcile';
-appendFileSync(${JSON.stringify(log)}, JSON.stringify({ role, cwd: process.cwd(), argv }) + '\\n');
+appendFileSync(${JSON.stringify(log)}, JSON.stringify({ role, cwd: process.cwd(), argv, prompt }) + '\\n');
 let answer;
 if (role === 'judge') {
   const ids = JSON.parse(prompt.trim().split('\\n').pop()).required;
@@ -4420,7 +4420,8 @@ if (role === 'judge') {
   if (mode === 'outside') writeFileSync('src/app.js', 'export const app = 2;\\n');
   answer = { summary: 'renamed the title', blocker: '' };
 } else if (role === 'reader') {
-  answer = { drift: /Feature file[\\s\\S]*OLD/.test(prompt.split('Cited source')[0]) ? [{ claim: 'the title is OLD', why: 'the source names it NEW', file: 'src/app.js', line: 1 }] : [], recipe: 'open home' };
+  const [file, line] = readFileSync(${JSON.stringify(join(e.PATH, 'cite'))}, 'utf8').trim().split(':');
+  answer = { drift: /Feature file[\\s\\S]*OLD/.test(prompt.split('Cited source')[0]) ? [{ claim: 'the title is OLD', why: 'the source names it NEW', file, line: Number(line) }] : [], recipe: 'open home' };
 } else answer = { recipes: [], missing: [] };
 const text = JSON.stringify(answer);
 if (pi) console.log(JSON.stringify({ type: 'message_end', message: { role: 'assistant', content: [{ type: 'text', text }] } }));
@@ -4428,6 +4429,7 @@ else console.log(JSON.stringify({ type: 'text', part: { type: 'text', text } }))
 `;
   for (const b of ['opencode', 'pi']) writeFileSync(join(e.PATH, b), stub, { mode: 0o755 });
   writeFileSync(join(e.PATH, 'mode'), 'good');
+  writeFileSync(join(e.PATH, 'cite'), 'src/app.js:1');
   mkdirSync(t.env.DONE_DONE_HOME, { recursive: true });
   writeFileSync(join(t.env.DONE_DONE_HOME, 'config.yaml'), 'agent: opencode\nagent_config:\n  opencode: { model: opencode-go/author }\njudge:\n  route: answerer:pi\n  model: pi/judge\n');
   const skill = join(t.repo, '.agents', 'skills', 'verify-notes');
@@ -4503,4 +4505,45 @@ test('maintain with auto_fix on a clean skill ends clean with no branch and no j
   assert.deepEqual([r.code, m.result], [0, 'clean'], r.out);
   assert.deepEqual(t.calls().map((c) => c.role), ['reader', 'reconcile']);
   assert.equal(t.branches(), '');
+});
+
+test('maintain with auto_fix refuses a judge that is the fixer\'s own agent and model, even with judge.allow_same', () => {
+  const t = fixSetup(2);
+  writeFileSync(join(t.env.DONE_DONE_HOME, 'config.yaml'), 'agent: opencode\nagent_config:\n  opencode: { model: opencode-go/author }\njudge:\n  route: answerer:opencode\n  model: opencode-go/author\n  allow_same: true\n');
+  const { r, m } = t.maintain();
+  assert.equal(r.code, 2, r.out);
+  assert.match(m.error, /the judge is never the agent that did the work; judge\.allow_same does not apply to maintain fixes/);
+  assert.match(m.help[0], /done-done init --judge <agent> --judge-model <model>/);
+  assert.deepEqual(t.calls(), [], 'no run starts, so no reader, judge or fixer is called');
+  assert.equal(t.branches(), '');
+});
+
+test('maintain with auto_fix triages a bare file name with the first file that has the cited line', () => {
+  const t = fixSetup(2);
+  mkdirSync(join(t.repo, 'api'), { recursive: true });
+  mkdirSync(join(t.repo, 'web'), { recursive: true });
+  writeFileSync(join(t.repo, 'api', 'app.js'), 'export const api = 1;\n');
+  writeFileSync(join(t.repo, 'web', 'app.js'), 'one\ntwo\nthree\nfour\nweb-marker-five\nsix\n');
+  writeFileSync(join(t.repo, '.agents', 'skills', 'verify-notes', 'features', 'home.md'), '# Home\n\nThe title is OLD. See app.js:5.\n');
+  writeFileSync(join(t.e.PATH, 'cite'), 'app.js:5');
+  t.sh('add', '-A');
+  t.sh('commit', '-qm', 'two app.js files');
+  const { r, m } = t.maintain();
+  assert.equal(m.result, 'changed', r.out);
+  const judge = t.calls().find((c) => c.role === 'judge');
+  assert.match(judge.prompt, /web-marker-five/, 'the judge sees the file with the cited line');
+  assert.doesNotMatch(judge.prompt, /export const api/, 'the judge does not see the other same-name file');
+});
+
+test('maintain with auto_fix leaves out a cited file the numbered source would push past the 60,000 cap', () => {
+  const t = fixSetup(0);
+  const body = 'ab\n'.repeat(6666);
+  for (const n of ['one', 'two', 'three']) writeFileSync(join(t.repo, `${n}.txt`), body);
+  writeFileSync(join(t.repo, '.agents', 'skills', 'verify-notes', 'features', 'home.md'), '# Home\n\nThe notes are in one.txt:1, two.txt:1 and three.txt:1.\n');
+  t.sh('add', '-A');
+  t.sh('commit', '-qm', 'three notes');
+  const { r, m } = t.maintain();
+  assert.deepEqual([r.code, m.result], [0, 'clean'], r.out);
+  const left = m.findings.find((f) => f.kind === 'truncated');
+  assert.match(left?.what ?? '', /1 cited files were left out \(three\.txt\)/);
 });

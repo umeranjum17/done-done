@@ -8,7 +8,7 @@ import { home, KEY_ROUTES, parseDuration, UsageError } from './config.js';
 import { downscaleToPng } from './media.js';
 const MAX_SIDE = 1280; // long edge sent to the model, in pixels
 const MAX_CALLS = 10; // model requests per check; later captures are unsure
-const VERSION = 2; // bump when QUESTION or the cache key changes, so older cached verdicts are not reused
+export const VERSION = 2; // bump when QUESTION or the cache key changes, so older cached verdicts are not reused
 const OPTIONS = {
     correct: 'The screenshot shows the screen and state the outcome describes.',
     wrong: 'The screenshot shows a different screen, an error, a crash, a dialog or overlay (such as a keyboard) hiding the content, or a state that contradicts the outcome.',

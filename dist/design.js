@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 import { home } from './config.js';
-import { askJudge, backend, judgeable, prepare, readCache, writeCache } from './judge.js';
+import { askJudge, backend, judgeable, prepare, readCache, VERSION, writeCache } from './judge.js';
 import { decodePixels } from './media.js';
 // The defect kinds, each its own question. Each asks for something the judge can see and measure, not whether it was
 // meant that way: a cheap model talks itself out of a judgment ("an intentional style", "the viewer's border"), not out of
@@ -162,7 +162,7 @@ export async function design(cfg, choice, screens, records) {
             reason = `not judged: ${typeof shot === 'string' ? shot : mock}`;
         else {
             const withMock = !!mock;
-            const key = createHash('sha256').update(JSON.stringify([s.sha256, s.mock?.sha256 ?? null, questions(withMock), choice.route, choice.model])).digest('hex');
+            const key = createHash('sha256').update(JSON.stringify([VERSION, s.sha256, s.mock?.sha256 ?? null, questions(withMock), choice.route, choice.model])).digest('hex');
             const hit = readCache(dir, key);
             cached = Array.isArray(hit?.defects) && Array.isArray(hit?.unsure);
             let judge = cached ? hit : undefined;

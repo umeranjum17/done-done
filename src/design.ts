@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import type { Question } from '@byokit/decide';
 import type { JudgeChoice } from './agents.js';
 import { type Config, home } from './config.js';
-import { askJudge, backend, type Capture, type Judge, judgeable, prepare, readCache, writeCache } from './judge.js';
+import { askJudge, backend, type Capture, type Judge, judgeable, prepare, readCache, VERSION, writeCache } from './judge.js';
 import { decodePixels } from './media.js';
 
 // The design check: one judge request per screen, alone or next to its approved mock, with one question per defect
@@ -164,7 +164,7 @@ export async function design(cfg: Config, choice: JudgeChoice, screens: Screen[]
     if (typeof shot === 'string' || typeof mock === 'string') reason = `not judged: ${typeof shot === 'string' ? shot : mock}`;
     else {
       const withMock = !!mock;
-      const key = createHash('sha256').update(JSON.stringify([s.sha256, s.mock?.sha256 ?? null, questions(withMock), choice.route, choice.model])).digest('hex');
+      const key = createHash('sha256').update(JSON.stringify([VERSION, s.sha256, s.mock?.sha256 ?? null, questions(withMock), choice.route, choice.model])).digest('hex');
       const hit = readCache(dir, key);
       cached = Array.isArray(hit?.defects) && Array.isArray(hit?.unsure);
       let judge: { defects: Defect[]; unsure: string[] } | undefined = cached ? hit : undefined;

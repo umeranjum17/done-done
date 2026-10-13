@@ -606,7 +606,7 @@ async function runCheck(argv, run) {
                 await withAgent(cfg);
             if (captures.some(judgeable))
                 run?.judging(findings.length ? INCONCLUSIVE : PASS, [...findings]);
-            const j = await judge(cfg, () => selectJudge(cfg, selectAgent(cfg)), claim.outcome, captures, run ? join(run.dir, 'agents') : join(home(), 'agents'));
+            const j = await judge(cfg, () => selectJudge(cfg, run?.author ? agentRun(cfg, run.author.agent, run.author.model) : selectAgent(cfg)), claim.outcome, captures, run ? join(run.dir, 'agents') : join(home(), 'agents'));
             // The judge's next step leads the help when its verdict decides the result.
             if (j.judged.some((r) => r.verdict === 'fail'))
                 judgeLevel = 'fail';
@@ -837,6 +837,8 @@ const HEARTBEAT_MS = 5_000;
 const STALE_MS = 60_000;
 const runsRoot = (app) => join(home(), 'runs', app);
 const STEPS = ['resolve', 'drive', 'check', 'judge', 'gate', 'receipt', 'report'];
+// Commands an agent drive must not run: they answer a gate, write a receipt or start a run that can write one.
+const DRIVE_REFUSED = ['respond', 'receipt', 'verify', 'rerun'];
 // One agent drive may launch the app, drive it and save captures; past this it is killed with everything it started.
 const DRIVE_SCHEMA = {
     type: 'object',
@@ -941,7 +943,7 @@ Outcome to prove: ${run.claim}
 3. Save PNG screenshots of what a user sees, the action and the resulting state, into ${evidence} (also in $DONE_DONE_EVIDENCE_ROOT). Save nothing else there, and never edit a capture.
 4. Stop everything you started.
 
-Do not change any file in the repository. Put logs and other scratch files in ${scratch} (also in $TMPDIR), never in /tmp.
+Do not change any file in the repository. Do not run done-done: it refuses inside a drive, and done-done answers the run after you stop. Put logs and other scratch files in ${scratch} (also in $TMPDIR), never in /tmp.
 Keep working until all four steps are done: your next message without a tool call ends the drive and must be the answer.
 If you cannot launch the app or reach the feature, say why in blocker and save no capture.
 Answer with feature (the feature file you drove, such as features/<name>.md), captures (the file names you saved) and blocker ("" when you drove it).`;
@@ -1034,7 +1036,7 @@ async function runSteps(dir) {
             mkdirSync(scratch, { recursive: true });
             const a = await askAgent({
                 ...agentRun(cfg, author.agent, author.model), prompt: drivePrompt(run, cfg, evidence, scratch), schema: DRIVE_SCHEMA, cwd: run.repo, tools: 'edit',
-                record: join(dir, 'agents', 'drive.json'), dirs: [evidence, scratch], env: { DONE_DONE_RUN_ID: rec.run_id, DONE_DONE_EVIDENCE_ROOT: evidence, TMPDIR: scratch },
+                record: join(dir, 'agents', 'drive.json'), dirs: [evidence, scratch], env: { DONE_DONE_RUN_ID: rec.run_id, DONE_DONE_DRIVE: rec.run_id, DONE_DONE_EVIDENCE_ROOT: evidence, TMPDIR: scratch },
                 onSpawn: (pgid) => {
                     run.runner.journey_pgid = pgid;
                     saveRun(dir, run);
@@ -1092,7 +1094,7 @@ async function runSteps(dir) {
             set(step, code === PASS ? 'completed' : 'failed', { exit: code, findings });
             begin('judge');
         };
-        const checked = await runCheck(['--outcome', run.claim, ...files, ...(run.claim_id ? ['--claim-id', run.claim_id] : []), ...(run.judge ? ['--judge'] : [])], { dir, judging });
+        const checked = await runCheck(['--outcome', run.claim, ...files, ...(run.claim_id ? ['--claim-id', run.claim_id] : []), ...(run.judge ? ['--judge'] : [])], { dir, judging, author: run.author });
         const logged = { ...checked.result, findings: checked.findings };
         delete logged.findings_omitted;
         log('check', logged);
@@ -2471,6 +2473,8 @@ async function main(argv) {
         return PASS;
     }
     try {
+        if (process.env.DONE_DONE_DRIVE && DRIVE_REFUSED.includes(cmd))
+            throw new UsageError(`${cmd} cannot run inside an agent drive: the agent that did the work never answers a gate, writes a receipt or starts a run`, 'Stop the drive and report what you captured; done-done answers the run and writes the receipt');
         if (cmd === 'init')
             return await cmdInit(rest);
         if (cmd === 'doctor')

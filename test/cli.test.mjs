@@ -1914,10 +1914,19 @@ test('verify with no journey: the author agent drives the verify skill feature, 
     symlinkSync(process.execPath, join(s.bin, 'node'));
     writeFileSync(join(s.bin, 'claude'), `#!${process.execPath}
 const { appendFileSync, copyFileSync, readFileSync, writeFileSync } = require('node:fs');
+const { spawnSync } = require('node:child_process');
 appendFileSync(${JSON.stringify(join(s.bin, 'calls.jsonl'))}, JSON.stringify({ agent: 'claude', argv: process.argv.slice(2), stdin: readFileSync(0, 'utf8'), cwd: process.cwd(), evidence: process.env.DONE_DONE_EVIDENCE_ROOT, tmp: process.env.TMPDIR }) + '\\n');
 copyFileSync(${JSON.stringify(join(t.dir, 'screen.png'))}, process.env.DONE_DONE_EVIDENCE_ROOT + '/note.png');
 if (process.env.DRIVE === 'edit') appendFileSync('src/app.js', '// changed\\n');
 if (process.env.DRIVE === 'log') writeFileSync(process.env.DONE_DONE_EVIDENCE_ROOT + '/session.log', 'ok\\n');
+if (process.env.DRIVE === 'switch') writeFileSync(process.env.DONE_DONE_HOME + '/config.yaml', 'agent: opencode\\n');
+if (process.env.DRIVE === 'probe') {
+  const probes = [['respond', '--action', 'approve', '--reason', 'looks fine'], ['receipt', '--verify', 'HEAD'], ['verify', '--outcome', 'x']].map((argv) => {
+    const r = spawnSync(process.execPath, [${JSON.stringify(CLI)}, ...argv], { encoding: 'utf8' });
+    return { command: argv[0], status: r.status, out: r.stdout + r.stderr };
+  });
+  appendFileSync(${JSON.stringify(join(s.bin, 'calls.jsonl'))}, JSON.stringify({ probe: probes }) + '\\n');
+}
 process.stdout.write(JSON.stringify({ type: 'result', is_error: false, structured_output: { feature: 'features/add-note.md', captures: process.env.DRIVE === 'log' ? ['note.png', 'session.log'] : ['note.png'], blocker: '' } }));
 `, { mode: 0o755 });
     return s;
@@ -1972,6 +1981,18 @@ process.stdout.write(JSON.stringify({ type: 'result', is_error: false, structure
   assert.equal(t.dd('abort', '--run', abortRun.o.run_id).code, 0);
   assert.equal(toon(t.dd('status', '--run', abortRun.o.run_id)).status, 'cancelled');
   assert.equal(t.dd('respond', '--run', abortRun.o.run_id, '--action', 'fix').code, 2);
+  // A drive cannot answer its gate, write a receipt or start a run: those commands exit 2 inside it.
+  const probe = verify({ ...right.env, DRIVE: 'probe' }, 'the note Umer added shows in the list');
+  assert.equal(probe.code, 0, probe.out);
+  const probed = right.calls().find((c) => c.probe).probe;
+  assert.deepEqual(probed.map((p) => [p.command, p.status]), [['respond', 2], ['receipt', 2], ['verify', 2]]);
+  assert.match(probed[0].out, /cannot run inside an agent drive/);
+  // The judge is apart from the author the run recorded, even when the config names another agent during the drive.
+  const seen = right.calls().length;
+  const switched = verify({ ...right.env, DRIVE: 'switch' }, 'the note Umer added shows in the list after a switch');
+  writeFileSync(join(t.env.DONE_DONE_HOME, 'config.yaml'), 'agent: claude\n');
+  assert.equal(switched.code, 0, switched.out);
+  assert.deepEqual(right.calls().slice(seen + 1).map((c) => c.agent), ['opencode'], 'the judge is not the drive agent claude');
   // A capture the judge cannot read is not covered by the judge's pass on the others: the run parks at the gate.
   const logged = verify({ ...right.env, DRIVE: 'log' }, 'the note Umer added shows in the list');
   assert.equal(logged.code, 4, logged.out);

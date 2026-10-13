@@ -151,7 +151,7 @@ done-done receipt --outcome "it starts" ~/.done-done/evidence/your-app/*/*.log
 done-done receipt --verify "$(git rev-parse HEAD)"
 ```
 
-No journey yet? `done-done verify --outcome "<what a user can now do>"` has your coding agent drive one feature of the verify skill the way a user does (`--feature <name>` picks it). A judge that is not the author's own agent and model then checks the screenshots. When it says a screenshot is wrong or unclear, the run waits at its gate (exit 4) until you answer with `done-done respond --action approve|skip --reason "<why>"` or `--action fix`. Approve and skip are logged with who and why, and they end the run `overridden`, never `pass`, so `receipt --verify` still refuses it ([details](docs/reference.md#drive-by-agent)).
+No journey yet? `done-done verify --outcome "<what a user can now do>"` has your coding agent drive one feature of the verify skill the way a user does (`--feature <name>` picks it). A judge that is not the author's own agent and model then checks the screenshots. When it says a screenshot is wrong or unclear, or a capture it cannot read (a log or video) is not judged, the run waits at its gate (exit 4) until you answer with `done-done respond --action approve|skip --reason "<why>"` or `--action fix`. Approve and skip are logged with who and why, and they end the run `overridden`, never `pass`, so `receipt --verify` still refuses it ([details](docs/reference.md#drive-by-agent)).
 
 Run `done-done` with no arguments to see the current config and the next step.
 

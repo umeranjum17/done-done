@@ -29,6 +29,8 @@ export const CHEAP = {
     opencode: { model: 'opencode-go/muse-spark-1.3-contributor', effort: 'low' },
     gemini: { model: 'flash-lite' },
 };
+// The steps auto_fix can name; maintain is the only one done-done fixes yet.
+export const AUTO_FIX_STEPS = ['maintain'];
 export const EFFORTS = ['minimal', 'low', 'medium', 'high', 'xhigh', 'max'];
 // Each CLI's own reasoning-effort flag; an agent not here has none, so agent_config.<agent>.effort is refused for it.
 export const EFFORT_FLAGS = {
@@ -41,6 +43,7 @@ const AGENT_TIMEOUT = '30m';
 // Where each key may be set. Global-only keys describe the machine; repo-only keys describe the project; `any` may be in either.
 const KEYS = {
     agent: { scope: 'any', type: 'agent' },
+    auto_fix: { scope: 'any', type: 'auto_fix' },
     agent_config: { scope: 'global', type: 'agent_config' },
     agent_args_override: { scope: 'global', type: 'args' },
     agent_path_override: { scope: 'global', type: 'paths' },
@@ -62,7 +65,7 @@ const KEYS = {
     'judge.allow_same': { scope: 'global', type: 'boolean' },
 };
 const SECTIONS = new Set(['evidence', 'checks', 'judge']);
-const MAPS = new Set(['agent_config', 'agent_args_override', 'agent_path_override', 'judge.claude_code']);
+const MAPS = new Set(['auto_fix', 'agent_config', 'agent_args_override', 'agent_path_override', 'judge.claude_code']);
 export const home = () => process.env.DONE_DONE_HOME || join(homedir(), '.done-done');
 // A duration such as 90s, 30m or 1h, in milliseconds; null when the text is not one or is not a delay a timer can run.
 export const parseDuration = (text) => {
@@ -121,7 +124,8 @@ function apply(target, text, file, scope) {
                                         : spec.type === 'paths' ? isMap(value) && Object.entries(value).every(([a, v]) => AGENTS.includes(a) && isBin(v))
                                             : spec.type === 'bin' ? isBin(value)
                                                 : spec.type === 'duration' ? typeof value === 'string' && parseDuration(value) !== null
-                                                    : isMap(value) && Object.values(value).every((j) => j && typeof j.command === 'string');
+                                                    : spec.type === 'auto_fix' ? isMap(value) && Object.entries(value).every(([k, n]) => AUTO_FIX_STEPS.includes(k) && Number.isInteger(n) && n >= 0)
+                                                        : isMap(value) && Object.values(value).every((j) => j && typeof j.command === 'string');
         const want = {
             journeys: 'a map of name: {command: <string>}',
             agent: `one of ${AGENTS.join(', ')}, or acp:<target>`,
@@ -130,6 +134,7 @@ function apply(target, text, file, scope) {
             paths: `a map of <agent>: <binary name or absolute path> for ${AGENTS.join(', ')}`,
             bin: 'a binary name on PATH or an absolute path',
             duration: 'a duration such as 90s, 30m or 1h',
+            auto_fix: `a map of <step>: <attempts, 0 or more> for ${AUTO_FIX_STEPS.join(', ')}`,
             route: `claude-code (for claude), answerer:<agent> for one of ${ANSWERER_JUDGES.join(', ')}, or a key route (${Object.keys(KEY_ROUTES).join(', ')}); codex cannot judge yet (done-done cannot start it), nor can an acp:<target> agent (done-done cannot send it an image)`,
             claude_code: 'a map with config_dir, a string (the claude binary is agent_path_override.claude)',
         };
@@ -191,6 +196,7 @@ function defaultConfig(repo) {
         agent_path_override: {},
         acpx_path: 'acpx',
         agent_timeout: AGENT_TIMEOUT,
+        auto_fix: {},
         app: basename(repo),
         skill: '',
         journeys: {},
@@ -244,6 +250,12 @@ acpx_path: acpx
 
 # How long one agent call (a reader, the judge, the doctor probe) may run: 90s, 30m or 1h.
 agent_timeout: ${AGENT_TIMEOUT}
+
+# How many times done-done's agent may fix a step's findings, per step (a repo's .done-done.yaml may set it too).
+# 0 reports only. maintain: the agent edits only the verify skill, then maintain runs again; a clean end is one commit on
+# a done-done/maintain-<run-id> branch, never on your branch.
+auto_fix:
+  maintain: 0
 
 # Evidence storage.
 evidence:

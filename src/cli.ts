@@ -1408,7 +1408,7 @@ async function cmdRerun(argv: string[]): Promise<number> {
   const driveReuse = same && drivesClean(src.record, src.inputs?.head);
   const reused = (name: string) => (name === 'resolve' && same) || (name === 'drive' && driveReuse);
   // A rerun judges as its source did; --no-judge turns it off for this run. A missing or forbidden judge is a usage
-  // error here too. Steps follow the current list, so a run from before the judge step gains it.
+  // error here too.
   const judging = !values['no-judge'] && !!src.judge;
   if (judging) await preflightJudge(cfg);
   const id = newRunId(git(repo, 'rev-parse', 'HEAD'));

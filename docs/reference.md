@@ -382,7 +382,7 @@ agent_timeout: 30m                    # one agent call: 90s, 30m or 1h
 evidence:
   local_root: ~/.done-done/evidence   # evidence root for repos that set none (<local_root>/<app>)
 judge:                                # done-done's own judge; verify starts it by default
-  # route: claude-code                # claude-code, answerer:<agent> (opencode, pi, gemini) or openai:key (reads OPENAI_API_KEY), set by you (init --judge) and unset until then
+  # route: claude-code                # claude-code, answerer:<agent> (opencode, pi, gemini) or openai:key (reads OPENAI_API_KEY), set by you (`init --judge` saves the first three; `openai:key` is set by hand) and unset until then
   model: ''                           # default: that agent's agent_config model
   allow_same: false                   # true: accept a judge that is the author's own agent and model
   claude_code:                        # the claude-code route only

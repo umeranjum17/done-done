@@ -481,15 +481,14 @@ export function refuseSameSession(choice) {
 }
 // The fix-branch flow every auto_fix step shares: the user's agent edits a detached done-done worktree, plain code
 // checks each attempt, and done-done makes the commit; the user's branch and checkout are never touched.
-// Every path the fixer changed in the worktree since `base`: tracked edits (and commits) and new files; ignored ones too
-// unless `ignored` is false (a product build may write ignored output that is never committed).
-export const changedSince = (wt, base, ignored = true) => [...new Set([...git(wt, 'diff', '--name-only', '--no-renames', '-z', base).split('\0'), ...git(wt, 'ls-files', '--others', ...(ignored ? [] : ['--exclude-standard']), '-z').split('\0')])].filter(Boolean);
+// Every path the fixer changed in the worktree since `base`: tracked edits (and commits) and new files; ignored ones too.
+export const changedSince = (wt, base) => [...new Set([...git(wt, 'diff', '--name-only', '--no-renames', '-z', base).split('\0'), ...git(wt, 'ls-files', '--others', '-z').split('\0')])].filter(Boolean);
 export const named = (paths) => `${paths.slice(0, LEFT_NAMED).join(', ')}${paths.length > LEFT_NAMED ? `, +${paths.length - LEFT_NAMED} more` : ''}`;
 export const dirtyTracked = (repo) => git(repo, 'diff', '--name-only', '--no-renames', '-z', 'HEAD').split('\0').filter(Boolean);
-// A detached done-done worktree at `commit` for the body, removed after it whatever happens; a branch made from it stays.
-export async function inWorktree(repo, wt, commit, body) {
+// A detached done-done worktree at HEAD for the body, removed after it whatever happens; a branch made from it stays.
+export async function inWorktree(repo, wt, body) {
     // ponytail: a runner killed mid-fix leaves the worktree registered; `git worktree prune` clears it once the run folder is gone.
-    git(repo, 'worktree', 'add', '-q', '--detach', wt, commit);
+    git(repo, 'worktree', 'add', '-q', '--detach', wt, 'HEAD');
     try {
         return await body(git(wt, 'rev-parse', 'HEAD').trim());
     }
@@ -547,7 +546,7 @@ async function fix(run, dir, cfg, h, tries, sources) {
     const rounds = [];
     const judged = [];
     let open = (run.findings ?? []).filter((f) => !NOTICE.has(f.kind));
-    return inWorktree(repo, wt, 'HEAD', async (base) => {
+    return inWorktree(repo, wt, async (base) => {
         for (let k = 1; k <= tries; k++) {
             let step = h.begin('triage');
             const asks = await triageDrift(cfg, choice, wt, open, sources, join(dir, 'agents', `triage-${k}.json`));

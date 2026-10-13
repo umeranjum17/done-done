@@ -47,7 +47,8 @@ const DOCTOR_TEXT = `doctor changes nothing except the --probe call record (the 
   optional: verify_skill (.agents/skills/verify-<app>/), agent (the agent the user set and its model; missing when none is
   set, with the command that saves the user's choice), agent_settings (agent, model, effort,
   args, path and agent_timeout, each with the file it came from: the global config, .done-done.yaml or default), judge (the judge route is ready: for claude-code an
-  executable claude binary, a sign-in folder and the judge kit, for answerer:<agent> that agent's CLI and the kit; the model is never called),
+  executable claude binary, a sign-in folder and the judge kit, for answerer:<agent> that agent's CLI and the kit, for openai:key
+  OPENAI_API_KEY and the kit; the model is never called),
   judge_choice (the judge, and how far it is from the author: another agent, another model, or session-only), ffprobe (video evidence only).
   --probe also asks the agent one JSON-schema question (one call at the agent's model: its cheap default where it has one, else its own; set agent_config.<agent>.model to choose; its record goes to
   $DONE_DONE_HOME/agents/) and then requires a valid answer.
@@ -196,7 +197,8 @@ ${rows([['done-done', "show this repo's config state and the next step"], ...Obj
 ${GLOBAL_TEXT}
 --judge (or judge.enabled: true): a model on your own plan, through BYOKit, says whether each PNG/JPEG capture
   shows the outcome; a wrong screen fails, an unsure answer is inconclusive. Off by default. The judge is judge.route
-  (claude-code, or answerer:<agent> through that agent's CLI), or with auto the first installed agent that is not the author; with only the author's agent, its cheap model (a fresh session of the author's own model only when that cheap model is the same).
+  (claude-code; answerer:<agent> through the CLI of opencode, pi or gemini with every tool off; or openai:key with judge.model on your own
+  OPENAI_API_KEY), or with auto the first installed agent that is not the author; with only the author's agent, its cheap model (a fresh session of the author's own model only when that cheap model is the same).
 
 ${JOURNEYS_TEXT}
 ${CHECKS_TEXT}

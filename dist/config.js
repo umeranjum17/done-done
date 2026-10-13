@@ -12,14 +12,18 @@ export class UsageError extends Error {
 }
 // The coding agents a user can set as agent.
 export const AGENTS = ['claude', 'codex', 'opencode', 'pi', 'gemini'];
-// The agents whose CLI can read an attached image, so they judge through the answerer route; claude judges through claude-code.
-export const ANSWERER_JUDGES = ['opencode'];
+// The agents whose CLI can read an attached image with every tool off, so they judge through the answerer route;
+// claude judges through claude-code. codex has no adapter yet, and an acp:<target> agent cannot be sent an image.
+export const ANSWERER_JUDGES = ['opencode', 'pi', 'gemini'];
+// BYOKit key routes: a judge on the user's own API key, read from this environment variable, with no agent CLI.
+export const KEY_ROUTES = { 'openai:key': 'OPENAI_API_KEY' };
 // Or acp:<target>, any agent the user's acpx bridge can start; the target is one argv word, so it never reads as a flag.
 export const isAgent = (v) => AGENTS.includes(v) || (typeof v === 'string' && /^acp:[A-Za-z0-9][\w.-]*$/.test(v));
 // The cost guard is this table: a default model for an agent here is always its cheap one, never a flagship,
 // whatever the vendor; any other model runs only when the user names it. gemini's is the CLI's own
 // `flash-lite` alias (its cli-reference.md: the fastest model for simple tasks). pi and acp:<target> have no public
 // cheap alias, so they run their own configured default model, and agent_config.<agent>.model caps their cost.
+// As a judge, pi has no default: answerer:pi needs judge.model or agent_config.pi.model, a model that reads images.
 export const CHEAP = {
     claude: { model: 'claude-haiku-5-5', effort: 'low' },
     opencode: { model: 'opencode-go/muse-spark-1.3-contributor', effort: 'low' },
@@ -110,7 +114,7 @@ function apply(target, text, file, scope) {
             : spec.type === 'boolean' ? typeof value === 'boolean'
                 : spec.type === 'string[]' ? Array.isArray(value) && value.every((v) => typeof v === 'string')
                     : spec.type === 'agent' ? isAgent(value)
-                        : spec.type === 'route' ? typeof value === 'string' && (['', 'auto', 'claude-code'].includes(value) || ANSWERER_JUDGES.some((a) => value === `answerer:${a}`))
+                        : spec.type === 'route' ? typeof value === 'string' && (['', 'auto', 'claude-code'].includes(value) || Object.hasOwn(KEY_ROUTES, value) || ANSWERER_JUDGES.some((a) => value === `answerer:${a}`))
                             : spec.type === 'claude_code' ? isMap(value) && Object.entries(value).every(([k, v]) => k === 'config_dir' && typeof v === 'string')
                                 : spec.type === 'agent_config' ? isMap(value) && Object.entries(value).every(([a, c]) => isAgent(a) && isMap(c) && Object.entries(c).every(([k, m]) => ['model', 'effort'].includes(k) && typeof m === 'string'))
                                     : spec.type === 'args' ? isMap(value) && Object.entries(value).every(([a, v]) => AGENTS.includes(a) && Array.isArray(v) && v.every((x) => typeof x === 'string'))
@@ -126,7 +130,7 @@ function apply(target, text, file, scope) {
             paths: `a map of <agent>: <binary name or absolute path> for ${AGENTS.join(', ')}`,
             bin: 'a binary name on PATH or an absolute path',
             duration: 'a duration such as 90s, 30m or 1h',
-            route: `auto, claude-code (for claude), or answerer:<agent> for one of ${ANSWERER_JUDGES.join(', ')}`,
+            route: `auto, claude-code (for claude), answerer:<agent> for one of ${ANSWERER_JUDGES.join(', ')}, or a key route (${Object.keys(KEY_ROUTES).join(', ')}); codex cannot judge yet (done-done cannot start it), nor can an acp:<target> agent (done-done cannot send it an image)`,
             claude_code: 'a map with config_dir, a string (the claude binary is agent_path_override.claude)',
         };
         if (key === 'agent' && value === '')

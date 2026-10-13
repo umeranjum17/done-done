@@ -5,11 +5,12 @@ import { tmpdir } from 'node:os';
 import { delimiter, isAbsolute, join } from 'node:path';
 import type { Backend, Question } from '@byokit/decide';
 import { agentRun, askAgent, claudeBin, type JudgeChoice } from './agents.js';
-import { type Config, home, parseDuration, UsageError } from './config.js';
+import { type Config, home, KEY_ROUTES, parseDuration, UsageError } from './config.js';
 import { downscaleToPng, type Verdict } from './media.js';
 
 // The relevance judge: one question about one downscaled capture and the claim's outcome line, asked through a
-// BYOKit decide backend on the user's own plan: the claude-code route, or the answerer backend over another agent's CLI.
+// BYOKit decide backend on the user's own plan or key: the claude-code route, the answerer backend over another
+// agent's CLI, or a key route (the kit's openai backend on the user's API key).
 
 export type Capture = { name: string; bytes: Buffer; sha256: string; media: Verdict };
 export type Judged = { path: string; sha256: string; verdict: 'pass' | 'fail' | 'unsure'; reason: string; cached: boolean };
@@ -78,7 +79,7 @@ async function kit() {
   if (major < 22 || (major === 22 && minor < 18))
     throw new UsageError(`judge: the judge needs Node 22.18 or later (this is ${process.versions.node})`, 'Install Node 22.18 or later, then re-run this command');
   try {
-    return { ...(await import('@byokit/decide/claude-code')), ...(await import('@byokit/decide/slim')) };
+    return { ...(await import('@byokit/decide/claude-code')), ...(await import('@byokit/decide')) };
   } catch (e) {
     if ((e as NodeJS.ErrnoException).code !== 'ERR_MODULE_NOT_FOUND') throw e;
     throw new UsageError(`judge: the judge needs the optional ${KIT} kit, which is not installed`, `Run this check with the kit: npx -y --allow-git=all -p github:umeranjum17/done-done-axi -p ${KIT} done-done-axi ${process.argv.slice(2).map(quote).join(' ')}`);
@@ -92,6 +93,15 @@ export type Judge = { ask: Backend['ask']; resolve: typeof import('@byokit/decid
 // questions: what each request asks, so the answerer can ask its agent for that answer shape; attempts: asks per request
 // when the answer is malformed.
 export async function backend(cfg: Config, choice: JudgeChoice, record = () => '', questions: Record<string, Question> = { relevance: QUESTION }, attempts = 1): Promise<Judge & { detail: string }> {
+  if (Object.hasOwn(KEY_ROUTES, choice.route)) {
+    const name = KEY_ROUTES[choice.route];
+    // The kit never reads the environment: done-done reads the key here and hands it only to the kit.
+    const key = process.env[name];
+    if (!key) throw new UsageError(`judge: ${choice.route} needs your own API key in ${name}, which is not set`, `Export ${name} with your key, then re-run this command`);
+    const { openai, resolve } = await kit();
+    const ask = openai({ model: choice.model, key, supportsImages: true, maxRetries: 0 }).ask;
+    return { ask, resolve, lastError: () => '', signIn: '', signedIn: () => true, detail: `${name} is set and the judge kit is present` };
+  }
   const timeoutMs = parseDuration(cfg.agent_timeout)!;
   const override = cfg.agent_path_override[choice.agent];
   if (choice.route !== 'claude-code') {
@@ -107,23 +117,15 @@ export async function backend(cfg: Config, choice: JudgeChoice, record = () => '
       supportsImages: true,
       ask: async (prompt, _signal, images) => {
         lastError = '';
-        const dir = mkdtempSync(join(tmpdir(), 'done-done-judge-'));
-        try {
-          const files = images.map((img) => {
-            const file = join(dir, `${img.id}.${img.mime.split('/')[1]}`);
-            writeFileSync(file, Buffer.from(img.dataUrl.slice(img.dataUrl.indexOf(',') + 1), 'base64'), { mode: 0o600 });
-            return file;
-          });
-          const a = askAgent({ ...run, prompt, schema: answerSchema(questions), cwd: dir, tools: 'none', attempts, record: record(), files });
-          lastError = a.ok ? '' : a.error ?? 'no answer';
-          if (!a.ok) throw new Error(lastError);
-          return JSON.stringify(a.answer);
-        } finally {
-          rmSync(dir, { recursive: true, force: true });
-        }
+        const attached = images.map((img) => ({ name: `${img.id}.${img.mime.split('/')[1]}`, bytes: Buffer.from(img.dataUrl.slice(img.dataUrl.indexOf(',') + 1), 'base64') }));
+        // A tool-less call runs in its own scratch folder, so the CLI sees the attached capture and nothing else.
+        const a = askAgent({ ...run, prompt, schema: answerSchema(questions), cwd: tmpdir(), tools: 'none', attempts, record: record(), images: attached });
+        lastError = a.ok ? '' : a.error ?? 'no answer';
+        if (!a.ok) throw new Error(lastError);
+        return JSON.stringify(a.answer);
       },
     }).ask;
-    return { ask, resolve, lastError: () => lastError, signIn: '', signedIn: () => true, detail: `${choice.agent} at ${bin} and the judge kit are present` };
+    return { ask, resolve, lastError: () => lastError, signIn: '', signedIn: () => true, detail: `${choice.agent} at ${bin} and the judge kit are present; it judges with every tool off` };
   }
   const bin = claudeBin(cfg);
   const dir = cfg.judge.claude_code.config_dir;
@@ -164,7 +166,7 @@ export async function askJudge(cfg: Config, be: Judge, choice: JudgeChoice, stat
     // The kit reports a signed-out binary, a bad model id and a used-up plan all as 'process', so ask the binary which.
     if (choice.route === 'claude-code' && (code === 'subscription_required' || (code === 'process' && !be.signedIn())))
       throw new UsageError(`judge: ${why} (sign-in ${cfg.judge.claude_code.config_dir})`, `Sign in once with your Claude plan: ${be.signIn}`);
-    const hint = code === 'process' ? ` (check judge.model ${choice.model} and your plan's usage limit)` : '';
+    const hint = code === 'process' ? ` (check judge.model ${choice.model} and your plan's usage limit)` : Object.hasOwn(KEY_ROUTES, choice.route) ? ` (check judge.model ${choice.model} and the key in ${KEY_ROUTES[choice.route]})` : '';
     return `the judge did not answer: ${why}${hint}`;
   }
 }

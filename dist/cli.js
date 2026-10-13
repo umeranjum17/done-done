@@ -1470,8 +1470,8 @@ async function cmdRerun(argv) {
     if (['pending', 'running'].includes(src.status) && group && alive(-group))
         throw new UsageError(`the journey of run ${srcId} is still running, so it cannot be rerun yet`, `Read it: done-done status --run ${srcId}`);
     // The rerun keeps its source's claim and branch, so the gate it is checked against is the source's.
-    const branch = src.branch ?? git(repo, 'branch', '--show-current');
-    refuseParked(cfg, repo, src.claim_id ?? branch);
+    const branch = src.branch ?? git(src.repo, 'branch', '--show-current');
+    refuseParked(cfg, src.repo, src.claim_id ?? branch);
     // A source run with no journey is driven again by the author agent config names now; schema 2 runs before PR 4 always had a journey.
     const journey = src.journey ?? null;
     const drive = journey === null ? await agentDrive(src.repo, cfg, src.feature) : undefined;

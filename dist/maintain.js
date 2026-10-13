@@ -103,8 +103,14 @@ function citeWhy(repo, tracked, name, line, end = line) {
     const files = citedFiles(repo, tracked, name);
     if (!files.length)
         return name.includes('/') ? citeProblem(repo, name, line, end) || `${name} is not a tracked file` : `no tracked file is named ${name}`;
-    const whys = files.map((p) => citeProblem(repo, p, line, end));
-    return whys.includes('') ? '' : whys[0];
+    let first;
+    for (const p of files) {
+        const why = citeProblem(repo, p, line, end);
+        if (!why)
+            return '';
+        first ??= why;
+    }
+    return first ?? '';
 }
 // The text of a tracked file that a feature cites, when it is a regular file inside the repo that can be read.
 const citedText = (repo, p) => {

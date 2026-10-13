@@ -150,7 +150,7 @@ matrix:
     - { theme: dark, form: phone, reason: "dark phone ships next quarter" }
 ```
 
-Each axis is optional; done-done expands the set axes into cells and drops skipped ones. Theme and form names use letters, digits, `-` and `_` (a dot would blur the capture names); widths are CSS pixels. A skip entry is a partial cell (any of `theme`, `width`, `form`) plus a `reason`: it drops every cell agreeing on each axis it names. With no `matrix` block, journeys run once, as before.
+Each axis is optional; done-done expands the set axes into cells and drops skipped ones. Theme and form names use letters, digits, `-` and `_` (a dot would blur the capture names); widths are CSS pixels. A skip entry is a partial cell (any of `theme`, `width`, `form`) plus a `reason`: it drops every cell agreeing on each axis it names; a skip that matches no cell, or a matrix that skips every cell, is a config error. With no `matrix` block, journeys run once, as before.
 
 Each journey runs once per required cell, with `DONE_DONE_THEME`, `DONE_DONE_WIDTH`, `DONE_DONE_FORM` and `DONE_DONE_CELL` (the capture name suffix: `dark.390w.phone` for that cell) set. The recipe sets the app's theme and width from those values - done-done never knows how - and names each capture with its suffix. An agent drive instead names every cell and suffix in its prompt. The run record and `status` carry the manifest: every required cell with its captures, every skipped cell with its reason. Verify's check, `done-done check` and `receipt` all fail naming the missing cell when a non-skipped cell has no capture, so every proof of HEAD covers every cell: captured or skipped with a reason, never silently missing.
 

@@ -2766,7 +2766,11 @@ test('doctor finds agent, judge and ffprobe binaries from PATH; missing optional
   const codexOnly = toon(doctorIn(repo, pathEnv(env, ['codex']), 'doctor'));
   assert.deepEqual([codexOnly.checks[4].status, codexOnly.checks[4].fix], ['ok', '']);
   assert.match(codexOnly.checks[4].detail, /^codex \(its own default model; set agent_config\.codex\.model to choose one; from config\) at .*codex$/);
-  assert.deepEqual([codexOnly.checks[5].status, codexOnly.checks[5].detail], ['missing', 'judge: opencode is not on PATH'], 'the judge the user set is never swapped for an installed one');
+  const codexGate = codexOnly.checks.find((x) => x.check === 'tool_gate');
+  assert.equal(codexGate.status, 'warning');
+  assert.match(codexGate.detail, /^codex's drive sandbox lets its commands write only the repo, the run's evidence and scratch folders, \$TMPDIR and \/tmp; .*agent_args_override\.codex: \[--add-dir, <folder>\]$/);
+  const codexJudge = codexOnly.checks.find((x) => x.check === 'judge');
+  assert.deepEqual([codexJudge.status, codexJudge.detail], ['missing', 'judge: opencode is not on PATH'], 'the judge the user set is never swapped for an installed one');
   agent('opencode');
   const two = toon(doctorIn(repo, pathEnv(env, ['codex', 'opencode']), 'doctor'));
   assert.match(two.checks[4].detail, /^opencode .* at /);
@@ -3484,6 +3488,9 @@ test('gemini edit steps run with auto_edit, never yolo, and read steps stay in p
   const [codexEdit] = s.calls().slice(2);
   assert.deepEqual(codexEdit.argv, ['exec', '--json', '--ephemeral', '-m', 'gpt-test', '--sandbox', 'workspace-write', '-c', 'sandbox_workspace_write.network_access=true', '--add-dir', '/evidence/run-1', '--add-dir', '/scratch']);
   assert.equal(codexEdit.cwd, repo);
+  // codex's sandbox ends a command's background processes with it, so its edit prompt says to drive within one command.
+  assert.match(codexEdit.stdin, /^p\n\nYour shell sandbox ends every process a command started, background ones too, when that command ends\. So launch the app, drive it, save the captures and stop everything within one shell command/);
+  assert.match(edit.stdin, /^p\n\nAnswer with only one JSON object/, 'other agents get no such note');
   assert.equal(refused.ok, false);
   assert.match(refused.error, /^codex cannot run tool-less/);
   assert.equal(s.calls().length, 3, 'a refused read step starts no codex');

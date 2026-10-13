@@ -238,6 +238,11 @@ ${agents}  # codex and pi have no cheap default: they run their own default mode
   #   effort: low
 
 # Extra CLI flags per agent, added after done-done's own, e.g. claude: [--permission-mode, plan].
+# A codex drive's commands write only the repo, the run's evidence and scratch folders, $TMPDIR and /tmp. A recipe tool that
+# writes elsewhere needs your opt-in, and the drive's agent can then write there too. chrome-devtools-axi keeps its state in
+# ~/.chrome-devtools-axi; install chrome-devtools-mcp to a fixed prefix and set CHROME_DEVTOOLS_AXI_MCP_PATH, so npx is not run:
+#   codex: [--add-dir, ${homedir()}/.chrome-devtools-axi]
+# Adding ${homedir()}/.npm instead lets npx run, but the agent can then change packages npx runs later outside the sandbox.
 agent_args_override: {}
 
 # A binary per agent instead of the one on PATH, e.g. claude: /opt/claude/bin/claude.

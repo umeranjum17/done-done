@@ -170,6 +170,9 @@ const ADAPTERS = {
     // canary file outside the folder, and --disable does not turn off its multi-agent tools.
     codex: {
         editOnly: 'codex cannot run tool-less: with your config.toml it keeps its MCP tools, which read files outside the folder',
+        // Seen live 13 Oct: each sandboxed command runs in its own process namespace, so a server or browser bridge started in the
+        // background by one command was gone by the next one, and a drive that launched the app and then browsed it captured nothing.
+        editNote: 'Your shell sandbox ends every process a command started, background ones too, when that command ends. So launch the app, drive it, save the captures and stop everything within one shell command (a script in $TMPDIR is fine).',
         argv: (c) => ['exec', '--json', '--ephemeral', ...(c.model ? ['-m', c.model] : []),
             '--sandbox', 'workspace-write', '-c', 'sandbox_workspace_write.network_access=true', ...(c.dirs ?? []).flatMap((d) => ['--add-dir', d])],
         answer: (out, c) => {
@@ -380,7 +383,8 @@ export async function askAgent(c) {
             attempts++;
             // An ask-again names what was wrong with the last answer.
             const schemaTrailer = `\n\nAnswer with only one JSON object that matches this JSON schema, and no other text:\n${JSON.stringify(c.schema)}\n`;
-            const promptText = (attempts === 1 ? c.prompt : `${c.prompt}\n\nYour previous answer was not valid (${lastError}).`) + schemaTrailer;
+            const prompt = c.tools === 'edit' && adapter.editNote ? `${c.prompt}\n\n${adapter.editNote}` : c.prompt;
+            const promptText = (attempts === 1 ? prompt : `${prompt}\n\nYour previous answer was not valid (${lastError}).`) + schemaTrailer;
             if (adapter.file)
                 writeFileSync(join(dir, 'prompt.md'), promptText, { mode: 0o600 });
             res = await start(bin, argv(dir), c, cwd, adapter.file ? '' : promptText, { ...process.env, ...c.env, ...adapter.env?.(c) });

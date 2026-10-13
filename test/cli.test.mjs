@@ -497,7 +497,6 @@ function bareRepo(dirName = 'repo') {
   return { dir, repo, env, sh, dd };
 }
 
-// The gate judges each capture (check --judge) with the judge the user set: a stub opencode judge with these odds.
 function gateJudge(env, probabilities) {
   mkdirSync(env.DONE_DONE_HOME, { recursive: true });
   writeFileSync(join(env.DONE_DONE_HOME, 'config.yaml'), 'agent: claude\njudge:\n  route: answerer:opencode\n');
@@ -2349,7 +2348,6 @@ test('with no judge set, verify in a terminal asks from a list, saves the pick a
   assert.ok(s.calls().length === 2 && s.calls().every((c) => c.agent === 'opencode'), 'the picked judge judged each capture');
 });
 
-// The pick list says why it asks again, a typed model must be one the agent lists (pi --list-models), and answers typed ahead are kept.
 test('init in a terminal says why it asks again and refuses a model the agent does not list', { skip: !existsSync('/usr/bin/script') && 'no script(1)' }, () => {
   const t = setup();
   const bin = join(t.dir, 'bin');
@@ -2374,7 +2372,7 @@ test('init in a terminal says a typed model is saved unchecked when its agent is
   const bin = join(t.dir, 'bin');
   mkdirSync(bin);
   const cmd = [process.execPath, CLI, 'init'].join(' ');
-  const agentAnswers = ['3', '2', 'muse'].join('\\n');
+  const agentAnswers = ['4', '2', 'muse'].join('\\n');
   const r = spawnSync('/bin/sh', ['-c', `(sleep 2; printf '${agentAnswers}\\n'; sleep 3; printf 'x\\n1\\n1\\n'; sleep 3) | /usr/bin/script -qec "${cmd}" /dev/null`], { cwd: t.repo, env: { ...t.env, PATH: `${bin}:/usr/bin:/bin` }, encoding: 'utf8', timeout: 60_000 });
   assert.match(r.stdout, /muse is saved unchecked because pi is not on PATH; run 'done-done doctor --probe' to check it/);
   const g = parse(readFileSync(join(t.env.DONE_DONE_HOME, 'config.yaml'), 'utf8'));
@@ -2442,7 +2440,6 @@ test('design fails a screen on each defect the judge names, alone or next to its
   assert.equal(empty.calls.length, 0, 'a blank frame fails without a request');
   assert.equal(design(answer(), '--mock', 'screen.png').code, 2);
   assert.match(toon(design(answer(), 'gone.png')).error, /gone\.png: cannot read \(ENOENT\)/);
-  // design starts no agent, so it needs only the judge: with no agent set it judges, and names no author.
   writeFileSync(join(t.env.DONE_DONE_HOME, 'config.yaml'), 'judge:\n  route: answerer:opencode\n');
   const judgeOnly = design(answer(), 'screen.png');
   assert.equal(judgeOnly.code, 0, judgeOnly.out);
@@ -2726,7 +2723,6 @@ test('with no agent set, done-done never picks one: doctor, maintain and verify 
   assert.equal(ag.detail, 'no agent is set: ask the user which agent to use (claude, codex, opencode, pi, gemini, acp:<target>); never pick one for them');
   assert.match(ag.fix, /^Save the user's answer: done-done init --agent <agent> --model <model>, e\.g\. done-done init --agent opencode --model opencode-go\/muse-spark-1\.3-contributor$/);
   assert.ok(!toon(d).checks.some((c) => c.check === 'agent_settings'));
-  // The judge row checks the judge alone; only its distance from the agent waits for the agent, and no row repeats the agent fix.
   const by = (n) => toon(d).checks.find((c) => c.check === n);
   assert.deepEqual([by('judge').status, by('judge').fix], ['missing', "Save the user's answer: done-done init --judge <agent> --judge-model <model>, e.g. done-done init --judge opencode --judge-model opencode-go/muse-spark-1.3-contributor"]);
   assert.deepEqual([by('judge_choice').status, by('judge_choice').detail, by('judge_choice').fix], ['missing', 'unknown until the agent is set, since the judge is kept apart from it', '']);

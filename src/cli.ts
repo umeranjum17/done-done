@@ -1974,10 +1974,10 @@ function unknownModel(agent: string, model: string, cfg: Config): string {
     process.stderr.write(`${agent} ${list[0]} failed (${(r.error?.message || r.stderr || `exit ${r.status}`).trim().split('\n').at(-1)}), so ${model} is saved unchecked\n`);
     return '';
   }
-  // opencode prints provider/model per line; pi prints a table whose first two columns are provider and model, under a header row.
-  const names = r.stdout.split('\n').flatMap((l) => {
+  // opencode prints provider/model per line; pi prints a table whose first two columns are provider and model, after a header row.
+  const out = agent === 'pi' ? r.stdout.split(/^provider\s+model.*$/m)[1] ?? '' : r.stdout;
+  const names = out.split('\n').flatMap((l) => {
     const [a, b] = l.trim().split(/\s+/);
-    if (agent === 'pi' && a === 'provider' && b === 'model') return [];
     return agent === 'pi' && b ? [`${a}/${b}`, b] : [a];
   });
   return names.includes(model) ? '' : `${model} is not a model ${agent} lists (${agent} ${list[0]})`;
@@ -2401,7 +2401,6 @@ async function cmdDoctor(argv: string[]): Promise<number> {
   // How far the judge is from the author, as selectJudge picks it: another agent is ok; the author's agent at another
   // model or in a fresh session runs too, so it is a warning that never fails doctor.
   if (!cfg || !agent) {
-    // With no agent set, how far the judge is from it is unknown; the agent row already names that fix.
     checks.push(unknownRow('judge_choice', cfg && agentCfg ? 'unknown until the agent is set, since the judge is kept apart from it' : undefined));
   } else if (!choice) {
     checks.push(choiceRow('judge_choice'));

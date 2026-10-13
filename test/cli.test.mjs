@@ -4793,9 +4793,9 @@ console.log(JSON.stringify({ type: 'text', part: { type: 'text', text: JSON.stri
   const [head, git] = [t.head(), (...a) => t.sh(...a).toString().trim()];
   const off = /^fix: opencode changed the verify skill, \.done-done\.yaml, a test file or a test-runner config, which a fix never changes/;
   for (const [extra, dirty, code, reason] of [
-    ['test/home.test.js', false, 3, off], ['src/app_test.go', false, 3, off], ['test_app.py', false, 3, off], ['spec/home_spec.rb', false, 3, off],
-    ['vitest.config.ts', false, 3, off], ['.done-done.yaml', false, 3, off], ['.agents/skills/verify-notes/SKILL.md', false, 3, off],
-    ['', true, 3, /^dirty: uncommitted changes to tracked files \(docs\/guide\.md\)/],
+    ['test/home.test.js', false, 1, off], ['src/app_test.go', false, 1, off], ['test_app.py', false, 1, off], ['spec/home_spec.rb', false, 1, off],
+    ['vitest.config.ts', false, 1, off], ['.done-done.yaml', false, 1, off], ['.agents/skills/verify-notes/SKILL.md', false, 1, off],
+    ['', true, 1, /^dirty: uncommitted changes to tracked files \(docs\/guide\.md\)/],
     ['', false, 1, /^your HEAD failed; the fix passes, on done-done\/verify-/],
   ]) {
     writeFileSync(join(e.PATH, 'extra'), extra);

@@ -189,6 +189,7 @@ Another fleet works the same way: add the include text to whatever your workers 
 
 ## Learn more
 
+- [Vision](VISION.md): the three-tool family, the rules they share, and where done-done goes next.
 - [Full reference](docs/reference.md): every `init`, `doctor`, `run`, `check` and `receipt` option, the Checks block rules, each file check, and both config files.
 - [Report a problem or ask a question](https://github.com/umeranjum17/done-done-axi/issues)
 

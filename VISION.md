@@ -1,0 +1,48 @@
+# Vision
+
+done-done is one of three tools. Each tool does one job well.
+
+## The three tools
+
+- **sign-off** is the main communication board between agents or projects and the user. It has a written contract for how projects communicate.
+- **done-done** is the main verification tool.
+- **learn-from-mistakes** is the main retro tool.
+
+## Rules for all three tools
+
+- **Each tool works alone.** The skill and the CLI work with or without the other two tools. They work with or without an agent supervisor.
+- **Together, they connect well.** Small written contracts join them. No tool needs another tool to work.
+- **Each tool owns primitives.** A primitive is a small building block that works for any project. When a project needs custom behaviour, that behaviour becomes a new primitive. It never becomes a fork.
+- **One migration, no old copy.** An existing project moves once from its local pieces to the tool's primitives. It keeps no old copy. A new project starts from the tool's base.
+- **The user sets everything.** Nothing runs automatically. Users bring their own agents, models and accounts. The tools have zero hosted cost.
+- **The best human-computer interaction on every surface.** This applies to the CLI, the skill, the output and the docs.
+- **Kun's tool patterns.** Each tool is an [AXI](https://axi.md) CLI. Output is [TOON](https://github.com/toon-format/spec) by default. Every result names the next command in its `help` lines. Agents install the skill with `npx skills`. The CLI ships on npm.
+
+## done-done's role
+
+done-done is the one verify system for all projects. It does not accept "done" without proof.
+
+What ships now:
+
+- **Proof per commit.** Each claim is proven at the exact commit. Each run keeps a run record.
+- **A judge that is never the author or the fixer.** The user picks the judge. done-done never picks one.
+- **A gate that asks the user.** When the judge says fail or unsure, the run stops and waits. The user answers with `respond`.
+- **Receipts.** A receipt records a passing check, the commit and the hash of each file. You can check it again later.
+- **Maintain.** `maintain` keeps the verify skill in step with the code.
+- **Fix loop.** `auto_fix.maintain` lets done-done fix verify skill drift, with the same config shape as no-mistakes.
+
+What comes next:
+
+- `auto_fix` for each `verify` step, like no-mistakes.
+- More project-agnostic primitives, such as a run-instance harness, a capture matrix, a text-evidence judge, a base ref to compare before a change, and an `init` base for new projects.
+- Help to write the proof steps for your app.
+
+Custom behaviour from a project becomes a new primitive in done-done.
+
+## Works with
+
+- **sign-off.** When sign-off is present, done-done sends asks, reports and evidence through its communication contract.
+- **learn-from-mistakes.** It reads failed, overridden and waiting runs.
+- **[Firstmate](https://github.com/kunchenguid/firstmate).** A supervisor can call done-done. A supervisor is not necessary.
+- **[no-mistakes](https://github.com/kunchenguid/no-mistakes).** done-done uses the same config shape and the same fix-loop idea.
+- **quota-axi and lavish-axi.** These follow the same Kun tool patterns.

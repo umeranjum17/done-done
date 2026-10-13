@@ -31,9 +31,9 @@ export const cellName = (c) => [c.theme !== undefined && `theme=${c.theme}`, c.w
 // Every cell's values in env for a journey run; DONE_DONE_CELL is the suffix captures are named with.
 export const cellEnv = (c) => ({ DONE_DONE_THEME: c.theme ?? '', DONE_DONE_WIDTH: c.width === undefined ? '' : String(c.width), DONE_DONE_FORM: c.form ?? '', DONE_DONE_CELL: cellSuffix(c) });
 const esc = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-// A cell is captured when some file's base name holds its suffix as its own dot-part,
-// so theme dark does not match a file named dark2.
-const covers = (base, suffix) => new RegExp(`(^|[^A-Za-z0-9])${esc(suffix)}([^A-Za-z0-9]|$)`).test(base);
+// A cell is captured when some file's base name holds its suffix as whole dot-parts,
+// so theme dark does not match dark2 or dark-hc.
+const covers = (base, suffix) => new RegExp(`(^|\\.)${esc(suffix)}(\\.|$)`).test(base);
 // The full manifest: every required cell with the files that captured it, every skipped cell with its reason.
 export function matrixManifest(m, files) {
     const { required, skipped } = splitMatrix(m);
@@ -73,5 +73,7 @@ export function checkMatrix(v) {
         if (typeof s.reason !== 'string' || !s.reason.trim())
             return 'each skip entry needs a reason';
     }
+    if (!splitMatrix(v).required.length)
+        return 'every cell is skipped, so there is nothing to capture';
     return '';
 }

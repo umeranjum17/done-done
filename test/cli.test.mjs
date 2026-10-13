@@ -4823,6 +4823,14 @@ test('a matrix skip drops the partial cell and records its reason', () => {
   assert.deepEqual(d.matrix.skipped, [{ cell: 'theme=dark', reason: 'dark ships later' }]);
 });
 
+test('a matrix that skips every cell is refused when the config is read', () => {
+  const yaml = MATRIXED.replace('  width: [390, 1280]\n', '').replace('  theme: [light, dark]', '  theme: [dark]').replace('journeys:', '  skip:\n    - theme: dark\n      reason: ships later\njourneys:');
+  const t = setup(yaml);
+  const r = t.dd('run', 'cells');
+  assert.equal(r.code, 2, r.out);
+  assert.match(r.out, /every cell is skipped, so there is nothing to capture/);
+});
+
 test('the check fails naming a matrix cell with no capture', () => {
   const t = matrixed(MATRIXED.replace('  width: [390, 1280]\n', ''), "!theme || width !== '' || !cell", (t) => `if (theme === 'light') copyFileSync(${JSON.stringify(join(t.dir, 'screen.png'))}, root + '/home.light.png');`);
   const run = toon(t.dd('run', 'cells'));

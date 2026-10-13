@@ -1119,18 +1119,24 @@ async function runSteps(dir) {
             const failed = [];
             rec.exit = 0;
             let timedOut = false;
+            let running;
+            // The timeout bounds the whole verify run's journey: it kills the cell running now and stops the loop.
+            const timer = setTimeout(() => {
+                timedOut = true;
+                if (running)
+                    killGroup(running);
+            }, limit);
             for (const cell of cells) {
+                if (timedOut)
+                    break;
                 // An async child keeps the heartbeat going while the journey runs. The journey gets its own process group, so a
                 // timeout or a dead runner can kill it and everything it started.
                 const child = spawn(rec.command, { cwd: run.repo, shell: true, detached: true, stdio: ['ignore', fd, fd], env: { ...process.env, DONE_DONE_RUN_ID: rec.run_id, DONE_DONE_EVIDENCE_ROOT: runDir(cfg, rec.run_id), ...(matrix ? cellEnv(cell) : {}) } });
                 run.runner.journey_pgid = child.pid;
+                running = child.pid;
                 saveRun(dir, run);
-                const timer = setTimeout(() => {
-                    timedOut = true;
-                    killGroup(child.pid);
-                }, limit);
                 const code = await new Promise((done) => child.on('close', (c) => done(c ?? 1)));
-                clearTimeout(timer);
+                running = undefined;
                 if (timedOut) {
                     failed.push(`${cellName(cell)} (timed out after ${timeout})`);
                     if (!rec.exit)
@@ -1143,6 +1149,7 @@ async function runSteps(dir) {
                     failed.push(`${cellName(cell)} (exit ${code})`);
                 }
             }
+            clearTimeout(timer);
             closeSync(fd);
             const sealed = closeRun(run.repo, cfg, rec);
             run.record = join(recordsDir(cfg), `${rec.run_id}.json`);

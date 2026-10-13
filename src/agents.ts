@@ -1,10 +1,10 @@
 import { spawn, spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, isAbsolute, join } from 'node:path';
 import { stripVTControlCharacters } from 'node:util';
 import { AGENTS, ANSWERER_JUDGES, CHEAP, type Config, EFFORT_FLAGS, KEY_ROUTES, parseDuration, UsageError } from './config.js';
-import { claudeLoggedIn, isExecutable, onPath } from './judge.js';
+import { isExecutable, onPath } from './judge.js';
 
 // How done-done starts a coding agent for one step: a fresh, single-shot session that
 // answers one JSON-schema question. The prompt goes on stdin or in a 0600 prompt file, never in
@@ -199,8 +199,11 @@ export function selectAgent(cfg: Config): AgentRun {
 
 // The agents a user can pick, and the error that tells a calling agent to ask the user rather than pick one itself.
 export const agentChoices = () => [...AGENTS.filter(supported), 'acp:<target>'];
+// The error a command gives when the agent or the judge is not set: the ask, the choices, and the command that saves the answer.
+const askError = (kind: 'agent' | 'judge', choices: string, rule: string, save: string) =>
+  new UsageError(`no ${kind} is set: ask the user which ${kind} to use (${choices}); ${rule}`, `Save the user's answer: ${save}`);
 export const noAgent = () =>
-  new UsageError(`no agent is set: ask the user which agent to use (${agentChoices().join(', ')}); never pick one for them`, `Save the user's answer: done-done init --agent <agent> --model <model>, e.g. done-done init --agent opencode --model ${CHEAP.opencode.model}`);
+  askError('agent', agentChoices().join(', '), 'never pick one for them', `done-done init --agent <agent> --model <model>, e.g. done-done init --agent opencode --model ${CHEAP.opencode.model}`);
 
 export const modelFor = (cfg: Config, agent: string) => cfg.agent_config[agent]?.model || CHEAP[agent]?.model || '';
 
@@ -244,53 +247,32 @@ export function agentPath(agent: string, cfg?: Pick<Config, 'acpx_path' | 'agent
 // tool off, through the kit's answerer backend over that CLI; a key route (openai:key) through the kit's own backend on
 // the user's API key, with no agent CLI. independence: agent (another agent), model (the author's agent at
 // another model) or session-only (the author's agent and model in a fresh session).
-export type JudgeChoice = { route: string; agent: string; model: string; independence: 'agent' | 'model' | 'session-only'; from: 'config' | 'auto'; author: { agent: string; model: string } };
+export type JudgeChoice = { route: string; agent: string; model: string; independence: 'agent' | 'model' | 'session-only'; author: { agent: string; model: string } };
 
 export const claudeBin = (cfg: Config) => agentPath('claude', cfg);
-// claude can judge only when the backend would accept its bin and sign-in folder and it is signed in to that folder.
-const claudeReady = (cfg: Config) => {
-  const bin = claudeBin(cfg);
-  const dir = cfg.judge.claude_code.config_dir;
-  return !!bin && isAbsolute(dir) && existsSync(dir) && claudeLoggedIn(bin, realpathSync(dir));
-};
-const routeOf = (agent: string) => (agent === 'claude' ? 'claude-code' : `answerer:${agent}`);
-// auto picks only among these; pi, gemini and key routes judge only when the user names them in judge.route.
-export const JUDGES = ['claude', 'opencode'];
+export const routeOf = (agent: string) => (agent === 'claude' ? 'claude-code' : `answerer:${agent}`);
+export const JUDGES = AGENTS.filter((a) => a === 'claude' || ANSWERER_JUDGES.includes(a));
+// Like the agent, the judge is exactly the one the user set; with none, done-done asks the user (in a terminal) or
+// stops with this error, so a calling agent asks its user rather than picking one.
+export const noJudge = () =>
+  askError('judge', JUDGES.join(', '), 'never pick one for them, and never the agent that did the work', `done-done init --judge <agent> --judge-model <model>, e.g. done-done init --judge opencode --judge-model ${CHEAP.opencode.model}`);
 
-export function selectJudge(cfg: Config, found: { agent: string; model: string; path: string }): JudgeChoice {
-  const author = found.path ? found : { agent: 'none', model: '', path: '' };
-  // acp:claude-code is claude for independence; an author with no known model is never apart by model.
-  const same = knownAgentOf(author.agent);
-  const pick = (agent: string, model: string, from: JudgeChoice['from'], route = routeOf(agent)): JudgeChoice => {
-    const independence = agent !== same ? 'agent' : author.model && model !== author.model ? 'model' : 'session-only';
-    return { route, agent, model, independence, from, author: { agent: author.agent, model: author.model } };
-  };
+export function selectJudge(cfg: Config, found: { agent: string; model: string }): JudgeChoice {
   const route = cfg.judge.route;
-  if (route === 'auto') {
-    // The first installed agent that can judge and is not the author, at its agent_config model; else the author's
-    // own agent at its cheap model, to be apart by model.
-    const ready = JUDGES.filter((a) => (a === 'claude' ? claudeReady(cfg) : agentPath(a, cfg)));
-    const other = ready.find((a) => a !== same);
-    if (other) return pick(other, modelFor(cfg, other), 'auto');
-    if (ready.includes(same)) return pick(same, CHEAP[same].model, 'auto');
-    throw new UsageError(`judge: no installed agent can judge (judge.route auto looks for ${JUDGES.join(', ')})`, `Install one of them, or set judge.route to a key route (${Object.keys(KEY_ROUTES).join(', ')}) with judge.model in ~/.done-done/config.yaml`);
-  }
-  let choice: JudgeChoice;
-  if (Object.hasOwn(KEY_ROUTES, route)) {
-    if (!cfg.judge.model) throw new UsageError(`judge: judge.route ${route} needs judge.model, a model your key can use that reads images`, 'Set judge.model in ~/.done-done/config.yaml');
-    choice = pick(route, cfg.judge.model, 'config', route);
-    if (author.model && cfg.judge.model === author.model) choice.independence = 'session-only';
-  } else {
-    const agent = route === 'claude-code' ? 'claude' : route.slice('answerer:'.length);
-    if (route !== 'claude-code' && !ANSWERER_JUDGES.includes(agent)) throw new UsageError(`judge: done-done cannot judge through ${agent} yet (done-done cannot send its CLI an image with every tool off)`, `Set judge.route to claude-code or answerer:<one of ${ANSWERER_JUDGES.join(', ')}>`);
-    // The author's own agent defaults to its cheap model, to be apart by model, as under auto.
-    const model = cfg.judge.model || (agent === same ? CHEAP[agent]?.model : modelFor(cfg, agent)) || '';
-    if (!model) throw new UsageError(`judge: no model for ${route}`, `Set judge.model in ~/.done-done/config.yaml`);
-    choice = pick(agent, model, 'config');
-  }
-  if (choice.independence === 'session-only' && !cfg.judge.allow_same)
-    throw new UsageError(`judge: judge.route ${route} at model ${choice.model} is the author's own agent and model (${author.agent}), and the judge is never the agent that did the work`, 'Set judge.route or judge.model to another agent or model, or set judge.allow_same: true in ~/.done-done/config.yaml to accept a fresh session of the same one');
-  return choice;
+  if (!route) throw noJudge();
+  // A key route judges on the user's own key at judge.model; an agent route judges through that agent at its model.
+  const keyed = Object.hasOwn(KEY_ROUTES, route);
+  if (keyed && !cfg.judge.model) throw new UsageError(`judge: judge.route ${route} needs judge.model, a model your key can use that reads images`, 'Set judge.model in ~/.done-done/config.yaml');
+  const agent = keyed ? route : route === 'claude-code' ? 'claude' : route.slice('answerer:'.length);
+  const model = cfg.judge.model || modelFor(cfg, agent);
+  if (!model) throw new UsageError(`judge: no model for ${route}`, `Set judge.model in ~/.done-done/config.yaml`);
+  // acp:claude-code is claude for independence; an author with no known model is never apart by model.
+  const independence = keyed
+    ? found.model && model === found.model ? 'session-only' : 'agent'
+    : agent !== knownAgentOf(found.agent) ? 'agent' : found.model && model !== found.model ? 'model' : 'session-only';
+  if (independence === 'session-only' && !cfg.judge.allow_same)
+    throw new UsageError(`judge: the judge ${agent} (model ${model}) is the author's own agent and model (${found.agent}), and the judge is never the agent that did the work`, `Ask the user for another judge agent or model and save it: done-done init --judge <agent> --judge-model <model>; or set judge.allow_same: true in ~/.done-done/config.yaml to accept a fresh session of the same one`);
+  return { route, agent, model, independence, author: { agent: found.agent, model: found.model } };
 }
 
 type Ran = { status: number | null; stdout: string; stderr: string; error?: Error };

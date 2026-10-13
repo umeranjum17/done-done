@@ -1471,8 +1471,7 @@ async function cmdRerun(argv) {
     if (['pending', 'running'].includes(src.status) && group && alive(-group))
         throw new UsageError(`the journey of run ${srcId} is still running, so it cannot be rerun yet`, `Read it: done-done status --run ${srcId}`);
     // The rerun keeps its source's claim and branch, so the gate it is checked against is the source's.
-    const branch = src.branch ?? git(src.repo, 'branch', '--show-current');
-    refuseParked(cfg, src.repo, src.claim_id ?? branch);
+    refuseParked(cfg, src.repo, src.claim_id ?? src.branch);
     // A source run with no journey is driven again by the author agent config names now; schema 2 runs before PR 4 always had a journey.
     const journey = src.journey ?? null;
     const drive = journey === null ? await agentDrive(src.repo, cfg, src.feature) : undefined;
@@ -1493,7 +1492,7 @@ async function cmdRerun(argv) {
         return s && reused(name) && s.status === 'completed' ? { ...s } : { name, status: 'pending' };
     });
     const created = now();
-    const run = { schema: 2, run_id: id, kind: src.kind, app: cfg.app, repo: src.repo, journey, ...drive, claim: src.claim, claim_id: src.claim_id, branch, judge: judging, status: 'pending', inputs, steps, created, updated: created, ...(driveReuse && src.record && { record: src.record }) };
+    const run = { schema: 2, run_id: id, kind: src.kind, app: cfg.app, repo: src.repo, journey, ...drive, claim: src.claim, claim_id: src.claim_id, branch: src.branch, judge: judging, status: 'pending', inputs, steps, created, updated: created, ...(driveReuse && src.record && { record: src.record }) };
     saveRun(dir, run);
     for (const s of steps) {
         const f = join(root, srcId, 'logs', `${s.name}.log`);

@@ -1296,7 +1296,7 @@ const NO_AUTHOR = { agent: '', model: '' };
 // A run waiting at its gate is the user's call, so a new verify or rerun is refused until the user answers that run or it is
 // aborted: starting another would go around its gate. Only a run of this checkout counts, keyed by its claim id, else the branch it
 // started on; a run with neither (recorded by an older build) blocks every new run in this checkout.
-function refuseParked(cfg: Config, repo: string, claim: string) {
+function refuseParked(cfg: Config, repo: string, claim: string | undefined) {
   const parked = runsIn(runsRoot(cfg.app)).filter((r) => {
     const key = r.claim_id ?? r.branch;
     return r.kind === 'verify' && r.status === 'awaiting_approval' && r.repo === repo && (key === claim || key === undefined);
@@ -1449,8 +1449,7 @@ async function cmdRerun(argv: string[]): Promise<number> {
   const group = src.runner?.journey_pgid;
   if (['pending', 'running'].includes(src.status) && group && alive(-group)) throw new UsageError(`the journey of run ${srcId} is still running, so it cannot be rerun yet`, `Read it: done-done status --run ${srcId}`);
   // The rerun keeps its source's claim and branch, so the gate it is checked against is the source's.
-  const branch = src.branch ?? git(src.repo, 'branch', '--show-current');
-  refuseParked(cfg, src.repo, src.claim_id ?? branch);
+  refuseParked(cfg, src.repo, src.claim_id ?? src.branch);
   // A source run with no journey is driven again by the author agent config names now; schema 2 runs before PR 4 always had a journey.
   const journey = src.journey ?? null;
   const drive = journey === null ? await agentDrive(src.repo, cfg, src.feature) : undefined;
@@ -1470,7 +1469,7 @@ async function cmdRerun(argv: string[]): Promise<number> {
     return s && reused(name) && s.status === 'completed' ? { ...s } : { name, status: 'pending' as StepState };
   });
   const created = now();
-  const run: Run = { schema: 2, run_id: id, kind: src.kind, app: cfg.app, repo: src.repo, journey, ...drive, claim: src.claim, claim_id: src.claim_id, branch, judge: judging, status: 'pending', inputs, steps, created, updated: created, ...(driveReuse && src.record && { record: src.record }) };
+  const run: Run = { schema: 2, run_id: id, kind: src.kind, app: cfg.app, repo: src.repo, journey, ...drive, claim: src.claim, claim_id: src.claim_id, branch: src.branch, judge: judging, status: 'pending', inputs, steps, created, updated: created, ...(driveReuse && src.record && { record: src.record }) };
   saveRun(dir, run);
   for (const s of steps) {
     const f = join(root, srcId, 'logs', `${s.name}.log`);

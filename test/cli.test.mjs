@@ -3244,3 +3244,97 @@ test('maintain treats an untracked repo path as a citation problem in the skill 
   assert.match(m.findings[0].what, /cites scratch\/notes\.js:1, but scratch\/notes\.js is not a tracked file/);
   assert.match(m.unverified.join('\n'), /home\.md: drift "scratch is right" cites scratch\/notes\.js:1: scratch\/notes\.js is not a tracked file/);
 });
+
+test('maintain checks a link whose target has balanced parentheses and reports only the dead one', () => {
+  const { repo, env, sh } = setup();
+  const s = stubAgents(env, JSON.stringify({ drift: [], recipe: 'open it', recipes: [], missing: [] }));
+  const skill = join(repo, '.agents', 'skills', 'verify-notes');
+  mkdirSync(join(skill, 'features'), { recursive: true });
+  mkdirSync(join(skill, 'notes', '(auth)'), { recursive: true });
+  writeFileSync(join(skill, 'notes', '(auth)', 'login.md'), '# Login\n');
+  writeFileSync(join(skill, 'SKILL.md'), '# verify-notes\n\n[Login](notes/(auth)/login.md) and [Gone](gone/(auth)/login.md).\n');
+  writeFileSync(join(skill, 'features', 'README.md'), '# features\n\n- [Home](home.md)\n');
+  writeFileSync(join(skill, 'features', 'home.md'), '# Home\n');
+  sh('add', '-A');
+  sh('commit', '-qm', 'skill');
+  const r = doctorIn(repo, s.env, 'maintain', '--foreground');
+  const m = toon(r);
+  assert.deepEqual([r.code, m.result], [1, 'drift'], r.out);
+  assert.deepEqual(m.findings.map((f) => f.what), ['links to gone/(auth)/login.md, which does not exist'], r.out);
+});
+
+test('maintain checks a bracketed or parenthesized file:line citation and sends that file to a tool-less reader', () => {
+  const { repo, env, sh } = setup();
+  const s = stubPiGemini(env, JSON.stringify({ drift: [], recipe: 'open it', recipes: [], missing: [] }));
+  mkdirSync(env.DONE_DONE_HOME, { recursive: true });
+  writeFileSync(join(env.DONE_DONE_HOME, 'config.yaml'), 'agent: pi\n');
+  const skill = join(repo, '.agents', 'skills', 'verify-notes');
+  mkdirSync(join(skill, 'features'), { recursive: true });
+  mkdirSync(join(repo, 'app', '[slug]'), { recursive: true });
+  mkdirSync(join(repo, 'app', '(auth)'), { recursive: true });
+  writeFileSync(join(repo, 'app', '[slug]', 'page.tsx'), 'export default 1;\n');
+  writeFileSync(join(repo, 'app', '(auth)', 'login.tsx'), 'export const Login = 1; // BRACKET-CITED-LINE\n');
+  writeFileSync(join(skill, 'SKILL.md'), '# verify-notes\n');
+  writeFileSync(join(skill, 'features', 'README.md'), '# features\n\n- [Home](home.md)\n');
+  writeFileSync(join(skill, 'features', 'home.md'), '# Home\n\nThe page is app/[slug]/page.tsx:10, and login is app/(auth)/login.tsx:1.\n');
+  sh('add', '-A');
+  sh('commit', '-qm', 'skill');
+  const r = doctorIn(repo, s.env, 'maintain', '--foreground');
+  const m = toon(r);
+  assert.deepEqual([r.code, m.result], [1, 'drift'], r.out);
+  assert.deepEqual(m.findings.map((f) => f.what), ['cites app/[slug]/page.tsx:10, but app/[slug]/page.tsx has 1 lines'], r.out);
+  const reader = s.calls().find((c) => c.stdin.includes('Feature file'));
+  assert.ok(reader.stdin.includes('Cited source app/(auth)/login.tsx:\nexport const Login = 1; // BRACKET-CITED-LINE'), reader.stdin);
+});
+
+test('maintain leaves an unreadable cited file out of the reader source and names it, without blocking', { skip: process.getuid?.() === 0 && 'root reads files whatever their mode' }, () => {
+  const { repo, env, sh } = setup();
+  const s = stubPiGemini(env, JSON.stringify({ drift: [], recipe: 'open it', recipes: [], missing: [] }));
+  mkdirSync(env.DONE_DONE_HOME, { recursive: true });
+  writeFileSync(join(env.DONE_DONE_HOME, 'config.yaml'), 'agent: pi\n');
+  const skill = join(repo, '.agents', 'skills', 'verify-notes');
+  mkdirSync(join(skill, 'features'), { recursive: true });
+  mkdirSync(join(repo, 'src'), { recursive: true });
+  writeFileSync(join(repo, 'src', 'secret.js'), 'export const secret = 1;\n');
+  writeFileSync(join(repo, 'src', 'app.js'), 'export const app = 1; // READABLE-CITED-LINE\n');
+  writeFileSync(join(skill, 'SKILL.md'), '# verify-notes\n');
+  writeFileSync(join(skill, 'features', 'README.md'), '# features\n\n- [Home](home.md)\n');
+  writeFileSync(join(skill, 'features', 'home.md'), '# Home\n\nThe secret is in src/secret.js:1 and the app is in src/app.js:1.\n');
+  sh('add', '-A');
+  sh('commit', '-qm', 'skill');
+  chmodSync(join(repo, 'src', 'secret.js'), 0o000);
+  let r;
+  try {
+    r = doctorIn(repo, s.env, 'maintain', '--foreground');
+  } finally {
+    chmodSync(join(repo, 'src', 'secret.js'), 0o644);
+  }
+  const m = toon(r);
+  assert.deepEqual([r.code, m.result], [1, 'drift'], r.out);
+  assert.ok(!m.findings.some((f) => f.kind === 'coverage'), r.out);
+  const reader = s.calls().find((c) => c.stdin.includes('Feature file'));
+  assert.ok(reader.stdin.includes('Cited source src/app.js:\nexport const app = 1; // READABLE-CITED-LINE'), reader.stdin);
+  assert.match(reader.stdin, /\[truncated: .*left out: src\/secret\.js\]/, reader.stdin);
+});
+
+test('maintain does not name a file that was untracked since the window as recently changed', () => {
+  const { repo, env, sh } = setup();
+  const s = stubAgents(env, JSON.stringify({ drift: [], recipe: 'open it', recipes: [], missing: [{ file: 'secrets/.env', why: 'a feature should cover it' }] }));
+  const skill = join(repo, '.agents', 'skills', 'verify-notes');
+  mkdirSync(join(skill, 'features'), { recursive: true });
+  mkdirSync(join(repo, 'secrets'), { recursive: true });
+  writeFileSync(join(repo, 'secrets', '.env'), 'TOKEN=1\n');
+  writeFileSync(join(skill, 'SKILL.md'), '# verify-notes\n');
+  writeFileSync(join(skill, 'features', 'README.md'), '# features\n\n- [Home](home.md)\n');
+  writeFileSync(join(skill, 'features', 'home.md'), '# Home\n');
+  sh('add', '-A');
+  sh('commit', '-qm', 'skill and env');
+  sh('rm', '-q', '--cached', 'secrets/.env');
+  writeFileSync(join(repo, '.gitignore'), 'secrets/\n');
+  sh('add', '-A');
+  sh('commit', '-qm', 'untrack env');
+  const r = doctorIn(repo, s.env, 'maintain', '--foreground');
+  const m = toon(r);
+  assert.deepEqual([r.code, m.result], [0, 'clean'], r.out);
+  assert.match(m.unverified.join('\n'), /missing secrets\/\.env: not in the churn list/, r.out);
+});

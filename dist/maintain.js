@@ -66,11 +66,11 @@ const repoState = (repo) => {
 };
 const lines = (p) => readFileSync(p, 'utf8').split('\n');
 // A markdown link's local target without its #anchor, or '' for a URL, mail link or bare anchor.
-const LINK = /\[[^\]]*\]\(([^)\s]+)[^)]*\)/g;
+const LINK = /\[[^\]]*\]\(((?:[^()\s]|\([^()\s]*\))+)[^)]*\)/g;
 const localTarget = (t) => (/^[a-z][\w+.-]*:/i.test(t) ? '' : t.split('#')[0]);
 // A path:line or path:line-line. A path with a / is checked; a bare name is checked only when its extension is one
 // of the tracked files', so host:port text is never read as a citation.
-const CITE = /(?<![\w/.-])((?:[\w.-]+\/)*[\w-][\w.-]*\.[A-Za-z]\w*):(\d+)(?:-(\d+))?\b/g;
+const CITE = /(?<![\w/.-])([\w.-][\w.()[\]-]*(?:\/[\w.()[\]-]+)*\.[A-Za-z]\w*):(\d+)(?:-(\d+))?\b/g;
 // Whether the file at `p` really lies under the repo: a symlinked folder on the way to it is followed, so it counts by where it points.
 const realInside = (repo, p) => realpathSync(p).startsWith(`${realpathSync(repo)}${sep}`);
 // Why repo-relative `file` has no line `line` (through `end`), or '' when it has.
@@ -93,23 +93,27 @@ function citeProblem(repo, file, line, end = line) {
     }
     return line < 1 || end < line || end > n ? `${file} has ${n} lines` : '';
 }
-// The tracked files a bare file name matches: each whose path ends with it.
-const trackedNamed = (tracked, name) => tracked.filter((p) => p === name || p.endsWith(`/${name}`));
-// Why the cited `name` (a repo-relative path or a bare file name) has no line `line` through `end`, or '' when a tracked
-// file has them. A path must itself be tracked; a bare name matches the tracked files whose path ends with it.
+// The tracked files a cited `name` (a repo-relative path or a bare file name) names: the path itself when it is tracked,
+// or each tracked file whose path ends with a bare name.
+const citedFiles = (repo, tracked, name) => name.includes('/') ? tracked.filter((t) => t === relative(repo, resolve(repo, name))) : tracked.filter((p) => p === name || p.endsWith(`/${name}`));
+// Why the cited `name` has no line `line` through `end`, or '' when one of its tracked files has them.
 function citeWhy(repo, tracked, name, line, end = line) {
-    if (name.includes('/')) {
-        const why = citeProblem(repo, name, line, end);
-        if (why)
-            return why;
-        return tracked.includes(relative(repo, resolve(repo, name))) ? '' : `${name} is not a tracked file`;
-    }
-    const cited = trackedNamed(tracked, name);
-    if (!cited.length)
-        return `no tracked file is named ${name}`;
-    const whys = cited.map((p) => citeProblem(repo, p, line, end));
+    const files = citedFiles(repo, tracked, name);
+    if (!files.length)
+        return name.includes('/') ? citeProblem(repo, name, line, end) || `${name} is not a tracked file` : `no tracked file is named ${name}`;
+    const whys = files.map((p) => citeProblem(repo, p, line, end));
     return whys.includes('') ? '' : whys[0];
 }
+// The text of a tracked file that a feature cites, when it is a regular file inside the repo that can be read.
+const citedText = (repo, p) => {
+    try {
+        const abs = join(repo, p);
+        return statSync(abs, { throwIfNoEntry: false })?.isFile() && realInside(repo, abs) ? readFileSync(abs, 'utf8') : undefined;
+    }
+    catch {
+        return undefined;
+    }
+};
 const READER_SCHEMA = {
     type: 'object',
     properties: {
@@ -232,24 +236,27 @@ export async function maintainSteps(run, dir, cfg, h) {
     step = h.begin('source-wave');
     const tracked = git(repo, 'ls-files', '-z').split('\0').filter(Boolean);
     const exts = new Set(tracked.map((p) => extname(p)));
-    // The text of each tracked file the feature file cites, for a reader with no tools. Only regular files are read, each capped.
+    // A citation in the text: a bare name counts only when its extension is one of the tracked files'.
+    const cites = (text) => [...text.matchAll(CITE)].filter((m) => m[1].includes('/') || exts.has(extname(m[1])));
+    // The text of each tracked file the feature file cites, for a reader with no tools. A file that cannot be read, or that
+    // falls past the cap, is left out and named.
     const citedSource = (feature, text) => {
         const seen = new Map();
         const left = new Set();
         let total = 0;
-        for (const m of text.matchAll(CITE)) {
-            if (!m[1].includes('/') && !exts.has(extname(m[1])))
-                continue;
-            const from = relative(repo, resolve(repo, m[1]));
-            for (const p of m[1].includes('/') ? tracked.filter((t) => t === from) : trackedNamed(tracked, m[1])) {
+        let capped = false;
+        for (const m of cites(text)) {
+            for (const p of citedFiles(repo, tracked, m[1])) {
                 if (seen.has(p) || left.has(p))
                     continue;
-                const abs = join(repo, p);
-                const body = tryRead(abs, undefined, () => (statSync(abs, { throwIfNoEntry: false })?.isFile() && realInside(repo, abs) ? readFileSync(abs, 'utf8') : undefined));
-                if (body === undefined)
+                const body = citedText(repo, p);
+                if (body === undefined) {
+                    left.add(p);
                     continue;
+                }
                 const kept = body.length > FEATURE_CHARS ? `${body.slice(0, FEATURE_CHARS)}\n[truncated after ${FEATURE_CHARS} characters]` : body;
-                if (left.size || total + kept.length > CITED_CHARS) {
+                if (capped || total + kept.length > CITED_CHARS) {
+                    capped = true;
                     left.add(p);
                     continue;
                 }
@@ -261,8 +268,9 @@ export async function maintainSteps(run, dir, cfg, h) {
         }
         const parts = [...seen].map(([p, body]) => `\n\nCited source ${p}:\n${body}`);
         if (left.size) {
-            add({ kind: 'truncated', file: feature, what: `the reader saw only ${CITED_CHARS} characters of the source it cites; ${left.size} cited files were left out` });
-            parts.push(`\n\n[truncated: the cited source for ${feature} is capped at ${CITED_CHARS} characters, so ${left.size} cited files are left out]`);
+            const names = [...left].join(', ');
+            add({ kind: 'truncated', file: feature, what: `${left.size} cited files were left out (${names}): they cannot be read, or the cited source is capped at ${CITED_CHARS} characters` });
+            parts.push(`\n\n[truncated: the cited source for ${feature} is capped at ${CITED_CHARS} characters and skips unreadable files, so ${left.size} cited files are left out: ${names}]`);
         }
         return parts.join('');
     };
@@ -310,9 +318,7 @@ ${text.slice(0, FEATURE_CHARS)}${toolless ? citedSource(rel(file), text.slice(0,
     step = h.begin('reconcile');
     for (const { f, ls } of docs)
         ls.forEach((text, i) => {
-            for (const m of text.matchAll(CITE)) {
-                if (!m[1].includes('/') && !exts.has(extname(m[1])))
-                    continue;
+            for (const m of cites(text)) {
                 const why = citeWhy(repo, tracked, m[1], Number(m[2]), Number(m[3] ?? m[2]));
                 if (why)
                     add({ kind: 'citation', file: rel(f), line: i + 1, what: `cites ${m[0]}, but ${why}` });
@@ -342,8 +348,9 @@ ${text.slice(0, FEATURE_CHARS)}${toolless ? citedSource(rel(file), text.slice(0,
     }
     const skillDir = rel(skill);
     // ponytail: the reconcile prompt names only the CHURN_MAX most recently changed paths; older ones get no coverage check.
+    const trackedSet = new Set(tracked);
     const churnAll = [...new Set(git(repo, 'log', `--since=${CHURN_SINCE}`, '--name-only', '-z', '--format=').split('\0'))]
-        .filter((p) => p && !p.startsWith(`${skillDir}/`) && existsSync(join(repo, p)));
+        .filter((p) => p && !p.startsWith(`${skillDir}/`) && trackedSet.has(p));
     const churn = churnAll.slice(0, CHURN_MAX);
     let recipes = [];
     const answered = readers.filter((r) => r.ok);

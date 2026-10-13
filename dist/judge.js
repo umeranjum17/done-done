@@ -109,7 +109,7 @@ export async function backend(cfg, choice, record = () => '', questions = { rele
                 lastError = '';
                 const attached = images.map((img) => ({ name: `${img.id}.${img.mime.split('/')[1]}`, bytes: Buffer.from(img.dataUrl.slice(img.dataUrl.indexOf(',') + 1), 'base64') }));
                 // A tool-less call runs in its own scratch folder, so the CLI sees the attached capture and nothing else.
-                const a = askAgent({ ...run, prompt, schema: answerSchema(questions), cwd: tmpdir(), tools: 'none', attempts, record: record(), images: attached });
+                const a = await askAgent({ ...run, prompt, schema: answerSchema(questions), cwd: tmpdir(), tools: 'none', attempts, record: record(), images: attached });
                 lastError = a.ok ? '' : a.error ?? 'no answer';
                 if (!a.ok)
                     throw new Error(lastError);

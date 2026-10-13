@@ -151,6 +151,8 @@ done-done receipt --outcome "it starts" ~/.done-done/evidence/your-app/*/*.log
 done-done receipt --verify "$(git rev-parse HEAD)"
 ```
 
+No journey yet? `done-done verify --outcome "<what a user can now do>"` has your coding agent drive one feature of the verify skill the way a user does (`--feature <name>` picks it). A judge that is not the author's own agent and model then checks the screenshots. When it says a screenshot is wrong or unclear, or a capture it cannot read (a log or video) is not judged, the run waits at its gate (exit 4) until you answer with `done-done respond --action approve|skip --reason "<why>"` or `--action fix`. Approve and skip are logged with who and why, and they end the run `overridden`, never `pass`, so `receipt --verify` still refuses it ([details](docs/reference.md#drive-by-agent)).
+
 Run `done-done` with no arguments to see the current config and the next step.
 
 ## What it checks
@@ -165,7 +167,7 @@ Run `done-done` with no arguments to see the current config and the next step.
 - 🎨 **Looks right**: `done-done design <screens...> [--mock <screen>=<mock>]` has the same judge look at each captured screen, alone or next to its approved mock, and fails it on stretched or squashed images, clipped text, overlap, elements off-screen, blank or black strips and broken layout, naming each defect and where it is ([how](docs/reference.md#design-check)).
 - 🔒 **Safe in CI**: `--trusted-ref origin/main` reads the rules from your main branch, so a pull request can't loosen them.
 
-Every answer is an exit code: **0** pass, **1** fail, **2** usage or config error, **3** can't tell either way, **4** a `verify`, `maintain` or `rerun` run is still running.
+Every answer is an exit code: **0** pass, **1** fail (or overridden at the gate), **2** usage or config error, **3** can't tell either way, **4** a `verify`, `maintain` or `rerun` run is still running, or a `verify` run waits at its gate.
 
 ## Use with Firstmate or another agent fleet
 
@@ -192,7 +194,7 @@ Another fleet works the same way: add the include text to whatever your workers 
 
 ## What's next
 
-So far: `init`, `doctor`, `run`, `check`, `receipt`, the opt-in screenshot judge, the `design` visual check and the opt-in session hooks for Claude Code, Codex, opencode, Gemini CLI and pi. Coming next: help writing the proof steps for your app.
+So far: `init`, `doctor`, `run`, `check`, `receipt`, `verify` (by journey or by your coding agent, with a gate you answer with `respond`), the opt-in screenshot judge, the `design` visual check and the opt-in session hooks for Claude Code, Codex, opencode, Gemini CLI and pi. Coming next: help writing the proof steps for your app.
 
 ## Develop
 

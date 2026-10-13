@@ -229,8 +229,8 @@ const claudeReady = (cfg) => {
     return !!bin && isAbsolute(dir) && existsSync(dir) && claudeLoggedIn(bin, realpathSync(dir));
 };
 const routeOf = (agent) => (agent === 'claude' ? 'claude-code' : `answerer:${agent}`);
-const canJudge = (agent) => agent === 'claude' || ANSWERER_JUDGES.includes(agent);
-export const JUDGES = AGENTS.filter(canJudge);
+// auto picks only among these; pi, gemini and key routes judge only when the user names them in judge.route.
+export const JUDGES = ['claude', 'opencode'];
 export function selectJudge(cfg, found) {
     const author = found.path ? found : { agent: 'none', model: '', path: '' };
     // acp:claude-code is claude for independence; an author with no known model is never apart by model.
@@ -243,7 +243,7 @@ export function selectJudge(cfg, found) {
     if (route === 'auto') {
         // The first installed agent that can judge and is not the author, at its agent_config model; else the author's
         // own agent at its cheap model, to be apart by model.
-        const ready = AGENTS.filter((a) => canJudge(a) && (a === 'claude' ? claudeReady(cfg) : agentPath(a, cfg)));
+        const ready = JUDGES.filter((a) => (a === 'claude' ? claudeReady(cfg) : agentPath(a, cfg)));
         const other = ready.find((a) => a !== same);
         if (other)
             return pick(other, modelFor(cfg, other), 'auto');

@@ -2,7 +2,7 @@
 import assert from 'node:assert/strict';
 import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
-import { appendFileSync, cpSync, mkdirSync, mkdtempSync, existsSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
+import { appendFileSync, chmodSync, cpSync, mkdirSync, mkdtempSync, existsSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 import { after, test } from 'node:test';
@@ -2747,6 +2747,20 @@ test('gemini edit steps run with auto_edit, never yolo, and read steps stay in p
   assert.ok(!edit.argv.includes('--skip-trust') && !read.argv.includes('--skip-trust'), 'a repo step keeps Gemini trust gate');
 });
 
+test('opencode read calls get a deny-all permission and no read allowance', async () => {
+  const { repo, env } = setup();
+  const s = stubAgents(env);
+  const { askAgent } = await import(pathToFileURL(join(dirname(fileURLToPath(import.meta.url)), '..', 'dist', 'agents.js')).href);
+  const old = process.env.PATH;
+  process.env.PATH = s.env.PATH;
+  try {
+    askAgent({ agent: 'opencode', model: 'm', prompt: 'p', schema: { type: 'object', properties: { ok: { type: 'boolean' } }, required: ['ok'] }, cwd: repo, timeoutMs: 60_000, tools: 'read', record: join(s.env.PATH, 'rec.json') });
+  } finally {
+    process.env.PATH = old;
+  }
+  assert.deepEqual(JSON.parse(s.calls()[0].permission), { '*': 'deny' });
+});
+
 test('braces in the prose before the JSON in the final answer do not break it', () => {
   const { repo, env } = setup();
   const s = stubPiGemini(env);
@@ -2811,4 +2825,444 @@ test('an edit step whose answer is not JSON is never asked again, while a tool-l
   } finally {
     process.env.PATH = old;
   }
+});
+
+test('maintain runs a reader with no user settings or MCP servers', () => {
+  const { repo, env, sh } = setup();
+  const s = stubAgents(env, JSON.stringify({ drift: [], recipe: 'open it', recipes: [], missing: [] }));
+  const skill = join(repo, '.agents', 'skills', 'verify-notes');
+  mkdirSync(join(skill, 'features'), { recursive: true });
+  writeFileSync(join(skill, 'SKILL.md'), '# verify-notes\n');
+  writeFileSync(join(skill, 'features', 'README.md'), '# features\n\n- [Home](home.md)\n');
+  writeFileSync(join(skill, 'features', 'home.md'), '# Home\n');
+  sh('add', '-A');
+  sh('commit', '-qm', 'skill');
+  const r = doctorIn(repo, s.env, 'maintain', '--foreground');
+  assert.equal(r.code, 0, r.out);
+  const reader = s.calls()[0].argv;
+  assert.deepEqual([reader[reader.indexOf('--tools') + 1], reader[reader.indexOf('--setting-sources') + 1], reader.includes('--strict-mcp-config')], ['Read,Grep,Glob', '', true]);
+});
+
+test('maintain blocks on an unreadable feature file instead of crashing', { skip: process.getuid?.() === 0 && 'root reads files whatever their mode' }, () => {
+  const { repo, env, sh } = setup();
+  const s = stubAgents(env, JSON.stringify({ drift: [], recipe: 'open it', recipes: [], missing: [] }));
+  const skill = join(repo, '.agents', 'skills', 'verify-notes');
+  const home = join(skill, 'features', 'home.md');
+  mkdirSync(join(skill, 'features'), { recursive: true });
+  writeFileSync(join(skill, 'SKILL.md'), '# verify-notes\n');
+  writeFileSync(join(skill, 'features', 'README.md'), '# features\n\n- [Home](home.md)\n');
+  writeFileSync(home, '# Home\n');
+  sh('add', '-A');
+  sh('commit', '-qm', 'skill');
+  chmodSync(home, 0);
+  try {
+    const r = doctorIn(repo, s.env, 'maintain', '--foreground');
+    const m = toon(r);
+    assert.deepEqual([r.code, m.result], [3, 'blocked'], r.out);
+    assert.match(m.reason, /^coverage: .*home\.md: cannot be read/);
+  } finally {
+    chmodSync(home, 0o644);
+  }
+});
+
+test('maintain blocks when a reader rewrites a file that was already modified', () => {
+  const { repo, env, sh } = setup();
+  const answer = JSON.stringify({ drift: [], recipe: 'open it', recipes: [], missing: [] });
+  const s = stubAgents(env, answer);
+  const skill = join(repo, '.agents', 'skills', 'verify-notes');
+  mkdirSync(join(skill, 'features'), { recursive: true });
+  mkdirSync(join(repo, 'src'), { recursive: true });
+  writeFileSync(join(repo, 'src', 'app.js'), 'export const app = 1;\n');
+  writeFileSync(join(skill, 'SKILL.md'), '# verify-notes\n');
+  writeFileSync(join(skill, 'features', 'README.md'), '# features\n\n- [Home](home.md)\n');
+  writeFileSync(join(skill, 'features', 'home.md'), '# Home\n');
+  sh('add', '-A');
+  sh('commit', '-qm', 'skill');
+  writeFileSync(join(repo, 'src', 'app.js'), 'export const app = 2;\n');
+  writeFileSync(join(s.bin, 'claude'), `#!${process.execPath}\nif (process.argv.includes('Read,Grep,Glob')) require('node:fs').writeFileSync('src/app.js', 'export const app = 3;\\n');\nprocess.stdout.write(JSON.stringify({ structured_output: ${answer} }));\n`, { mode: 0o755 });
+  const r = doctorIn(repo, s.env, 'maintain', '--foreground');
+  const m = toon(r);
+  assert.deepEqual([r.code, m.result, m.git_status], [3, 'blocked', 'changed'], r.out);
+  assert.match(m.reason, /^repo-changed: /);
+});
+
+test('maintain pins the read-only reader to read tools with no user settings, MCP servers or extra directories', () => {
+  const { repo, env, sh } = setup();
+  const s = stubAgents(env, JSON.stringify({ drift: [], recipe: 'open it', recipes: [], missing: [] }));
+  const skill = join(repo, '.agents', 'skills', 'verify-notes');
+  mkdirSync(join(skill, 'features'), { recursive: true });
+  writeFileSync(join(skill, 'SKILL.md'), '# verify-notes\n');
+  writeFileSync(join(skill, 'features', 'README.md'), '# features\n\n- [Home](home.md)\n');
+  writeFileSync(join(skill, 'features', 'home.md'), '# Home\n');
+  sh('add', '-A');
+  sh('commit', '-qm', 'skill');
+  assert.equal(doctorIn(repo, s.env, 'maintain', '--foreground').code, 0);
+  const reader = s.calls()[0].argv;
+  assert.deepEqual([reader[reader.indexOf('--tools') + 1], reader[reader.indexOf('--setting-sources') + 1], reader.includes('--strict-mcp-config')], ['Read,Grep,Glob', '', true]);
+  assert.deepEqual(['--add-dir', '--permission-mode', '--dangerously-skip-permissions', '--allowedTools'].filter((f) => reader.includes(f)), []);
+  writeFileSync(join(env.DONE_DONE_HOME, 'config.yaml'), 'agent: opencode\n');
+  assert.equal(doctorIn(repo, s.env, 'maintain', '--foreground').code, 0);
+  const permission = JSON.parse(s.calls().find((c) => c.agent === 'opencode').permission);
+  assert.deepEqual(permission, { '*': 'deny' });
+});
+
+test('maintain gives a pi reader no tools and puts the cited source in its prompt', () => {
+  const { repo, env, sh } = setup();
+  const s = stubPiGemini(env, JSON.stringify({ drift: [], recipe: 'open it', recipes: [], missing: [] }));
+  mkdirSync(env.DONE_DONE_HOME, { recursive: true });
+  writeFileSync(join(env.DONE_DONE_HOME, 'config.yaml'), 'agent: pi\n');
+  const skill = join(repo, '.agents', 'skills', 'verify-notes');
+  mkdirSync(join(skill, 'features'), { recursive: true });
+  mkdirSync(join(repo, 'src'), { recursive: true });
+  writeFileSync(join(repo, 'src', 'app.js'), 'export const app = 1; // CITED-SOURCE-LINE\n');
+  writeFileSync(join(skill, 'SKILL.md'), '# verify-notes\n');
+  writeFileSync(join(skill, 'features', 'README.md'), '# features\n\n- [Home](home.md)\n');
+  writeFileSync(join(skill, 'features', 'home.md'), '# Home\n\nThe app starts at src/app.js:1.\n');
+  sh('add', '-A');
+  sh('commit', '-qm', 'skill');
+  const r = doctorIn(repo, s.env, 'maintain', '--foreground');
+  assert.equal(r.code, 0, r.out);
+  const reader = s.calls().find((c) => c.stdin.includes('Feature file'));
+  assert.ok(reader.argv.includes('--no-tools'), reader.argv.join(' '));
+  assert.ok(!reader.argv.includes('-t'), 'no read tools for pi');
+  assert.match(reader.stdin, /Cited source src\/app\.js:\nexport const app = 1; \/\/ CITED-SOURCE-LINE/);
+});
+
+test('maintain lists a reader drift item with a string line as unverified, not as a finding', () => {
+  const { repo, env, sh } = setup();
+  const s = stubAgents(env, JSON.stringify({ recipe: 'open it', drift: [{ claim: 'app is 2', why: 'it is 1', file: 'src/app.js', line: '1' }], recipes: [], missing: [] }));
+  const skill = join(repo, '.agents', 'skills', 'verify-notes');
+  mkdirSync(join(skill, 'features'), { recursive: true });
+  mkdirSync(join(repo, 'src'), { recursive: true });
+  writeFileSync(join(repo, 'src', 'app.js'), 'export const app = 1;\n');
+  writeFileSync(join(skill, 'SKILL.md'), '# verify-notes\n');
+  writeFileSync(join(skill, 'features', 'README.md'), '# features\n\n- [Home](home.md)\n');
+  writeFileSync(join(skill, 'features', 'home.md'), '# Home\n');
+  sh('add', '-A');
+  sh('commit', '-qm', 'skill');
+  const r = doctorIn(repo, s.env, 'maintain', '--foreground');
+  const m = toon(r);
+  assert.deepEqual([r.code, m.result], [0, 'clean'], r.out);
+  assert.match(m.unverified.join('\n'), /drift has an item in an unexpected shape/, r.out);
+});
+
+test('maintain does not wait on a cited path that is a named pipe; it is a citation finding', () => {
+  const { repo, env, sh } = setup();
+  const s = stubAgents(env, JSON.stringify({ drift: [], recipe: 'open it', recipes: [], missing: [] }));
+  const skill = join(repo, '.agents', 'skills', 'verify-notes');
+  mkdirSync(join(skill, 'features'), { recursive: true });
+  mkdirSync(join(repo, 'pipes'));
+  writeFileSync(join(skill, 'SKILL.md'), '# verify-notes\n\nSee pipes/x.sh:3.\n');
+  writeFileSync(join(skill, 'features', 'README.md'), '# features\n\n- [Home](home.md)\n');
+  writeFileSync(join(skill, 'features', 'home.md'), '# Home\n');
+  sh('add', '-A');
+  sh('commit', '-qm', 'skill');
+  assert.equal(spawnSync('mkfifo', [join(repo, 'pipes', 'x.sh')]).status, 0);
+  const r = spawnSync(process.execPath, [CLI, 'maintain', '--foreground'], { cwd: repo, env: s.env, encoding: 'utf8', timeout: 30_000 });
+  assert.equal(r.signal, null, 'the run never opened the pipe');
+  const m = toon({ code: r.status, out: r.stdout + r.stderr });
+  assert.deepEqual([r.status, m.result], [1, 'drift'], r.stdout + r.stderr);
+  assert.ok(m.findings.some((f) => f.kind === 'citation' && /pipes\/x\.sh is not a file/.test(f.what)));
+});
+
+test('maintain blocks an unreadable features folder instead of failing the run', { skip: process.getuid?.() === 0 && 'root reads files whatever their mode' }, () => {
+  const { repo, env, sh } = setup();
+  const s = stubAgents(env, JSON.stringify({ drift: [], recipe: 'open it', recipes: [], missing: [] }));
+  const skill = join(repo, '.agents', 'skills', 'verify-notes');
+  mkdirSync(join(skill, 'features'), { recursive: true });
+  writeFileSync(join(skill, 'SKILL.md'), '# verify-notes\n');
+  writeFileSync(join(skill, 'features', 'README.md'), '# features\n\n- [Home](home.md)\n');
+  writeFileSync(join(skill, 'features', 'home.md'), '# Home\n');
+  sh('add', '-A');
+  sh('commit', '-qm', 'skill');
+  chmodSync(join(skill, 'features'), 0o000);
+  try {
+    const r = doctorIn(repo, s.env, 'maintain', '--foreground');
+    const m = toon(r);
+    assert.deepEqual([r.code, m.result], [3, 'blocked'], r.out);
+    assert.match(m.reason, /^coverage: /);
+  } finally {
+    chmodSync(join(skill, 'features'), 0o755);
+  }
+});
+
+test('maintain reports a citation under an unreadable folder as a citation finding, not a failed run', { skip: process.getuid?.() === 0 && 'root reads files whatever their mode' }, () => {
+  const { repo, env, sh } = setup();
+  const s = stubAgents(env, JSON.stringify({ drift: [], recipe: 'open it', recipes: [], missing: [] }));
+  mkdirSync(join(repo, 'locked'));
+  writeFileSync(join(repo, 'locked', 'x.js'), 'export const x = 1;\n');
+  const skill = join(repo, '.agents', 'skills', 'verify-notes');
+  mkdirSync(join(skill, 'features'), { recursive: true });
+  writeFileSync(join(skill, 'SKILL.md'), '# verify-notes\n\nSee locked/x.js:1.\n');
+  writeFileSync(join(skill, 'features', 'README.md'), '# features\n\n- [Home](home.md)\n');
+  writeFileSync(join(skill, 'features', 'home.md'), '# Home\n');
+  sh('add', '-A');
+  sh('commit', '-qm', 'skill');
+  chmodSync(join(repo, 'locked'), 0o000);
+  try {
+    const r = doctorIn(repo, s.env, 'maintain', '--foreground');
+    const m = toon(r);
+    assert.deepEqual([r.code, m.result], [1, 'drift'], r.out);
+    assert.ok(m.findings.some((f) => f.kind === 'citation' && /locked\/x\.js is not a file/.test(f.what)), r.out);
+  } finally {
+    chmodSync(join(repo, 'locked'), 0o755);
+  }
+});
+
+test('maintain reports a cited line in an empty file as a citation finding with 0 lines', () => {
+  const { repo, env, sh } = setup();
+  const s = stubAgents(env, JSON.stringify({ drift: [], recipe: 'open it', recipes: [], missing: [] }));
+  writeFileSync(join(repo, 'docs', 'empty.md'), '');
+  const skill = join(repo, '.agents', 'skills', 'verify-notes');
+  mkdirSync(join(skill, 'features'), { recursive: true });
+  writeFileSync(join(skill, 'SKILL.md'), '# verify-notes\n\nSee docs/empty.md:1.\n');
+  writeFileSync(join(skill, 'features', 'README.md'), '# features\n\n- [Home](home.md)\n');
+  writeFileSync(join(skill, 'features', 'home.md'), '# Home\n');
+  sh('add', '-A');
+  sh('commit', '-qm', 'skill');
+  const r = doctorIn(repo, s.env, 'maintain', '--foreground');
+  const m = toon(r);
+  assert.deepEqual([r.code, m.result], [1, 'drift'], r.out);
+  assert.match(m.findings.find((f) => f.kind === 'citation').what, /docs\/empty\.md has 0 lines/, r.out);
+});
+
+test('maintain fingerprints an untracked file whose name has a newline', () => {
+  const { repo, env, sh } = setup();
+  const s = stubAgents(env, JSON.stringify({ drift: [], recipe: 'open it', recipes: [], missing: [] }));
+  const skill = join(repo, '.agents', 'skills', 'verify-notes');
+  mkdirSync(join(skill, 'features'), { recursive: true });
+  writeFileSync(join(skill, 'SKILL.md'), '# verify-notes\n');
+  writeFileSync(join(skill, 'features', 'README.md'), '# features\n\n- [Home](home.md)\n');
+  writeFileSync(join(skill, 'features', 'home.md'), '# Home\n');
+  sh('add', '-A');
+  sh('commit', '-qm', 'skill');
+  writeFileSync(join(repo, 'notes\nv2.txt'), 'untracked\n');
+  const r = doctorIn(repo, s.env, 'maintain', '--foreground');
+  const m = toon(r);
+  assert.deepEqual([r.code, m.result, m.git_status], [0, 'clean', 'same'], r.out);
+});
+
+test('maintain reports a dead link, a wrong file:line and drift from read-only readers, and changes nothing', () => {
+  const { repo, env, sh } = setup();
+  const answer = JSON.stringify({
+    recipe: 'import src/app.js',
+    drift: [{ claim: 'app is 2', why: 'it is 1', file: 'src/app.js', line: 1 }, { claim: 'made up', why: 'no such line', file: 'src/app.js', line: 50 }],
+    recipes: [{ state: 'fresh', features: ['home.md'], steps: ['open it'] }], missing: [{ file: 'src/app.js', why: 'new surface' }, { file: 'src/gone.js', why: 'not in the churn list' }],
+  });
+  const s = stubAgents(env, answer);
+  const dd = (...args) => doctorIn(repo, s.env, ...args);
+  const none = dd('maintain', '--foreground');
+  assert.equal(none.code, 3, none.out);
+  assert.deepEqual([toon(none).result, toon(none).help[0]], ['blocked', 'Create the verify skill: done-done init']);
+  const skill = join(repo, '.agents', 'skills', 'verify-notes');
+  mkdirSync(join(skill, 'features'), { recursive: true });
+  writeFileSync(join(skill, 'SKILL.md'), '# verify-notes\n\nThe map: [features](features/README.md). See https://example.com:443/x and localhost:3000.\n');
+  writeFileSync(join(skill, 'features', 'README.md'), '# features\n\n- [Home](home.md)\n- [Search](search.md)\n- [Home again](home.md#top)\n');
+  mkdirSync(join(repo, 'src', 'café'));
+  writeFileSync(join(repo, 'src', 'café', 'gate.js'), 'export const gate = 1;\n');
+  writeFileSync(join(skill, 'features', 'home.md'), `# Home\n\nSource: src/app.js:1, and the old src/app.js:40.\nAlso app.js:1, app.js:40, ghost.js:2 and gate.js:1.\nLong note: ${'x'.repeat(20_000)}\n`);
+  writeFileSync(join(skill, 'features', 'extra.md'), '# Extra\n');
+  sh('add', '-A');
+  sh('commit', '-qm', 'skill');
+  const status = () => sh('status', '--porcelain', '--untracked-files=all').toString() + sh('rev-parse', 'HEAD');
+  const before = status();
+  const r = dd('maintain', '--foreground', '--full');
+  assert.equal(r.code, 1, r.out);
+  const m = toon(r);
+  assert.deepEqual([m.kind, m.result, m.git_status], ['maintain', 'drift', 'same']);
+  const at = (f) => `${f.kind} ${f.file.replace('.agents/skills/verify-notes/', '')}${f.line ? `:${f.line}` : ''}`;
+  assert.deepEqual(m.findings.map(at), [
+    'dead-link features/README.md:4', 'duplicate features/README.md:5', 'unlisted features/README.md', 'truncated features/home.md',
+    'citation features/home.md:3', 'citation features/home.md:4', 'citation features/home.md:4', 'drift features/extra.md', 'drift features/home.md', 'unmapped src/app.js',
+  ], 'a reader citation that does not exist and a missing file outside the churn list are not findings');
+  assert.match(m.findings[4].what, /cites src\/app\.js:40, but src\/app\.js has 1 lines/);
+  assert.match(m.findings[5].what, /cites app\.js:40, but src\/app\.js has 1 lines/);
+  assert.match(m.findings[6].what, /cites ghost\.js:2, but no tracked file is named ghost\.js/);
+  assert.equal(status(), before, 'maintain changed nothing');
+  // One fresh read-only reader per feature file runs in the repo; the reconcile call has no tools and runs elsewhere.
+  const calls = s.calls();
+  assert.deepEqual(calls.map((c) => c.argv[c.argv.indexOf('--tools') + 1]), ['Read,Grep,Glob', 'Read,Grep,Glob', '']);
+  assert.deepEqual(calls.map((c) => c.cwd === repo), [true, true, false]);
+  assert.match(calls[0].stdin, /extra\.md/);
+  const run = join(env.DONE_DONE_HOME, 'runs', 'notes', m.run_id);
+  assert.deepEqual(readdirSync(join(run, 'agents')).sort(), ['1-reader-extra.json', '2-reader-home.json', '3-reconcile.json']);
+  assert.equal(toon(dd('history')).history[0].kind, 'maintain');
+  assert.match(toon(dd('logs', '--step', 'reconcile')).log.join('\n'), /src\/app\.js:50: src\/app\.js has 1 lines/);
+  // With no agent the readers do not run, but the plain citation checks still report the planted bad file:line.
+  writeFileSync(join(env.DONE_DONE_HOME, 'config.yaml'), 'agent: gemini\n');
+  const noAgent = toon(dd('maintain', '--foreground', '--full'));
+  assert.deepEqual([noAgent.result, noAgent.git_status], ['blocked', 'same']);
+  assert.match(noAgent.reason, /^source-wave: no agent/);
+  assert.deepEqual(noAgent.findings.map(at).slice(3), ['citation features/home.md:3', 'citation features/home.md:4', 'citation features/home.md:4']);
+  writeFileSync(join(env.DONE_DONE_HOME, 'config.yaml'), 'agent: auto\n');
+  // A reader that writes into the repo makes the run blocked.
+  writeFileSync(join(s.bin, 'claude'), `#!${process.execPath}\nrequire('node:fs').writeFileSync('stray.txt', '');\nprocess.stdout.write(JSON.stringify({ structured_output: ${answer} }));\n`, { mode: 0o755 });
+  const changed = toon(dd('maintain', '--foreground'));
+  assert.deepEqual([changed.result, changed.git_status], ['blocked', 'changed']);
+  assert.match(changed.reason, /^repo-changed: /);
+});
+
+test('maintain gives an acp reader no tools and the cited source in its prompt', () => {
+  const { repo, env, sh } = setup();
+  const answer = JSON.stringify({ drift: [], recipe: 'open it', recipes: [], missing: [] });
+  const s = stubAgents(env);
+  mkdirSync(env.DONE_DONE_HOME, { recursive: true });
+  writeFileSync(join(env.DONE_DONE_HOME, 'config.yaml'), 'agent: acp:claude-code\n');
+  const log = join(s.bin, 'acpx.jsonl');
+  writeFileSync(join(s.bin, 'acpx'), `#!${process.execPath}
+const { appendFileSync, readFileSync } = require('node:fs');
+const argv = process.argv.slice(2);
+if (argv[0] === '--version') process.exit(0);
+appendFileSync(${JSON.stringify(log)}, JSON.stringify({ argv, stdin: readFileSync(0, 'utf8') }) + '\\n');
+console.log(JSON.stringify({ jsonrpc: '2.0', method: 'session/update', params: { sessionId: 's1', update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: ${JSON.stringify(answer)} } } } }));
+`, { mode: 0o755 });
+  const skill = join(repo, '.agents', 'skills', 'verify-notes');
+  mkdirSync(join(skill, 'features'), { recursive: true });
+  mkdirSync(join(repo, 'src'), { recursive: true });
+  writeFileSync(join(repo, 'src', 'app.js'), 'export const app = 1; // ACP-CITED-LINE\n');
+  writeFileSync(join(skill, 'SKILL.md'), '# verify-notes\n');
+  writeFileSync(join(skill, 'features', 'README.md'), '# features\n\n- [Home](home.md)\n');
+  writeFileSync(join(skill, 'features', 'home.md'), '# Home\n\nThe app starts at src/app.js:1.\n');
+  sh('add', '-A');
+  sh('commit', '-qm', 'skill');
+  const r = doctorIn(repo, s.env, 'maintain', '--foreground');
+  assert.equal(r.code, 0, r.out);
+  const calls = readFileSync(log, 'utf8').trim().split('\n').map((l) => JSON.parse(l));
+  const reader = calls.find((c) => c.stdin.includes('Feature file'));
+  assert.ok(reader.argv.includes('--deny-all'), reader.argv.join(' '));
+  assert.match(reader.stdin, /Cited source src\/app\.js:\nexport const app = 1; \/\/ ACP-CITED-LINE/);
+});
+
+test('maintain treats an untracked repo path as a citation problem in the skill and as unverified drift', () => {
+  const { repo, env, sh } = setup();
+  const answer = JSON.stringify({ drift: [{ claim: 'scratch is right', why: 'the source has it', file: 'scratch/notes.js', line: 1 }], recipe: 'open it', recipes: [], missing: [] });
+  const s = stubAgents(env, answer);
+  const skill = join(repo, '.agents', 'skills', 'verify-notes');
+  mkdirSync(join(skill, 'features'), { recursive: true });
+  writeFileSync(join(skill, 'SKILL.md'), '# verify-notes\n\nScratch is at scratch/notes.js:1.\n');
+  writeFileSync(join(skill, 'features', 'README.md'), '# features\n\n- [Home](home.md)\n');
+  writeFileSync(join(skill, 'features', 'home.md'), '# Home\n');
+  sh('add', '-A');
+  sh('commit', '-qm', 'skill');
+  mkdirSync(join(repo, 'scratch'), { recursive: true });
+  writeFileSync(join(repo, 'scratch', 'notes.js'), 'export const notes = 1;\n');
+  const r = doctorIn(repo, s.env, 'maintain', '--foreground', '--full');
+  const m = toon(r);
+  assert.deepEqual([r.code, m.result], [1, 'drift'], r.out);
+  assert.deepEqual(m.findings.map((f) => f.kind), ['citation'], 'the untracked file is not a drift finding');
+  assert.match(m.findings[0].what, /cites scratch\/notes\.js:1, but scratch\/notes\.js is not a tracked file/);
+  assert.match(m.unverified.join('\n'), /home\.md: drift "scratch is right" cites scratch\/notes\.js:1: scratch\/notes\.js is not a tracked file/);
+});
+
+test('maintain leaves an unreadable cited file out of the reader source and names it, without blocking', { skip: process.getuid?.() === 0 && 'root reads files whatever their mode' }, () => {
+  const { repo, env, sh } = setup();
+  const s = stubPiGemini(env, JSON.stringify({ drift: [], recipe: 'open it', recipes: [], missing: [] }));
+  mkdirSync(env.DONE_DONE_HOME, { recursive: true });
+  writeFileSync(join(env.DONE_DONE_HOME, 'config.yaml'), 'agent: pi\n');
+  const skill = join(repo, '.agents', 'skills', 'verify-notes');
+  mkdirSync(join(skill, 'features'), { recursive: true });
+  mkdirSync(join(repo, 'src'), { recursive: true });
+  writeFileSync(join(repo, 'src', 'secret.js'), 'export const secret = 1;\n');
+  writeFileSync(join(repo, 'src', 'app.js'), 'export const app = 1; // READABLE-CITED-LINE\n');
+  writeFileSync(join(skill, 'SKILL.md'), '# verify-notes\n');
+  writeFileSync(join(skill, 'features', 'README.md'), '# features\n\n- [Home](home.md)\n');
+  writeFileSync(join(skill, 'features', 'home.md'), '# Home\n\nThe secret is in src/secret.js:1 and the app is in src/app.js:1.\n');
+  sh('add', '-A');
+  sh('commit', '-qm', 'skill');
+  chmodSync(join(repo, 'src', 'secret.js'), 0o000);
+  let r;
+  try {
+    r = doctorIn(repo, s.env, 'maintain', '--foreground');
+  } finally {
+    chmodSync(join(repo, 'src', 'secret.js'), 0o644);
+  }
+  const m = toon(r);
+  assert.deepEqual([r.code, m.result], [1, 'drift'], r.out);
+  assert.ok(!m.findings.some((f) => f.kind === 'coverage'), r.out);
+  const reader = s.calls().find((c) => c.stdin.includes('Feature file'));
+  assert.ok(reader.stdin.includes('Cited source src/app.js:\nexport const app = 1; // READABLE-CITED-LINE'), reader.stdin);
+  assert.match(reader.stdin, /\[truncated: .*left out: src\/secret\.js\]/, reader.stdin);
+});
+
+test('maintain does not name a file that was untracked since the window as recently changed', () => {
+  const { repo, env, sh } = setup();
+  const s = stubAgents(env, JSON.stringify({ drift: [], recipe: 'open it', recipes: [], missing: [{ file: 'secrets/.env', why: 'a feature should cover it' }] }));
+  const skill = join(repo, '.agents', 'skills', 'verify-notes');
+  mkdirSync(join(skill, 'features'), { recursive: true });
+  mkdirSync(join(repo, 'secrets'), { recursive: true });
+  writeFileSync(join(repo, 'secrets', '.env'), 'TOKEN=1\n');
+  writeFileSync(join(skill, 'SKILL.md'), '# verify-notes\n');
+  writeFileSync(join(skill, 'features', 'README.md'), '# features\n\n- [Home](home.md)\n');
+  writeFileSync(join(skill, 'features', 'home.md'), '# Home\n');
+  sh('add', '-A');
+  sh('commit', '-qm', 'skill and env');
+  sh('rm', '-q', '--cached', 'secrets/.env');
+  writeFileSync(join(repo, '.gitignore'), 'secrets/\n');
+  sh('add', '-A');
+  sh('commit', '-qm', 'untrack env');
+  const r = doctorIn(repo, s.env, 'maintain', '--foreground');
+  const m = toon(r);
+  assert.deepEqual([r.code, m.result], [0, 'clean'], r.out);
+  assert.match(m.unverified.join('\n'), /missing secrets\/\.env: not in the churn list/, r.out);
+});
+
+test('maintain blocks the source wave for gemini, which cannot read tool-less, and still runs the plain checks', () => {
+  const { repo, env, sh } = setup();
+  const s = stubPiGemini(env, JSON.stringify({ drift: [], recipe: 'open it', recipes: [], missing: [] }));
+  mkdirSync(env.DONE_DONE_HOME, { recursive: true });
+  writeFileSync(join(env.DONE_DONE_HOME, 'config.yaml'), 'agent: gemini\n');
+  const skill = join(repo, '.agents', 'skills', 'verify-notes');
+  mkdirSync(join(skill, 'features'), { recursive: true });
+  writeFileSync(join(skill, 'SKILL.md'), '# verify-notes\n\n[Gone](gone.md)\n');
+  writeFileSync(join(skill, 'features', 'README.md'), '# features\n\n- [Home](home.md)\n');
+  writeFileSync(join(skill, 'features', 'home.md'), '# Home\n');
+  sh('add', '-A');
+  sh('commit', '-qm', 'skill');
+  const r = doctorIn(repo, s.env, 'maintain', '--foreground', '--full');
+  const m = toon(r);
+  assert.deepEqual([r.code, m.result], [3, 'blocked'], r.out);
+  assert.match(m.reason, /^coverage: .*gemini cannot read tool-less yet/, r.out);
+  assert.deepEqual(m.findings.map((f) => f.kind), ['dead-link', 'coverage'], r.out);
+  assert.equal(s.calls().length, 0, 'no reader or reconcile call reaches gemini');
+});
+
+test('rerun refuses a maintain run with a usage error that points to done-done maintain', () => {
+  const { repo, env, sh } = setup();
+  const s = stubAgents(env, JSON.stringify({ drift: [], recipe: 'open it', recipes: [], missing: [] }));
+  const skill = join(repo, '.agents', 'skills', 'verify-notes');
+  mkdirSync(join(skill, 'features'), { recursive: true });
+  writeFileSync(join(skill, 'SKILL.md'), '# verify-notes\n');
+  writeFileSync(join(skill, 'features', 'README.md'), '# features\n\n- [Home](home.md)\n');
+  writeFileSync(join(skill, 'features', 'home.md'), '# Home\n');
+  sh('add', '-A');
+  sh('commit', '-qm', 'skill');
+  const id = toon(doctorIn(repo, s.env, 'maintain', '--foreground')).run_id;
+  const re = spawnSync(process.execPath, [CLI, 'rerun', '--run', id], { cwd: repo, env: s.env, encoding: 'utf8' });
+  assert.equal(re.status, 2, re.stdout + re.stderr);
+  assert.match(toon({ out: re.stdout }).error, /is a maintain run, which cannot be rerun/);
+  assert.match(toon({ out: re.stdout }).help[0], /done-done maintain$/);
+});
+
+test('abort of a running maintain run also ends its agent child', async () => {
+  const { repo, env, sh } = setup();
+  const s = stubAgents(env);
+  const pidFile = join(s.bin, 'agent.pid');
+  writeFileSync(join(s.bin, 'claude'), `#!${process.execPath}
+const { writeFileSync } = require('node:fs');
+writeFileSync(${JSON.stringify(pidFile)}, String(process.pid));
+setTimeout(() => {}, 30_000);
+`, { mode: 0o755 });
+  const skill = join(repo, '.agents', 'skills', 'verify-notes');
+  mkdirSync(join(skill, 'features'), { recursive: true });
+  writeFileSync(join(skill, 'SKILL.md'), '# verify-notes\n');
+  writeFileSync(join(skill, 'features', 'README.md'), '# features\n\n- [Home](home.md)\n');
+  writeFileSync(join(skill, 'features', 'home.md'), '# Home\n');
+  sh('add', '-A');
+  sh('commit', '-qm', 'skill');
+  const id = toon(doctorIn(repo, s.env, 'maintain', '--no-wait')).run_id;
+  for (let i = 0; i < 200 && !existsSync(pidFile); i++) await new Promise((r) => setTimeout(r, 50));
+  const agent = Number(readFileSync(pidFile, 'utf8'));
+  const ab = spawnSync(process.execPath, [CLI, 'abort', '--run', id], { cwd: repo, env: { ...s.env, PATH: process.env.PATH }, encoding: 'utf8' });
+  assert.equal(ab.status, 0, ab.stdout + ab.stderr);
+  assert.ok(await groupGone(agent), 'the agent child outlived the aborted run');
 });

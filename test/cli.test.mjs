@@ -3827,22 +3827,33 @@ test('opencode read calls get a deny-all permission and no read allowance', asyn
   assert.deepEqual(JSON.parse(s.calls()[0].permission), { '*': 'deny' });
 });
 
-test('the opencode author drive allows every external directory, while a tool-less call stays deny-all', async () => {
+test('the opencode author drive allows every external directory except the user home, while a tool-less call stays deny-all', async () => {
   const { repo, env } = setup();
   const s = stubAgents(env);
   const { askAgent } = await import(pathToFileURL(join(dirname(fileURLToPath(import.meta.url)), '..', 'dist', 'agents.js')).href);
   const call = { agent: 'opencode', model: 'm', path: join(s.env.PATH, 'opencode'), prompt: 'p', schema: { type: 'object', properties: { ok: { type: 'boolean' } }, required: ['ok'] }, cwd: repo, timeoutMs: 60_000, record: join(s.env.PATH, 'rec.json') };
-  const old = process.env.PATH;
+  const old = process.env.PATH, oldHome = process.env.HOME, oldXdg = process.env.XDG_DATA_HOME;
+  const home = join(env.DONE_DONE_HOME, 'home'), xdg = join(env.DONE_DONE_HOME, 'xdg-data'), data = join(xdg, 'opencode');
+  const evidence = join(env.DONE_DONE_HOME, 'evidence'), scratch = join(env.DONE_DONE_HOME, 'tmp');
   process.env.PATH = s.env.PATH;
+  process.env.HOME = home;
+  process.env.XDG_DATA_HOME = xdg;
   try {
-    await askAgent({ ...call, tools: 'edit', dirs: [join(env.DONE_DONE_HOME, 'evidence'), join(env.DONE_DONE_HOME, 'tmp')] });
+    await askAgent({ ...call, tools: 'edit', dirs: [evidence, scratch] });
     await askAgent({ ...call, tools: 'none' });
   } finally {
     process.env.PATH = old;
+    if (oldHome === undefined) delete process.env.HOME; else process.env.HOME = oldHome;
+    if (oldXdg === undefined) delete process.env.XDG_DATA_HOME; else process.env.XDG_DATA_HOME = oldXdg;
   }
   const [drive, judge] = s.calls();
-  // A headless run cannot answer a permission ask, so the drive allows every external path the app it drives may touch.
-  assert.deepEqual(JSON.parse(drive.permission), { external_directory: { '*': 'allow' } }, 'the author drive allows external directories');
+  // A headless run cannot answer a permission ask, so the drive allows every external path except the home folder,
+  // where the run's own folders are allowed again, and opencode's data folder (its login) stays denied.
+  const scope = JSON.parse(drive.permission).external_directory;
+  assert.deepEqual(Object.keys(scope).slice(0, 5), ['*', home, `${home}/*`, data, `${data}/*`], 'the home and data folder denies come before the run folders');
+  assert.deepEqual([scope['*'], scope[home], scope[`${home}/*`], scope[data], scope[`${data}/*`]], ['allow', 'deny', 'deny', 'deny', 'deny'], 'the drive allows external folders, denies the home folder and opencode\'s data folder');
+  assert.deepEqual([scope[evidence], scope[`${evidence}/*`], scope[scratch], scope[`${scratch}/*`]], ['allow', 'allow', 'allow', 'allow'], 'the run\'s evidence and scratch folders are allowed after the denies');
+  assert.ok(Object.keys(scope).indexOf(`${home}/*`) < Object.keys(scope).indexOf(evidence), 'the run folder allows come after the home deny, which opencode takes as the last match');
   assert.deepEqual(JSON.parse(judge.permission), { '*': 'deny' }, 'a tool-less call keeps the deny-all scope');
 });
 

@@ -1,6 +1,6 @@
 import { spawn, spawnSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { dirname, isAbsolute, join } from 'node:path';
 import { stripVTControlCharacters } from 'node:util';
 import { AGENTS, ANSWERER_JUDGES, CHEAP, type Config, EFFORT_FLAGS, KEY_ROUTES, parseDuration, UsageError } from './config.js';
@@ -143,9 +143,19 @@ const ADAPTERS: Record<string, Adapter> = {
       return extractJsonObject(text, c.schema.required);
     },
     // A headless `run` cannot answer a permission ask, so any ask auto-rejects and the drive ends with no answer.
-    // Driving the app runs commands that read or execute paths outside the repo (a browser, a system binary), so the
-    // author drive allows every external directory. Tool-less calls keep the deny-all scope.
-    env: (c): Record<string, string> => ({ OPENCODE_PERMISSION: JSON.stringify(c.tools === 'edit' ? { external_directory: { '*': 'allow' } } : { '*': 'deny' }) }),
+    // Driving the app runs commands that read or execute paths outside the repo (a browser, a system binary), so an
+    // edit step allows every external directory except the user's home folder, where only the run's own folders are
+    // allowed again; opencode's data folder (its login and database) is denied even when it is outside the home folder.
+    // opencode takes the last rule that matches, so the run folders come after the denies. Tool-less calls deny all.
+    env: (c): Record<string, string> => {
+      if (c.tools !== 'edit') return { OPENCODE_PERMISSION: JSON.stringify({ '*': 'deny' }) };
+      const home = homedir();
+      const data = join(process.env.XDG_DATA_HOME || join(home, '.local', 'share'), 'opencode');
+      return { OPENCODE_PERMISSION: JSON.stringify({ external_directory: {
+        '*': 'allow', [home]: 'deny', [`${home}/*`]: 'deny', [data]: 'deny', [`${data}/*`]: 'deny',
+        ...Object.fromEntries((c.dirs ?? []).flatMap((d) => [[d, 'allow'], [`${d}/*`, 'allow']])),
+      } }) };
+    },
     // A permission the run refused: the drive could not continue, so this is the reason, not a missing answer.
     reject: (stderr) => {
       const m = PERMISSION_REJECT.exec(stripVTControlCharacters(stderr));

@@ -5065,6 +5065,31 @@ test('without an inputs key the guard stays off and the run behaves as before', 
   assert.ok(!e.out.includes('input guard'), 'the guard says nothing with no inputs key');
 });
 
+test('a directory pattern with a trailing slash or a leading ./ still guards its files', () => {
+  for (const pattern of ['./data/', 'data/']) {
+    const t = guarded(GUARDED.replace('inputs: ["data/**"]', `inputs: ["${pattern}"]`));
+    const e = t.dd('verify', 'edit', '--outcome', 'home renders', '--foreground');
+    assert.equal(e.code, 1, e.out);
+    assert.match(toon(e).reason, /input guard: data\/seed\.json: changed during the drive/, pattern);
+  }
+});
+
+test('a non-ASCII untracked input is guarded by its real name', () => {
+  const t = guarded(`${GUARDED}  accent:\n    command: node make-shots.mjs \${RUN_ID} && echo new > "data/café.json"\n`);
+  const a = t.dd('verify', 'accent', '--outcome', 'home renders', '--foreground');
+  assert.equal(a.code, 1, a.out);
+  assert.match(toon(a).reason, /input guard: data\/café\.json: appeared during the drive/);
+});
+
+test('a rerun that reuses the drive keeps guarding it, so a guarded change still fails', () => {
+  const t = guarded();
+  const a = t.dd('verify', 'add', '--outcome', 'home renders', '--foreground');
+  assert.equal(a.code, 1, a.out);
+  const r = t.dd('rerun', '--run', toon(a).run_id);
+  assert.equal(r.code, 1, r.out);
+  assert.match(toon(r).reason, /input guard: data\/extra\.json: appeared during the drive/);
+});
+
 // DOM assertions: a two-cell matrix whose journey writes each cell's capture and, when given, its page-check record.
 const CLEAN = { url: 'http://127.0.0.1/home', overflow: false, overflowing: [], console_errors: [], failed_requests: [] };
 const BROKEN = { ...CLEAN, overflow: true, overflowing: ['div#wide'], console_errors: ['boom'], failed_requests: [{ url: 'http://127.0.0.1/x.js', status: 404 }] };

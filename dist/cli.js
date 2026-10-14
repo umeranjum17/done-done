@@ -982,32 +982,20 @@ function skillHash(repo, cfg) {
 }
 // Every file the guard can see: tracked files plus untracked ones (ignored files never match).
 function guardCandidates(at) {
-    let tracked = [];
     try {
-        tracked = execFileSync('git', ['ls-files', '-z'], { cwd: at, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).split('\0').filter(Boolean);
+        return [...new Set(execFileSync('git', ['ls-files', '-z', '--cached', '--others', '--exclude-standard'], { cwd: at, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).split('\0').filter(Boolean))].sort();
     }
     catch {
-        tracked = [];
+        return [];
     }
-    let untracked = [];
-    try {
-        for (const line of execFileSync('git', ['status', '--porcelain', '--untracked-files=all'], { cwd: at, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).split('\n')) {
-            const m = /^\?\? (.+)$/.exec(line);
-            if (m)
-                untracked.push(m[1].replace(/^"(.*)"$/, '$1'));
-        }
-    }
-    catch {
-        untracked = [];
-    }
-    return [...new Set([...tracked, ...untracked])].sort();
 }
 function guardSnapshot(at, patterns) {
     if (!patterns.length)
         return [];
     const candidates = guardCandidates(at);
     const paths = new Set();
-    for (const p of patterns) {
+    for (const raw of patterns) {
+        const p = raw.replace(/^(\.\/)+/, '').replace(/\/+$/, '');
         if (/[*?{\[]/.test(p)) {
             for (const c of candidates)
                 if (c === p || c.startsWith(`${p}/`) || matchesGlob(c, p))
@@ -1205,8 +1193,10 @@ async function runSteps(dir) {
         const pass = async (at, fix = '') => {
             const id = fix ? `${run.run_id}-${fix}` : run.run_id;
             const fail = (reason, fixable = [], result = 'fail') => ({ end: { result, reason: `drive: ${reason}` }, asks: [], fixable });
+            const reusing = !fix && done('drive') && !!run.record;
+            const guardBefore = reusing ? [] : guardSnapshot(at, cfg.inputs);
             let rec;
-            if (!fix && done('drive') && run.record) {
+            if (reusing) {
                 begin('drive');
                 rec = JSON.parse(readFileSync(run.record, 'utf8'));
                 set(step, 'completed');
@@ -1220,7 +1210,6 @@ async function runSteps(dir) {
                 const evidence = runDir(cfg, rec.run_id);
                 const tracked = () => sha256(execFileSync('git', ['diff', 'HEAD', '--binary'], { cwd: at, maxBuffer: Infinity, stdio: ['ignore', 'pipe', 'pipe'] }));
                 const before = tracked();
-                const guardBefore = guardSnapshot(at, cfg.inputs);
                 const scratch = join(dir, 'tmp');
                 mkdirSync(scratch, { recursive: true });
                 // With an instance block the app is already running at $DONE_DONE_BASE_URL; the drive uses it, never a fixed port.
@@ -1249,8 +1238,6 @@ async function runSteps(dir) {
                 const blocker = String(answer?.blocker ?? '').trim();
                 rec.exit = a.ok && !blocker ? 0 : 1;
                 const changed = tracked() !== before;
-                if (cfg.inputs.length)
-                    run.guarded = { before: guardBefore, after: guardSnapshot(at, cfg.inputs) };
                 const sealed = closeRun(at, cfg, rec);
                 if (!fix)
                     run.record = join(recordsDir(cfg), `${rec.run_id}.json`);
@@ -1270,7 +1257,6 @@ async function runSteps(dir) {
             else {
                 begin('drive');
                 rec = openRun(at, cfg, run.journey, command.replaceAll('${RUN_ID}', id), id);
-                const guardBefore = guardSnapshot(at, cfg.inputs);
                 const logFile = join(dir, 'logs', `${fix}drive.log`);
                 const fd = openSync(logFile, 'a');
                 // With an instance block the app starts first on its own port; the journey talks to $DONE_DONE_BASE_URL.
@@ -1326,8 +1312,6 @@ async function runSteps(dir) {
                 closeSync(fd);
                 if (run.runner?.instance_pgid)
                     stopInstance(run.runner.instance_pgid);
-                if (cfg.inputs.length)
-                    run.guarded = { before: guardBefore, after: guardSnapshot(at, cfg.inputs) };
                 const sealed = closeRun(at, cfg, rec);
                 if (!fix)
                     run.record = join(recordsDir(cfg), `${rec.run_id}.json`);
@@ -1339,6 +1323,8 @@ async function runSteps(dir) {
                 if (sealed.code !== PASS)
                     return fail(sealed.reason, tries && /^the run command exited/.test(sealed.reason) ? [{ kind: 'drive', file: run.journey, what: `the journey ${sealed.reason}; the end of its output:\n${readFileSync(logFile, 'utf8').slice(-2000)}` }] : []);
             }
+            if (!reusing && cfg.inputs.length)
+                run.guarded = { before: guardBefore, after: guardSnapshot(at, cfg.inputs) };
             begin('check');
             const files = rec.files.map((f) => join(cfg.evidence.root, f.path));
             // The input guard: the drive must leave the watched inputs alone. A difference fails the check step,
@@ -1867,9 +1853,11 @@ async function cmdRerun(argv) {
     // A source run with no journey is driven again by the author agent config names now; schema 2 runs before PR 4 always had a journey.
     const journey = src.journey ?? null;
     const drive = journey === null ? await agentDrive(src.repo, cfg, src.feature) : undefined;
-    const inputs = inputsOf(src.repo, loadConfig(src.repo), journey, drive?.author);
+    const srcCfg = loadConfig(src.repo);
+    const inputs = inputsOf(src.repo, srcCfg, journey, drive?.author);
     const same = !!src.inputs && ['head', 'journey', 'skill'].every((k) => src.inputs[k] === inputs[k]);
-    const driveReuse = same && drivesClean(src.record, src.inputs?.head);
+    // A reused drive keeps the guard it ran under; a source that ran with no guard cannot vouch for newly watched inputs.
+    const driveReuse = same && drivesClean(src.record, src.inputs?.head) && (!srcCfg.inputs.length || !!src.guarded);
     const reused = (name) => (name === 'resolve' && same) || (name === 'drive' && driveReuse);
     // A rerun judges as its source did; --no-judge turns it off for this run. A missing or forbidden judge is a usage
     // error here too.
@@ -1883,7 +1871,7 @@ async function cmdRerun(argv) {
         return s && reused(name) && s.status === 'completed' ? { ...s } : { name, status: 'pending' };
     });
     const created = now();
-    const run = { schema: 2, run_id: id, kind: src.kind, app: cfg.app, repo: src.repo, journey, ...drive, claim: src.claim, claim_id: src.claim_id, branch: src.branch, judge: judging, status: 'pending', inputs, steps, created, updated: created, ...(driveReuse && src.record && { record: src.record }) };
+    const run = { schema: 2, run_id: id, kind: src.kind, app: cfg.app, repo: src.repo, journey, ...drive, claim: src.claim, claim_id: src.claim_id, branch: src.branch, judge: judging, status: 'pending', inputs, steps, created, updated: created, ...(driveReuse && src.record && { record: src.record }), ...(driveReuse && src.guarded && { guarded: src.guarded }) };
     saveRun(dir, run);
     for (const s of steps) {
         const f = join(root, srcId, 'logs', `${s.name}.log`);

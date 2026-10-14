@@ -2313,9 +2313,9 @@ function detectApp(repo) {
     const commands = [...text.matchAll(/\.command\(\s*['"`]([^'"`\s\]]+)/g)]
         .map((m) => m[1])
         .filter((c, i, a) => a.indexOf(c) === i);
-    // A page served as HTML is a web UI even with no framework dependency.
-    const web = has('react', 'next', 'vue', 'nuxt', 'svelte', 'solid', 'vite', 'webpack', 'playwright', '@playwright/test', 'cypress', 'puppeteer') || /text\/html|<html[\s>]/i.test(text);
     const cliish = bins.length > 0 || commands.length > 0 || has('commander', 'yargs', 'oclif', 'cac');
+    // A page served as HTML is a web UI even with no framework dependency.
+    const web = has('react', 'next', 'vue', 'nuxt', 'svelte', 'solid', 'vite', 'webpack', 'playwright', '@playwright/test', 'cypress', 'puppeteer') || (!cliish && /text\/html|<html[\s>]/i.test(text));
     const api = routes.length > 0 || has('express', 'fastify', 'koa', 'hono');
     const surface = web ? 'web UI' : cliish ? 'CLI' : api ? 'API/service' : 'app (unrecognized surface)';
     const launch = scripts.dev ? `npm run dev (${scripts.dev})`

@@ -1117,6 +1117,16 @@ test('init scaffolds a verify skill with real bin and commands for a CLI tool', 
   assert.ok(existsSync(join(dir, 'features', 'add.md')) && existsSync(join(dir, 'features', 'list.md')), 'subcommands become features');
 });
 
+test('init keeps a CLI whose source embeds an HTML template on the CLI recipe, not the browser one', () => {
+  const { repo, dd } = shapeRepo('cli', 'notes');
+  writeFileSync(join(repo, 'report.js'), 'module.exports = (rows) => `<html><body>${rows}</body></html>`;\n');
+  const r = dd('init');
+  assert.equal(r.code, 2, r.out);
+  const body = readFileSync(join(repo, '.agents', 'skills', 'verify-notes', 'SKILL.md'), 'utf8');
+  assert.match(body, /^Harness: tmux\/PTY/m, 'a CLI is driven over a PTY');
+  assert.match(body, /Capture terminal transcripts/, 'a CLI is observed through its transcript, not screenshots');
+});
+
 test('init never overwrites an existing verify skill', () => {
   const { repo, dd } = shapeRepo('cli', 'notes');
   const skill = join(repo, '.agents', 'skills', 'verify-notes', 'SKILL.md');

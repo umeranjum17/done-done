@@ -13,7 +13,7 @@ import { ACPX_INSTALL, agentChoices, agentPath, agentRun, askAgent, editOnlyReas
 import { AGENTS, CHEAP, globalConfigText, home, isAgent, loadConfig, parseDuration, UsageError } from './config.js';
 import { backend, judge, judgeable, onPath, quote } from './judge.js';
 import { startInstance, stopInstance } from './instance.js';
-import { maintainSteps, refuseSameSession } from './maintain.js';
+import { attemptProblem, changedSince, commitFix, dirtyTracked, FIX_SCHEMA, inWorktree, maintainSteps, named, refuseSameSession, repoState, triage } from './maintain.js';
 import { cellEnv, cellName, cellSuffix, hasMatrix, matrixManifest, splitMatrix } from './matrix.js';
 import { design, KINDS } from './design.js';
 import { checkMedia } from './media.js';
@@ -693,7 +693,7 @@ async function runCheck(argv, run) {
             else if (!findings.length && j.judged.some((r) => r.verdict === 'unsure'))
                 judgeLevel = 'inconclusive';
             for (const r of j.judged.filter((r) => r.verdict !== 'pass'))
-                findings.push({ level: r.verdict === 'fail' ? 'fail' : 'inconclusive', why: `${r.path}: judge says ${r.verdict === 'fail' ? 'wrong screen' : 'unsure'}: ${r.reason}` });
+                findings.push({ level: r.verdict === 'fail' ? 'fail' : 'inconclusive', why: `${r.path}: judge says ${r.verdict === 'fail' ? 'wrong screen' : 'unsure'}: ${r.reason}`, file: r.path });
             const rows = cap(j.judged);
             const { choice } = j;
             judged = { ...(choice && { route: choice.route, model: choice.model, independence: choice.independence, author: `${choice.author.agent} (model ${choice.author.model || 'none'})` }), judged: rows.items.map(({ sha256, ...r }) => r) };
@@ -911,7 +911,7 @@ const HEARTBEAT_MS = 5_000;
 // A run that never recorded its runner's pid this long after it was created has no runner.
 const STALE_MS = 60_000;
 const runsRoot = (app) => join(home(), 'runs', app);
-const STEPS = ['resolve', 'drive', 'check', 'judge', 'gate', 'receipt', 'report'];
+const verifySteps = (cfg) => ['resolve', 'drive', 'check', 'judge', ...(cfg.auto_fix.verify ? ['triage', 'fix'] : []), 'gate', 'receipt', 'report'];
 // Commands an agent drive must not run: they answer a gate, write a receipt or start a run that can write one.
 const DRIVE_REFUSED = ['respond', 'receipt', 'verify', 'rerun', 'maintain'];
 // One agent drive may launch the app, drive it and save captures; past this it is killed with everything it started.
@@ -1031,19 +1031,20 @@ function guardDiff(before, after) {
     const a = new Map(after.map((f) => [f.path, f.sha256]));
     const b = new Map(before.map((f) => [f.path, f.sha256]));
     const out = [];
+    const push = (path, verb) => out.push({ path, why: `${path}: ${verb} during the drive` });
     for (const [path, h] of b) {
         const g = a.get(path);
         if (h === null && g !== null && g !== undefined)
-            out.push(`${path}: appeared during the drive`);
+            push(path, 'appeared');
         else if (h !== null && g !== null && g !== undefined && g !== h)
-            out.push(`${path}: changed during the drive`);
+            push(path, 'changed');
         else if (h !== null && (g === null || g === undefined))
-            out.push(`${path}: disappeared during the drive`);
+            push(path, 'disappeared');
     }
     for (const [path, g] of a)
         if (g !== null && !b.has(path))
-            out.push(`${path}: appeared during the drive`);
-    return out.sort();
+            push(path, 'appeared');
+    return out.sort((x, y) => (x.why < y.why ? -1 : 1));
 }
 // The drive's input is the journey command, or for an agent drive the author agent and model that drove it.
 function inputsOf(repo, cfg, journey, author) {
@@ -1149,15 +1150,17 @@ async function runSteps(dir) {
         saveRun(dir, run);
     }, HEARTBEAT_MS);
     let step;
-    const set = (s, status, extra = {}) => setStep(dir, run, s, status, extra);
-    // A step that starts skips the earlier steps still pending (the judge when it is off).
+    // A fix's re-run (auto_fix.verify) is quiet: it leaves the run's steps as they are, and its step logs go to `quiet`.
+    let quiet = null;
+    const set = (s, status, extra = {}) => quiet ?? setStep(dir, run, s, status, extra);
+    // A step that starts skips the earlier steps still pending (the judge when it is off, a fix that was not needed).
     const begin = (name) => {
-        for (const s of run.steps.slice(0, run.steps.findIndex((s) => s.name === name)))
+        for (const s of quiet ? [] : run.steps.slice(0, run.steps.findIndex((s) => s.name === name)))
             if (s.status === 'pending')
                 s.status = 'skipped';
         return (set((step = run.steps.find((s) => s.name === name)), 'running'), step);
     };
-    const log = (name, result) => writeFileSync(join(dir, 'logs', `${name}.log`), `${encode(result)}\n`);
+    const log = (name, result) => quiet ? void (quiet[name] = result) : writeFileSync(join(dir, 'logs', `${name}.log`), `${encode(result)}\n`);
     const finish = (result, reason) => {
         step = run.steps.find((s) => s.name === 'report');
         finishRun(dir, run, result, reason);
@@ -1187,9 +1190,11 @@ async function runSteps(dir) {
         if (!reused)
             set(step, 'completed');
         // One drive, check and judge of the claim at `at`: the user's checkout, or (`fix` names the re-run) a fix worktree.
+        // With auto_fix.verify, a product failure (a drive the product stopped, a screen the judge calls wrong) may be fixed.
+        const tries = cfg.auto_fix.verify ?? 0;
         const pass = async (at, fix = '') => {
             const id = fix ? `${run.run_id}-${fix}` : run.run_id;
-            const fail = (reason, result = 'fail') => ({ end: { result, reason: `drive: ${reason}` }, asks: [] });
+            const fail = (reason, fixable = [], result = 'fail') => ({ end: { result, reason: `drive: ${reason}` }, asks: [], fixable });
             let rec;
             if (!fix && done('drive') && run.record) {
                 begin('drive');
@@ -1248,14 +1253,16 @@ async function runSteps(dir) {
                         : changed ? `${author.agent} changed tracked files in the repo during the drive (see git status), so its captures are not of the committed code`
                             : sealed.code !== PASS ? sealed.reason : '';
                 set(step, why ? 'failed' : 'completed', { exit: rec.exit, outputs: evidenceOf(run.repo, cfg, rec) });
+                // Only a blocker says the product stopped the drive; a lost or bad answer is the agent's own failure.
                 if (why)
-                    return fail(why);
+                    return fail(why, a.ok && blocker && !changed ? [{ kind: 'drive', file: `features/${run.feature || picked || 'README'}.md`, what: why }] : []);
             }
             else {
                 begin('drive');
                 rec = openRun(at, cfg, run.journey, command.replaceAll('${RUN_ID}', id), id);
                 const guardBefore = guardSnapshot(at, cfg.inputs);
-                const fd = openSync(join(dir, 'logs', `${fix}drive.log`), 'a');
+                const logFile = join(dir, 'logs', `${fix}drive.log`);
+                const fd = openSync(logFile, 'a');
                 // With an instance block the app starts first on its own port; the journey talks to $DONE_DONE_BASE_URL.
                 let instEnv = {};
                 if (cfg.instance) {
@@ -1316,11 +1323,11 @@ async function runSteps(dir) {
                     run.record = join(recordsDir(cfg), `${rec.run_id}.json`);
                 set(step, failed.length || sealed.code !== PASS ? 'failed' : 'completed', { exit: rec.exit, outputs: evidenceOf(run.repo, cfg, rec) });
                 if (timedOut)
-                    return fail(`journey timed out after ${timeout}`, 'inconclusive');
+                    return fail(`journey timed out after ${timeout}`, [], 'inconclusive');
                 if (matrix && failed.length)
                     return fail(`the journey command failed for cell ${failed.join('; ')}`);
                 if (sealed.code !== PASS)
-                    return fail(sealed.reason);
+                    return fail(sealed.reason, tries && /^the run command exited/.test(sealed.reason) ? [{ kind: 'drive', file: run.journey, what: `the journey ${sealed.reason}; the end of its output:\n${readFileSync(logFile, 'utf8').slice(-2000)}` }] : []);
             }
             begin('check');
             const files = rec.files.map((f) => join(cfg.evidence.root, f.path));
@@ -1329,10 +1336,10 @@ async function runSteps(dir) {
             if (run.guarded) {
                 const diffs = guardDiff(run.guarded.before, run.guarded.after);
                 if (diffs.length) {
-                    const findings = diffs.map((why) => ({ level: 'fail', why }));
+                    const findings = diffs.map((d) => ({ level: 'fail', why: d.why }));
                     set(step, 'failed', { exit: 1, findings });
                     log('check', { result: 'fail', findings });
-                    return { end: { result: 'fail', reason: `check: input guard: ${diffs.join('; ')}` }, asks: [] };
+                    return { end: { result: 'fail', reason: `check: input guard: ${diffs.map((d) => d.why).join('; ')}` }, asks: [], fixable: diffs.map((d) => ({ kind: 'drive', file: d.path, what: d.why })) };
                 }
             }
             // The check's own findings end the check step; the judge, when on and the check did not fail, is its own step.
@@ -1364,13 +1371,45 @@ async function runSteps(dir) {
                 : run.journey !== null ? []
                     : run.judge ? [{ level: 'inconclusive', why: 'the judge judged no capture (only PNG and JPEG captures are judged), and an agent drive passes only with a judge pass' }]
                         : [{ level: 'inconclusive', why: 'the judge is off (--no-judge), and an agent drive passes only with a judge pass' }];
+            // With auto_fix.verify, screens the judge calls wrong (and nothing it was unsure of) are a product failure to fix.
+            if (tries && asks.length && asks.every((f) => f.level === 'fail'))
+                return { checked, end: { result: 'fail', reason: `judge: ${asks[0].why}` }, asks: [], fixable: asks.map((f) => ({ kind: 'judge', file: f.file ?? '', what: f.why })) };
             if (asks.length)
-                return { checked, asks };
+                return { checked, asks, fixable: [] };
             if (checked.code !== PASS)
-                return { checked, end: { result: checked.code === FAIL ? 'fail' : 'inconclusive', reason: `${judgeFindings.length ? 'judge' : 'check'}: ${(judgeFindings[0] ?? checked.findings[0])?.why ?? 'did not pass'}` }, asks: [] };
-            return { checked, asks: [] };
+                return { checked, end: { result: checked.code === FAIL ? 'fail' : 'inconclusive', reason: `${judgeFindings.length ? 'judge' : 'check'}: ${(judgeFindings[0] ?? checked.findings[0])?.why ?? 'did not pass'}` }, asks: [], fixable: [] };
+            return { checked, asks: [], fixable: [] };
         };
-        const p = await pass(run.repo);
+        const h = { begin, set, log, spawned };
+        let p = await pass(run.repo);
+        let fixed = false;
+        // auto_fix.verify: the judge sorts the product failures first (an ask parks the run at the gate); then a checkout with
+        // uncommitted tracked changes is never fixed, since the fix starts from the committed head.
+        if (tries && p.end && p.fixable.length) {
+            const sorted = await sortJudged(run, cfg, failures(p.fixable), join(dir, 'agents', 'triage.json'), h);
+            if (typeof sorted === 'string')
+                return finish('blocked', `triage: ${sorted}`);
+            if (sorted.length)
+                p = { checked: p.checked, asks: sorted, fixable: [] };
+            else {
+                const dirty = dirtyTracked(run.repo);
+                if (dirty.length) {
+                    run.findings = failures(p.fixable);
+                    return finish('blocked', `dirty: uncommitted changes to tracked files (${named(dirty)}), so done-done does not fix this run (${p.end.reason}); commit them, or set auto_fix: { verify: 0 }, then run again`);
+                }
+                const f = await fixVerify(run, cfg, dir, p, tries, h, async (at, fix) => { const logs = (quiet = {}); const fixStep = step; try {
+                    return { ...(await pass(at, fix)), logs };
+                }
+                finally {
+                    quiet = null;
+                    step = fixStep;
+                } });
+                if ('blocked' in f)
+                    return finish('blocked', `fix: ${f.blocked}`);
+                p = f;
+                fixed = true;
+            }
+        }
         if (p.asks.length) {
             begin('gate');
             const findings = p.asks.map((f, i) => ({ id: `gate-${i + 1}`, severity: f.level === 'fail' ? 'error' : 'warning', what: f.why, action: 'ask-user' }));
@@ -1389,7 +1428,7 @@ async function runSteps(dir) {
         set(step, receipt.code === PASS ? 'completed' : 'failed', { exit: receipt.code });
         if (receipt.code !== PASS)
             return finish('fail', `receipt: ${receipt.result.reason}`);
-        finish('pass');
+        finish(fixed ? 'changed' : 'pass', fixed ? `your HEAD failed; the fix passes, on ${run.fix.branch}` : undefined);
     }
     catch (e) {
         for (const s of run.steps)
@@ -1408,6 +1447,109 @@ async function runSteps(dir) {
     finally {
         clearInterval(beat);
     }
+}
+const failures = (list) => list.map((f, i) => ({ id: `F${i + 1}`, ...f }));
+// What a verify fix never changes: the verify skill, .done-done.yaml, tests and test-runner configs. Other files a
+// journey runs are not guarded, so review the fix branch.
+const TEST_FILE = /(^|\/)(test|tests|__tests__|e2e|spec)\/|\.(test|spec)\.[^/]*$|_test\.(go|py)$|(^|\/)test_[^/]*\.py$|(^|\/)((playwright|jest|vitest|cypress)\.config\.[^/]*|cypress\.json)$/;
+// The judge's question for a screen it called wrong: the claim is the truth unless it looks wrong or needs a decision.
+const VERIFY_TRIAGE = {
+    question: 'is a screen the judge called wrong for an outcome claim: the claim says what a user can now do, and the screen did not show it. Which side should change? The claim is the truth unless it looks wrong, ambiguous or in need of a product decision.',
+    options: {
+        fix: 'The product clearly misses a clear claim, so the product code should change to make the outcome hold.',
+        ask: 'The claim may be wrong, is ambiguous, or the change needs a product decision, so a person must decide.',
+        unclear: 'The text cannot settle which side should change.',
+    },
+    fix: 'fix',
+};
+// The judge the user set (never the fixer's agent) sorts the judge's failures before each fix: [] sends them all to the fixer;
+// with any ask (or unsure answer), every judge failure goes to the gate with its class. A string: why the judge did not answer.
+async function sortJudged(run, cfg, open, record, h) {
+    const judged = open.filter((f) => f.kind === 'judge');
+    if (!judged.length)
+        return [];
+    const step = h.begin('triage');
+    const choice = refuseSameSession(selectJudge(cfg, selectAgent(cfg)));
+    const asks = await triage(cfg, choice, judged, VERIFY_TRIAGE, { app: cfg.app, outcome: run.claim, findings: judged }, record);
+    h.log('triage', { judge: { route: choice.route, model: choice.model, independence: choice.independence }, ask_user: asks });
+    h.set(step, typeof asks === 'string' ? 'failed' : 'completed');
+    if (typeof asks === 'string' || !asks.length)
+        return typeof asks === 'string' ? asks : [];
+    return judged.map((f) => ({ level: 'fail', why: `${(asks.find((x) => x.id === f.id) ?? f).what}; triage: ${asks.some((x) => x.id === f.id) ? 'ask' : 'fix'}`, file: f.file }));
+}
+// auto_fix.verify: the user's agent fixes product code in a done-done worktree at the verified head, done-done commits it and
+// `again` verifies there, up to `tries` times; a pass or a gate keeps a done-done/verify-<run-id> branch, never the user's.
+async function fixVerify(run, cfg, dir, first, tries, h, again) {
+    h.begin('fix');
+    const repo = run.repo;
+    const skill = relative(repo, join(repo, cfg.skill));
+    const off = (p) => p === '.done-done.yaml' || p.startsWith(`${skill}/`) || TEST_FILE.test(p);
+    const agent = selectAgent(cfg);
+    const checkout = repoState(repo);
+    const wt = join(dir, 'fix');
+    const scratch = join(dir, 'tmp');
+    const rounds = [];
+    let open = failures(first.fixable);
+    const record = JSON.parse(readFileSync(run.record, 'utf8'));
+    return inWorktree(repo, wt, async (start) => {
+        let base = start;
+        for (let k = 1; k <= tries; k++) {
+            const step = h.begin('fix');
+            const round = { attempt: k, failures: open };
+            rounds.push(round);
+            const close = (status) => (h.log('fix', { agent: agent.agent, model: agent.model, worktree: wt, rounds }), h.set(step, status));
+            const blocked = (reason, findings = open) => (Object.assign(round, { blocked: reason }), close('failed'), (run.findings = findings), { blocked: reason });
+            const drive = run.journey === null ? `It drove the verify skill feature ${skill}/features/${run.feature ?? '<the one the outcome is about>'}.md the way a user does (${skill}/SKILL.md says how the app is launched).` : `It drove the app with this journey command: ${cfg.journeys[run.journey]?.command}`;
+            const prompt = `You fix the ${cfg.app} app in this checkout, your working directory. done-done verify drove the real app to prove the outcome below, and it failed.
+${drive}
+
+Outcome to prove: ${run.claim}
+
+Failures (JSON): ${JSON.stringify(open)}
+
+Change the product's code so the outcome holds when a user takes that path. Never change the verify skill (${skill}/), .done-done.yaml, a test file (test/, tests/, __tests__/, e2e/, spec/, *.test.*, *.spec.*, *_test.go, *_test.py, test_*.py) or a test-runner config, and never make the outcome only look true. Do not commit, and do not run done-done. Put scratch files in ${scratch} (also in $TMPDIR).
+
+Answer with summary (what you changed, in one line) and blocker ("" when you fixed it, else why you could not).`;
+            mkdirSync(scratch, { recursive: true });
+            // A re-run's edits and new files are not the fixer's to commit. Ignored ones (a build) stay.
+            git(wt, 'reset', '-q', '--hard');
+            git(wt, 'clean', '-fdq');
+            const a = await askAgent({ ...agent, prompt, schema: FIX_SCHEMA, cwd: wt, tools: 'edit', record: join(dir, 'agents', `fix-${k}.json`), dirs: [scratch], env: { DONE_DONE_DRIVE: run.run_id, TMPDIR: scratch }, onSpawn: h.spawned });
+            Object.assign(round, { record: a.record ?? a.recordError, ...(a.ok ? { summary: a.answer?.summary, blocker: a.answer?.blocker } : { error: a.error }) });
+            // The diff guard: product code only, in the worktree only; anything else drops the attempt with the worktree.
+            const changed = (round.changed = changedSince(wt, base, false));
+            const problem = attemptProblem(repo, checkout, wt, base, agent.agent, a, changed, changed.filter(off), 'the verify skill, .done-done.yaml, a test file or a test-runner config, which a fix never changes', 'the product');
+            if (problem)
+                return blocked(problem);
+            if (!changed.length)
+                return blocked(`${agent.agent} changed nothing`);
+            const made = commitFix(wt, base, `fix: done-done verify fixes ${run.claim.slice(0, 60)}`, ['.']);
+            if (typeof made === 'string')
+                return blocked(made);
+            if (made.files.some(off))
+                return blocked('the commit holds the verify skill, .done-done.yaml, a test file or a test-runner config (a commit hook added them), so no branch is made');
+            base = round.commit = made.commit;
+            run.fix = { commit: made.commit, record: join(recordsDir(cfg), `${run.run_id}-fix${k}.json`) };
+            // Verify again at the fix commit; its records are named fix<k>-, and the judge sorts its failures before the next fix.
+            const next = await again(wt, `fix${k}`);
+            round.rerun = { result: next.end?.result ?? (next.asks.length ? 'gate' : 'pass'), reason: next.end?.reason, ...next.logs };
+            if (next.end && !next.fixable.length)
+                return blocked(`the re-run after attempt ${k} did not pass: ${next.end.reason}`, []);
+            const sorted = next.end ? await sortJudged(run, cfg, failures(next.fixable), join(dir, 'agents', `triage-fix${k}.json`), h).catch((e) => { close('failed'); throw e; }) : [];
+            if (typeof sorted === 'string')
+                return blocked(`triage: ${sorted}`, failures(next.fixable));
+            if (!next.end || sorted.length) {
+                run.fix.branch = `done-done/verify-${run.run_id}`;
+                git(repo, 'branch', run.fix.branch, made.commit);
+                close('completed');
+                return sorted.length ? { checked: next.checked, asks: sorted, fixable: [] } : next;
+            }
+            open = failures(next.fixable);
+            close('completed');
+        }
+        run.findings = open;
+        return { blocked: `auto_fix.verify allows ${tries} ${tries === 1 ? 'attempt' : 'attempts'}, and the re-run still fails after them` };
+    }, record.commit);
 }
 // EPERM: the pid is alive but not ours to signal. A pid reused by another process still reads as alive: the known limit of a pid check.
 const alive = (pid) => {
@@ -1445,7 +1587,7 @@ function showRun(dir, cfg, command, gone = false) {
         reapJourney(dir, run);
     }
     // An overridden run is never a pass: it exits 1 like a fail.
-    const code = status === 'pending' || status === 'running' || status === 'awaiting_approval' ? WAITING : status === 'cancelled' || status === 'failed' || run.result === 'fail' || run.result === 'overridden' || run.result === 'drift' ? FAIL : run.result === 'inconclusive' || run.result === 'blocked' ? INCONCLUSIVE : PASS;
+    const code = status === 'pending' || status === 'running' || status === 'awaiting_approval' ? WAITING : status === 'cancelled' || status === 'failed' || run.result === 'fail' || run.result === 'overridden' || run.result === 'drift' || (run.kind === 'verify' && (run.result === 'changed' || run.result === 'blocked')) ? FAIL : run.result === 'inconclusive' || run.result === 'blocked' ? INCONCLUSIVE : PASS;
     const drive = run.journey ?? (run.feature ? `--feature ${arg(run.feature)}` : '');
     const judgeFlag = run.judge === false && cfg.judge.enabled !== false ? ' --no-judge' : run.judge && cfg.judge.enabled === false ? ' --judge' : '';
     const again = run.kind === 'maintain' ? 'done-done maintain' : `done-done verify ${drive ? `${drive} ` : ''}--outcome ${arg(run.claim)}${run.claim_id ? ` --claim-id ${arg(run.claim_id)}` : ''}${judgeFlag}`;
@@ -1500,17 +1642,17 @@ function showRun(dir, cfg, command, gone = false) {
         ]
             : run.result === 'overridden' ? [`This head is not proven: ${run.response?.by} chose ${run.response?.action} past the judge, and receipt --verify refuses this receipt`, `Capture proof the judge passes: ${again}`]
                 : code === WAITING ? [`The run goes on without this command; read it later: done-done status --run ${run.run_id}`]
-                    : run.kind === 'maintain' && status === 'completed' ? (run.result === 'clean' ? [`The verify skill matches the source; read the readers' recipes: done-done logs --step reconcile --run ${run.run_id}`]
-                        : run.result === 'changed' ? [`Review the fix on its own branch (your branch is untouched): git show ${run.fix.branch}`, `Take it: git merge ${run.fix.branch}, or drop it: git branch -D ${run.fix.branch}`]
+                    : run.result === 'changed' ? [`Review the fix on its own branch (your branch is untouched): git show ${run.fix.branch}`, `Take it: git merge ${run.fix.branch}, or drop it: git branch -D ${run.fix.branch}`]
+                        : run.kind === 'maintain' && status === 'completed' ? (run.result === 'clean' ? [`The verify skill matches the source; read the readers' recipes: done-done logs --step reconcile --run ${run.run_id}`]
                             : run.result === 'drift' ? [`Fix the findings in ${cfg.skill} (--full lists them all), commit, then run again: ${again}`, `Or let done-done's agent fix them on a branch: set auto_fix: { maintain: 2 } in .done-done.yaml, then run again: ${again}`]
                                 : /^ask-user:/.test(run.reason ?? '') ? ['Ask the user about each ask-user finding: is the product or the skill wrong? Never decide it for them', `Product wrong: fix the product (maintain never edits product code). Skill wrong: fix ${cfg.skill}, commit, then run again: ${again}`]
                                     : /^fix:/.test(run.reason ?? '') ? [`Read what each fix attempt did: done-done logs --step fix --run ${run.run_id}`, `Fix the findings in ${cfg.skill} by hand, commit, then run again: ${again}`]
                                         : /^locate: no verify skill/.test(run.reason ?? '') ? ['Create the verify skill: done-done init']
                                             : /^locate:/.test(run.reason ?? '') ? [`Make ${cfg.skill} a real folder inside the repository (not a link), commit, then run again: ${again}`]
                                                 : [`Read the step logs in ${shown(run.repo, join(dir, 'logs'))}`, `Fix the cause, then run again: ${again}`])
-                        : code === PASS ? [`Verify this receipt (CI or merge): done-done receipt --verify ${rec.commit}`]
-                            : status === 'cancelled' ? [...(run.kind === 'maintain' ? [] : [`Start again from the failed step: done-done rerun --run ${run.run_id}`]), `List past runs: done-done history`]
-                                : [`Read the step logs in ${shown(run.repo, join(dir, 'logs'))}`, ...(run.kind === 'maintain' ? [] : [`Fix the cause, commit, then run again from the failed step: done-done rerun --run ${run.run_id}`]), `Or start a new run: ${again}`];
+                            : code === PASS ? [`Verify this receipt (CI or merge): done-done receipt --verify ${rec.commit}`]
+                                : status === 'cancelled' ? [...(run.kind === 'maintain' ? [] : [`Start again from the failed step: done-done rerun --run ${run.run_id}`]), `List past runs: done-done history`]
+                                    : [`Read the step logs in ${shown(run.repo, join(dir, 'logs'))}`, ...(run.kind === 'maintain' ? [] : [`Fix the cause, commit, then run again from the failed step: done-done rerun --run ${run.run_id}`]), `Or start a new run: ${again}`];
     emit(result);
     return code;
 }
@@ -1538,6 +1680,19 @@ function refuseParked(cfg, repo, claim) {
         return;
     const id = parked[0];
     throw new UsageError(`run ${parked.join(', ')} waiting at its gate for the user's answer blocks this run, which would go around that gate`, `Show the user its findings and captures (done-done status --run ${id}), then answer with their choice: done-done respond --run ${id} --action approve|skip|fix [--reason "<why>"], or stop it: done-done abort --run ${id}`);
+}
+// Before a verify starts: its judge, and with auto_fix.verify an agent that can edit and a judge that is never that agent.
+async function preflightVerify(cfg, judging) {
+    if (cfg.auto_fix.verify) {
+        await withChoice('agent', cfg);
+        if (cfg.agent.startsWith('acp:'))
+            throw new UsageError(`${cfg.agent} cannot fix the product: done-done runs ACP agents with every tool denied`, `Set auto_fix.verify: 0 to report only, or set agent: to one of ${AGENTS.join(', ')}`);
+    }
+    if (!judging)
+        return;
+    const choice = await preflightJudge(cfg);
+    if (cfg.auto_fix.verify)
+        refuseSameSession(choice);
 }
 async function cmdVerify(argv) {
     const { values, positionals } = parseArgs({
@@ -1574,15 +1729,14 @@ async function cmdVerify(argv) {
     // verify starts done-done's own judge by default; --no-judge or judge.enabled: false turns it off. An agent drive is judged too, since the author never grades its own captures.
     const judging = !values['no-judge'] && (!!drive || !!values.judge || cfg.judge.enabled !== false);
     // No judge set, or one config forbids (the author's own agent and model), is a usage error now, not a failed run later.
-    if (judging)
-        await preflightJudge(cfg);
+    await preflightVerify(cfg, judging);
     const id = newRunId(git(repo, 'rev-parse', 'HEAD'));
     const dir = join(runsRoot(cfg.app), id);
     mkdirSync(join(dir, 'logs'), { recursive: true });
     const created = now();
     const run = {
         schema: 2, run_id: id, kind: 'verify', app: cfg.app, repo, journey, ...drive, claim: values.outcome, claim_id: values['claim-id'] ?? null, branch, judge: judging, status: 'pending',
-        steps: STEPS.map((name) => ({ name, status: 'pending' })), created, updated: created,
+        steps: verifySteps(cfg).map((name) => ({ name, status: 'pending' })), created, updated: created,
         inputs: inputsOf(repo, cfg, journey, drive?.author),
     };
     saveRun(dir, run);
@@ -1710,12 +1864,11 @@ async function cmdRerun(argv) {
     // A rerun judges as its source did; --no-judge turns it off for this run. A missing or forbidden judge is a usage
     // error here too.
     const judging = !values['no-judge'] && !!src.judge;
-    if (judging)
-        await preflightJudge(cfg);
+    await preflightVerify(cfg, judging);
     const id = newRunId(git(repo, 'rev-parse', 'HEAD'));
     const dir = join(root, id);
     mkdirSync(join(dir, 'logs'), { recursive: true });
-    const steps = STEPS.map((name) => {
+    const steps = verifySteps(cfg).map((name) => {
         const s = src.steps.find((x) => x.name === name);
         return s && reused(name) && s.status === 'completed' ? { ...s } : { name, status: 'pending' };
     });

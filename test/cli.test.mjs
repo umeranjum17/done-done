@@ -4958,9 +4958,9 @@ test('one verify run captures every matrix cell, and status shows the manifest',
 // DOM assertions: a two-cell matrix whose journey writes each cell's capture and, when given, its page-check record.
 const CLEAN = { url: 'http://127.0.0.1/home', overflow: false, overflowing: [], console_errors: [], failed_requests: [] };
 const BROKEN = { ...CLEAN, overflow: true, overflowing: ['div#wide'], console_errors: ['boom'], failed_requests: [{ url: 'http://127.0.0.1/x.js', status: 404 }] };
-const domVerify = (dom, records) => {
+const domVerify = (dom, records, capture = shot(['light', 'dark'])) => {
   const t = matrixed(MATRIXED.replace('  width: [390, 1280]\n', '').replace('journeys:', `${dom}journeys:`), '!cell', (t) =>
-    `import { writeFileSync } from 'node:fs';\n${shot(['light', 'dark'])(t)}\nconst rec = ${JSON.stringify(records)}[cell];\nif (rec) writeFileSync(root + '/home.' + cell + '.dom.json', JSON.stringify(rec));`);
+    `import { writeFileSync } from 'node:fs';\n${capture(t)}\nconst rec = ${JSON.stringify(records)}[cell];\nif (rec) writeFileSync(root + '/home.' + cell + '.dom.json', JSON.stringify(rec));`);
   const r = t.dd('verify', 'cells', '--outcome', 'home renders in every theme', '--foreground');
   // verify names only the first finding; the check of the same files lists them all.
   const c = t.dd('check', '--outcome', 'home renders in every theme', ...toon(r).evidence);
@@ -4996,4 +4996,14 @@ test('a dom block fails each matrix cell whose capture has no page-check record,
   const bad = setup(MATRIXED.replace('journeys:', 'dom:\n  allow_console: ["("]\njourneys:')).dd('run', 'cells');
   assert.equal(bad.code, 2, bad.out);
   assert.match(bad.out, /dom allow_console: \\"\(\\" is not a valid regular expression/);
+});
+
+test('a dom block asks for a page-check record of a gif capture too', () => {
+  const gif = () => `writeFileSync(root + '/home.' + cell + '.gif', Buffer.from('GIF89a;', 'latin1'));`;
+  const { r, why } = domVerify('dom:\n', {}, gif);
+  assert.equal(r.code, 1, r.out);
+  assert.deepEqual(why.filter((w) => /page-check/.test(w)).map((w) => w.replace(/^.*\/(home\.)/, '$1')).sort(), [
+    'home.dark.gif: no page-check record home.dark.dom.json next to it (the dom block needs one per captured screen)',
+    'home.light.gif: no page-check record home.light.dom.json next to it (the dom block needs one per captured screen)',
+  ]);
 });

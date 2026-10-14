@@ -628,7 +628,7 @@ async function runCheck(argv: string[], run?: { dir: string; judge: boolean; jud
     cited.push({ path: receiptPath(repo, cfg, path), sha256: hash });
     // A page-check record is a capture's companion: two clean cells of one page write the same bytes, and the judge never reads one.
     const record = !!cfg.dom && isDomRecord(name);
-    if (cfg.dom && ['png', 'jpeg', 'webp'].includes(v.type)) for (const why of domIssues(cfg.dom, path)) findings.push({ level: 'fail', why: `${name}: ${why}` });
+    if (cfg.dom && ['png', 'jpeg', 'webp', 'gif', 'mp4', 'webm'].includes(v.type)) for (const why of domIssues(cfg.dom, path)) findings.push({ level: 'fail', why: `${name}: ${why}` });
     if (seen.has(hash) && !record) findings.push({ level: 'fail', why: `${name}: byte-identical to ${seen.get(hash)}` });
     seen.set(hash, name);
     // A file in the evidence root is claimed by the record that lists its path; a copy elsewhere, by its bytes.
@@ -1033,7 +1033,7 @@ const driveHint = (repo: string, cfg: Config) => existsSync(join(repo, cfg.skill
 
 // The page-check record shape and how to collect it with chrome-devtools-axi, for the drive prompt and the verify skill scaffold.
 const DOM_RECORD = '{"url": "<page url>", "overflow": <true when content is wider than the viewport>, "overflowing": ["<element>", ...], "console_errors": ["<message>", ...], "failed_requests": [{"url": "<url>", "status": <HTTP status, 0 when none>}]}'
-  + "; with chrome-devtools-axi: overflow from eval \"() => { const w = document.documentElement.clientWidth; return { overflow: document.documentElement.scrollWidth > w, overflowing: [...document.querySelectorAll('body *')].filter((e) => e.getBoundingClientRect().right > w + 1).slice(0, 10).map((e) => e.tagName.toLowerCase() + (e.id ? '#' + e.id : '')) } }\", console errors from console --type error, failed requests (status 400 or more, or no response) from network";
+  + "; with your browser tool (for example chrome-devtools-axi): overflow from eval \"() => { const w = document.documentElement.clientWidth; return { overflow: document.documentElement.scrollWidth > w, overflowing: [...document.querySelectorAll('body *')].filter((e) => e.getBoundingClientRect().right > w + 1).slice(0, 10).map((e) => e.tagName.toLowerCase() + (e.id ? '#' + e.id : '')) } }\", console errors from console --type error, failed requests (status 400 or more, or no response) from network";
 
 function drivePrompt(run: Run, at: string, cfg: Config, evidence: string, scratch: string): string {
   const skill = join(at, cfg.skill);
@@ -1041,7 +1041,7 @@ function drivePrompt(run: Run, at: string, cfg: Config, evidence: string, scratc
   const inst = cfg.instance ? `\n\nThe app is already running at $DONE_DONE_BASE_URL (started by done-done on its own port with its own HOME; DONE_DONE_PORT is its port). Drive that instance: do not start your own server or hard-code a port.` : '';
   const matrix = hasMatrix(cfg.matrix) ? splitMatrix(cfg.matrix!) : null;
   const cells = !matrix ? '' : `\n\nThe repo asks for every theme x width x form cell below: drive each cell (theme and width are the recipe's job) and save one PNG per cell whose file name holds its suffix, e.g. ${evidence}/home.<suffix>.png:\n${matrix.required.map((c) => `- ${cellName(c)}: *${cellSuffix(c)}*`).join('\n')}${matrix.skipped.length ? `\nSkipped (capture nothing for these):\n${matrix.skipped.map((s) => `- ${cellName(s.cell)} (${s.reason})`).join('\n')}` : ''}`;
-  const dom = cfg.dom ? `\n\nThe repo checks each page: next to every PNG write its page-check record, the PNG's name with .dom.json for .png (e.g. home.dom.json for home.png), as the verify skill's Evidence section says: ${DOM_RECORD}. Record what the page shows; never fix the page.` : '';
+  const dom = cfg.dom ? `\n\nThe repo checks each page: next to every capture write its page-check record, the capture's name with .dom.json for its extension (e.g. home.dom.json for home.png), as the verify skill's Evidence section says: ${DOM_RECORD}. Record what the page shows; never fix the page.` : '';
   return `You drive the real ${run.app} app the way a user does, to capture proof of one outcome. Someone else judges your captures.
 
 Outcome to prove: ${run.claim}
@@ -1884,7 +1884,7 @@ ${found.join('\n')}
 
 ## Evidence
 
-Capture ${d.observe}. Exercise the real user path, not internal setters; done-done's judge checks every screenshot in the run folder against the outcome, so save only screenshots of the resulting state there and keep any of earlier steps outside it; verify side effects alongside what is visible. Evidence goes to the run folder \`done-done run\` prints. When .done-done.yaml sets a matrix block, each journey runs once per theme x width x form cell with DONE_DONE_THEME, DONE_DONE_WIDTH, DONE_DONE_FORM and DONE_DONE_CELL set: name each capture with its cell suffix, so every cell is captured or skipped with a reason, never silently missing. When .done-done.yaml sets a dom block, write next to each screenshot its page-check record, the screenshot's name with .dom.json for its extension (home.dark.390w.png -> home.dark.390w.dom.json): ${DOM_RECORD}.
+Capture ${d.observe}. Exercise the real user path, not internal setters; done-done's judge checks every screenshot in the run folder against the outcome, so save only screenshots of the resulting state there and keep any of earlier steps outside it; verify side effects alongside what is visible. Evidence goes to the run folder \`done-done run\` prints. When .done-done.yaml sets a matrix block, each journey runs once per theme x width x form cell with DONE_DONE_THEME, DONE_DONE_WIDTH, DONE_DONE_FORM and DONE_DONE_CELL set: name each capture with its cell suffix, so every cell is captured or skipped with a reason, never silently missing. When .done-done.yaml sets a dom block, write next to each capture its page-check record, the capture's name with .dom.json for its extension (home.dark.390w.png -> home.dark.390w.dom.json): ${DOM_RECORD}.
 
 ## Cleanup
 

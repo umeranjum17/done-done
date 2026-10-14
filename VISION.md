@@ -32,6 +32,7 @@ What ships now:
 - **Fix loop.** `auto_fix.maintain` lets done-done fix verify skill drift, with the same config shape as no-mistakes.
 - **Run-instance harness.** An `instance` block starts the app under test per run, on its own port, with its own HOME and XDG folders, and stops it at the end.
 - **Capture matrix.** One verify run captures every theme x width x form cell the repo asks for; each cell is captured or skipped with a reason.
+- **DOM assertions.** With a `dom` block, each captured screen's page-check record must be clean: no horizontal overflow, console error or failed request that an allow list does not name.
 
 What comes next:
 

@@ -55,7 +55,7 @@ const KEYS = {
     app: { scope: 'repo', type: 'string' },
     skill: { scope: 'repo', type: 'string' },
     journeys: { scope: 'repo', type: 'journeys' },
-    inputs: { scope: 'repo', type: 'string[]' },
+    inputs: { scope: 'repo', type: 'inputs' },
     instance: { scope: 'repo', type: 'instance' },
     matrix: { scope: 'repo', type: 'matrix' },
     dom: { scope: 'repo', type: 'dom' },
@@ -122,17 +122,18 @@ function apply(target, text, file, scope) {
         const ok = spec.type === 'string' ? typeof value === 'string'
             : spec.type === 'boolean' ? typeof value === 'boolean'
                 : spec.type === 'string[]' ? Array.isArray(value) && value.every((v) => typeof v === 'string')
-                    : spec.type === 'agent' ? isAgent(value)
-                        : spec.type === 'route' ? typeof value === 'string' && (value === 'claude-code' || Object.hasOwn(KEY_ROUTES, value) || ANSWERER_JUDGES.some((a) => value === `answerer:${a}`))
-                            : spec.type === 'claude_code' ? isMap(value) && Object.entries(value).every(([k, v]) => k === 'config_dir' && typeof v === 'string')
-                                : spec.type === 'agent_config' ? isMap(value) && Object.entries(value).every(([a, c]) => isAgent(a) && isMap(c) && Object.entries(c).every(([k, m]) => ['model', 'effort'].includes(k) && typeof m === 'string'))
-                                    : spec.type === 'args' ? isMap(value) && Object.entries(value).every(([a, v]) => AGENTS.includes(a) && Array.isArray(v) && v.every((x) => typeof x === 'string'))
-                                        : spec.type === 'paths' ? isMap(value) && Object.entries(value).every(([a, v]) => AGENTS.includes(a) && isBin(v))
-                                            : spec.type === 'bin' ? isBin(value)
-                                                : spec.type === 'duration' ? typeof value === 'string' && parseDuration(value) !== null
-                                                    : spec.type === 'auto_fix' ? isMap(value) && Object.entries(value).every(([k, n]) => AUTO_FIX_STEPS.includes(k) && Number.isInteger(n) && n >= 0)
-                                                        : spec.type === 'matrix' ? !checkMatrix(value)
-                                                            : isMap(value) && Object.values(value).every((j) => j && typeof j.command === 'string');
+                    : spec.type === 'inputs' ? Array.isArray(value) && value.every((v) => typeof v === 'string' && v !== '' && !isAbsolute(v) && !v.split('/').includes('..'))
+                        : spec.type === 'agent' ? isAgent(value)
+                            : spec.type === 'route' ? typeof value === 'string' && (value === 'claude-code' || Object.hasOwn(KEY_ROUTES, value) || ANSWERER_JUDGES.some((a) => value === `answerer:${a}`))
+                                : spec.type === 'claude_code' ? isMap(value) && Object.entries(value).every(([k, v]) => k === 'config_dir' && typeof v === 'string')
+                                    : spec.type === 'agent_config' ? isMap(value) && Object.entries(value).every(([a, c]) => isAgent(a) && isMap(c) && Object.entries(c).every(([k, m]) => ['model', 'effort'].includes(k) && typeof m === 'string'))
+                                        : spec.type === 'args' ? isMap(value) && Object.entries(value).every(([a, v]) => AGENTS.includes(a) && Array.isArray(v) && v.every((x) => typeof x === 'string'))
+                                            : spec.type === 'paths' ? isMap(value) && Object.entries(value).every(([a, v]) => AGENTS.includes(a) && isBin(v))
+                                                : spec.type === 'bin' ? isBin(value)
+                                                    : spec.type === 'duration' ? typeof value === 'string' && parseDuration(value) !== null
+                                                        : spec.type === 'auto_fix' ? isMap(value) && Object.entries(value).every(([k, n]) => AUTO_FIX_STEPS.includes(k) && Number.isInteger(n) && n >= 0)
+                                                            : spec.type === 'matrix' ? !checkMatrix(value)
+                                                                : isMap(value) && Object.values(value).every((j) => j && typeof j.command === 'string');
         const want = {
             journeys: 'a map of name: {command: <string>}',
             instance: '{command: <string>, ready: {url: <http url>} or {command: <shell command>}, ready_timeout: <duration>}',
@@ -146,6 +147,7 @@ function apply(target, text, file, scope) {
             auto_fix: `a map of <step>: <attempts, 0 or more> for ${AUTO_FIX_STEPS.join(', ')}`,
             route: `claude-code (for claude), answerer:<agent> for one of ${ANSWERER_JUDGES.join(', ')}, or a key route (${Object.keys(KEY_ROUTES).join(', ')}); an acp:<target> agent cannot judge, since done-done cannot send it an image`,
             claude_code: 'a map with config_dir, a string (the claude binary is agent_path_override.claude)',
+            inputs: 'a list of repo-relative paths or globs, not absolute and with no .. segment',
         };
         if (key === 'judge.route' && (value === 'auto' || value === ''))
             throw new UsageError(`${file}: judge.route ${value === '' ? 'must not be empty; to leave it unset, remove the key' : 'auto is gone: done-done never picks the judge, the user sets it'}`, `Delete the judge.route line in ${file}, then run: done-done init --judge <agent> --judge-model <model>`);

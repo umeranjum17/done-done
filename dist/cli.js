@@ -980,10 +980,10 @@ function skillHash(repo, cfg) {
         return '';
     }
 }
-// Every file the guard can see: tracked files plus untracked ones (ignored files never match).
+// Every file the guard can see: tracked files plus untracked ones, git-ignored ones included.
 function guardCandidates(at) {
     try {
-        return [...new Set(execFileSync('git', ['ls-files', '-z', '--cached', '--others', '--exclude-standard'], { cwd: at, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).split('\0').filter(Boolean))].sort();
+        return [...new Set(execFileSync('git', ['ls-files', '-z', '--cached', '--others'], { cwd: at, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).split('\0').filter(Boolean))].sort();
     }
     catch {
         return [];

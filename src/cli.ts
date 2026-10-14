@@ -1002,10 +1002,10 @@ function skillHash(repo: string, cfg: Config): string {
 // files). A null sha256 marks absence, so an appearing or disappearing file is told apart from a change.
 type GuardFile = { path: string; sha256: string | null };
 
-// Every file the guard can see: tracked files plus untracked ones (ignored files never match).
+// Every file the guard can see: tracked files plus untracked ones, git-ignored ones included.
 function guardCandidates(at: string): string[] {
   try {
-    return [...new Set(execFileSync('git', ['ls-files', '-z', '--cached', '--others', '--exclude-standard'], { cwd: at, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).split('\0').filter(Boolean))].sort();
+    return [...new Set(execFileSync('git', ['ls-files', '-z', '--cached', '--others'],{ cwd: at, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).split('\0').filter(Boolean))].sort();
   } catch {
     return [];
   }

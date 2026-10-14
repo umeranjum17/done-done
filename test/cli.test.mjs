@@ -5074,6 +5074,24 @@ test('a directory pattern with a trailing slash or a leading ./ still guards its
   }
 });
 
+test('a watched input the repo git-ignores is still guarded by its name', () => {
+  const t = setup(GUARDED);
+  mkdirSync(join(t.repo, 'data'), { recursive: true });
+  writeFileSync(join(t.repo, 'data', 'seed.json'), '{"token":"secret-value-xyz"}\n');
+  writeFileSync(join(t.repo, '.gitignore'), 'data/\n');
+  t.sh('add', '-A'); t.sh('commit', '-qm', 'ignored data');
+  const e = t.dd('verify', 'edit', '--outcome', 'home renders', '--foreground');
+  assert.equal(e.code, 1, e.out);
+  assert.match(toon(e).reason, /input guard: data\/seed\.json: changed during the drive/);
+});
+
+test('an inputs path that leaves the worktree is refused at config time', () => {
+  const t = guarded(GUARDED.replace('inputs: ["data/**"]', 'inputs: ["../outside.txt"]'));
+  const r = t.dd('verify', 'shots', '--outcome', 'home renders', '--foreground');
+  assert.notEqual(r.code, 0, r.out);
+  assert.match(r.out, /inputs must be a list of repo-relative paths or globs/);
+});
+
 test('a non-ASCII untracked input is guarded by its real name', () => {
   const t = guarded(`${GUARDED}  accent:\n    command: node make-shots.mjs \${RUN_ID} && echo new > "data/café.json"\n`);
   const a = t.dd('verify', 'accent', '--outcome', 'home renders', '--foreground');

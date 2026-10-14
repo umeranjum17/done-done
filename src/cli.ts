@@ -433,6 +433,8 @@ async function cmdRun(argv: string[]): Promise<number> {
   }
   const journey = positionals[0] ?? null;
   if (positionals.length > 1) throw new UsageError('run takes at most one journey name');
+  const spends = journey ? cfg.journeys[journey]?.spends : undefined;
+  if (spends) throw new UsageError(`journey ${journey} spends (${spends}), so run refuses it: nothing ran`, `Ask the user, then: done-done verify ${journey} --outcome "<what a user can now do>"`);
   let command = dash < 0 ? null : argv.slice(dash + 1).join(' ');
   if (journey && !command) {
     const j = cfg.journeys[journey];

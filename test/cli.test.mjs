@@ -2353,6 +2353,27 @@ console.log(JSON.stringify({ type: 'text', part: { type: 'text', text: JSON.stri
   assert.ok(existsSync(join(folder, m.media[0])), 'the media path resolves from the message folder');
 });
 
+// A gate a fix pass parks names the capture file alone: its findings were captured under <id>-fix1/, never the run's folder.
+test('signoff on a fix-pass gate names the capture file, not the fix pass folder', () => {
+  const t = setup('app: notes\nevidence:\n  root: .proof\nauto_fix:\n  verify: 1\njourneys:\n  shots:\n    command: node shot.mjs\n');
+  const e = pathEnv(t.env, []);
+  writeFileSync(join(t.repo, 'shot.mjs'), `import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';\nif (readFileSync('src/app.js', 'utf8').includes('BUG')) process.exit(1);\nmkdirSync(process.env.DONE_DONE_EVIDENCE_ROOT, { recursive: true });\nwriteFileSync(process.env.DONE_DONE_EVIDENCE_ROOT + '/out.txt', 'the notes list shows three notes\\n'.repeat(3000));\n`);
+  writeFileSync(join(t.repo, 'src', 'app.js'), 'export const title = "BUG";\n');
+  t.sh('add', '-A');
+  t.sh('commit', '-qm', 'a broken title');
+  writeFileSync(join(e.PATH, 'opencode'), `#!${process.execPath}\nconst { writeFileSync } = require('node:fs');\nwriteFileSync('src/app.js', 'export const title = "Notes";\\n');\nconsole.log(JSON.stringify({ type: 'text', part: { type: 'text', text: JSON.stringify({ summary: 'fixed the title', blocker: '' }) } }));\n`, { mode: 0o755 });
+  mkdirSync(t.env.DONE_DONE_HOME, { recursive: true });
+  writeFileSync(join(t.env.DONE_DONE_HOME, 'config.yaml'), 'agent: opencode\nagent_config:\n  opencode: { model: opencode-go/author }\njudge:\n  route: claude-code\n');
+  const env = { ...e, PATH: `${e.PATH}:${dirname(process.execPath)}` };
+  const r = doctorIn(t.repo, env, 'verify', 'shots', '--outcome', 'the home screen shows the title Notes', '--foreground');
+  assert.deepEqual([r.code, toon(r).status, toon(r).step], [4, 'awaiting_approval', 'gate'], r.out);
+  const g = doctorIn(t.repo, env, 'signoff');
+  assert.equal(g.code, 0, g.out);
+  const about = JSON.parse(readFileSync(toon(g).file, 'utf8')).about;
+  assert.match(about, /^out\.txt: judge says unsure: text is \d+ bytes/);
+  assert.ok(!about.includes('.proof'), 'the finding names the capture file, never its fix pass folder');
+});
+
 test('a rerun refused by the judge preflight exits 2 and creates no run folder', () => {
   const t = setup(JUDGED);
   mkdirSync(t.env.DONE_DONE_HOME, { recursive: true });

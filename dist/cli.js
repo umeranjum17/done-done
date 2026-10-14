@@ -2245,6 +2245,10 @@ function cmdSignoff(argv) {
     // At most 116 characters, so dd-evidence-<run id> is still a key-set id (1-128).
     const runRef = (commit) => /^[A-Za-z0-9._-]{1,116}$/.test(id) && /^[0-9a-f]{40}$/.test(commit) ? { run_id: id, commit } : refuse(`run_id ${id} or commit ${commit} is not in the contract's shape`, 'Start a new run: done-done verify --outcome "<what a user can now do>"');
     const drove = run.journey ?? run.feature ?? 'agent drive';
+    // A finding names the folder that captured it (this run's, a -fixN pass's or a reused source run's), so the message
+    // names the capture file alone: strip any <evidence root>/<one run folder>/ prefix.
+    const esc = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const bare = (s) => s.replaceAll(new RegExp(`${esc(cfg.evidence.root)}${esc(sep)}[^${esc(sep)}]+${esc(sep)}`, 'g'), '');
     let msg, file;
     if (run.kind === 'verify' && run.status === 'awaiting_approval' && run.gate) {
         const { findings, spend, head } = run.gate;
@@ -2252,7 +2256,7 @@ function cmdSignoff(argv) {
         msg = {
             contract: 1, kind: 'gate', schema: 1, key: `dd-gate-${id}`, filer: 'done-done',
             title: text('title', spend ? `Spend ${spend} on the ${cfg.app} ${drove} run?` : `Move the ${cfg.app} ${drove} run on past its judge?`, 160),
-            about: text('about', `${findings[0].what.replaceAll(`${runDir(cfg, id)}${sep}`, '')}${more}`, 500), run: runRef(head.commit),
+            about: text('about', `${bare(findings[0].what)}${more}`, 500), run: runRef(head.commit),
             // A spend gate takes approve or skip only (respond refuses fix there).
             options: (spend ? ['approve', 'skip'] : ['approve', 'skip', 'fix']).map((value) => ({ value, label: GATE_LABELS[value] })),
             recommend_value: findings.some((f) => f.severity === 'error') ? 'fix' : 'approve', close: 'done',

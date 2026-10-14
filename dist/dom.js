@@ -2,9 +2,31 @@
 // page-check record next to each captured screen, named as the capture with .dom.json for its extension
 // (home.dark.390w.png -> home.dark.390w.dom.json), so a matrix cell's record carries its DONE_DONE_CELL suffix:
 //   {"url": "<page url>", "overflow": <true when content is wider than the viewport>, "overflowing": ["<element>", ...],
-//    "console_errors": ["<message>", ...], "failed_requests": [{"url": "<request url>", "status": <HTTP status, 0 when none>}]}
+//    "console_errors": ["<message>", ...], "failed_requests": [{"url": "<request url>", "status": <HTTP status, 0 when none>}],
+//    "squashed_text": [{"element": "<element>", "text": "<its text, ~40 chars>", "chars": <width>, "lines": <n>, "words": <n>}]}
+// squashed_text is optional, so a record written before it stays valid.
 import { readFileSync } from 'node:fs';
 import { basename } from 'node:path';
+// The measurement the recipe passes to its browser tool's eval, so no agent invents one: every visible element with its
+// own non-empty text is squashed when its box is under 8 characters wide (box width / the average glyph width of its
+// font) while its text is wider than the box, or when its text sits on more line boxes than it has words.
+// ponytail: glyph width ignores letter-spacing and text-transform, and words split on spaces, so a wide-tracked capital
+// label measures a little narrow and a wrapped paragraph of Chinese or Japanese is one word; count words per script if those show up.
+export const SQUASHED_TEXT = `() => {
+  const ctx = document.createElement('canvas').getContext('2d'); const out = [];
+  for (const e of document.querySelectorAll('body *')) {
+    const nodes = [...e.childNodes].filter((n) => n.nodeType === 3 && n.data.trim());
+    const text = nodes.map((n) => n.data).join(' ').replace(/\\s+/g, ' ').trim();
+    const box = e.getBoundingClientRect(); const s = getComputedStyle(e);
+    if (!text || !box.width || !box.height || s.visibility !== 'visible') continue;
+    ctx.font = s.fontStyle + ' ' + s.fontWeight + ' ' + s.fontSize + ' ' + s.fontFamily;
+    const chars = box.width / (ctx.measureText('abcdefghijklmnopqrstuvwxyz').width / 26); const words = text.split(' ').length; const tops = new Set();
+    for (const n of nodes) { const r = document.createRange(); r.selectNodeContents(n); for (const b of r.getClientRects()) if (b.width) tops.add(Math.round(b.top)); }
+    if ((chars < 8 && ctx.measureText(text).width > box.width + 1) || tops.size > words)
+      out.push({ element: e.tagName.toLowerCase() + (e.id ? '#' + e.id : e.classList[0] ? '.' + e.classList[0] : ''), text: text.slice(0, 40), chars: Math.round(chars * 10) / 10, lines: tops.size, words });
+  }
+  return out;
+}`.replace(/\s*\n\s*/g, ' ');
 const isMap = (v) => !!v && typeof v === 'object' && !Array.isArray(v);
 const strings = (a) => Array.isArray(a) && a.every((s) => typeof s === 'string');
 const badRegex = (s) => { try {
@@ -48,12 +70,14 @@ export function domIssues(dom, capture) {
         return [code === 'ENOENT' ? `no page-check record ${basename(path)} next to it (the dom block needs one per captured screen)` : `page-check record ${basename(path)} does not read: ${code ?? e.message}`];
     }
     if (!isMap(r) || typeof r.url !== 'string' || typeof r.overflow !== 'boolean' || !strings(r.overflowing ?? []) || !strings(r.console_errors)
-        || !Array.isArray(r.failed_requests) || !r.failed_requests.every((q) => isMap(q) && typeof q.url === 'string' && typeof q.status === 'number'))
-        return [`page-check record ${basename(path)} is not {url, overflow, overflowing, console_errors, failed_requests: [{url, status}]}`];
+        || !Array.isArray(r.failed_requests) || !r.failed_requests.every((q) => isMap(q) && typeof q.url === 'string' && typeof q.status === 'number')
+        || (r.squashed_text !== undefined && !(Array.isArray(r.squashed_text) && r.squashed_text.every((q) => isMap(q) && typeof q.element === 'string' && typeof q.text === 'string' && [q.chars, q.lines, q.words].every((n) => typeof n === 'number')))))
+        return [`page-check record ${basename(path)} is not {url, overflow, overflowing, console_errors, failed_requests: [{url, status}], squashed_text: [{element, text, chars, lines, words}]}`];
     const allowed = (list, s) => list.some((re) => new RegExp(re).test(s));
     return [
         ...(dom.fail_on_overflow && r.overflow ? [`${r.url} overflows the viewport horizontally${r.overflowing?.length ? ` (${r.overflowing.join(', ')})` : ''}`] : []),
         ...r.console_errors.filter((m) => !allowed(dom.allow_console, m)).map((m) => `${r.url} console error: ${m}`),
         ...r.failed_requests.filter((q) => (q.status === 0 || q.status >= 400) && !allowed(dom.allow_requests, q.url)).map((q) => `${r.url} request failed (${q.status || 'no response'}): ${q.url}`),
+        ...(r.squashed_text ?? []).map((q) => `${r.url} squashed text: ${q.element} "${q.text}" is ${q.chars} characters wide (lines ${q.lines}, words ${q.words})`),
     ];
 }

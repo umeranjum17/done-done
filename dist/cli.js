@@ -17,7 +17,7 @@ import { attemptProblem, changedSince, commitFix, dirtyTracked, FIX_SCHEMA, inWo
 import { cellEnv, cellName, cellSuffix, hasMatrix, matrixManifest, splitMatrix } from './matrix.js';
 import { design, KINDS } from './design.js';
 import { checkMedia } from './media.js';
-import { domIssues, isDomRecord } from './dom.js';
+import { domIssues, isDomRecord, SQUASHED_TEXT } from './dom.js';
 const PASS = 0, FAIL = 1, USAGE = 2, INCONCLUSIVE = 3, WAITING = 4;
 // The shape of a journey, so a new user or agent can write one without opening the reference.
 // done-done sets DONE_DONE_EVIDENCE_ROOT (the run's own folder) and replaces ${RUN_ID}, so the example works for any evidence root.
@@ -1037,8 +1037,8 @@ async function agentDrive(repo, cfg, feature) {
 const driveHint = (repo, cfg) => existsSync(join(repo, cfg.skill, 'SKILL.md'))
     ? ['Have your coding agent drive a verify skill feature: done-done verify --outcome "<what a user can now do>" [--feature <name>]'] : [];
 // The page-check record shape and how to collect it with chrome-devtools-axi, for the drive prompt and the verify skill scaffold.
-const DOM_RECORD = '{"url": "<page url>", "overflow": <true when content is wider than the viewport>, "overflowing": ["<element>", ...], "console_errors": ["<message>", ...], "failed_requests": [{"url": "<url>", "status": <HTTP status, 0 when none>}]}'
-    + "; with your browser tool (for example chrome-devtools-axi): overflow from eval \"() => { const w = document.documentElement.clientWidth; return { overflow: document.documentElement.scrollWidth > w, overflowing: [...document.querySelectorAll('body *')].filter((e) => e.getBoundingClientRect().right > w + 1).slice(0, 10).map((e) => e.tagName.toLowerCase() + (e.id ? '#' + e.id : '')) } }\", console errors from console --type error, failed requests (status 400 or more, or no response) from network";
+const DOM_RECORD = '{"url": "<page url>", "overflow": <true when content is wider than the viewport>, "overflowing": ["<element>", ...], "console_errors": ["<message>", ...], "failed_requests": [{"url": "<url>", "status": <HTTP status, 0 when none>}], "squashed_text": [{"element": "<element>", "text": "<text>", "chars": <width in characters>, "lines": <n>, "words": <n>}]}'
+    + `; with your browser tool (for example chrome-devtools-axi): overflow from eval "() => { const w = document.documentElement.clientWidth; return { overflow: document.documentElement.scrollWidth > w, overflowing: [...document.querySelectorAll('body *')].filter((e) => e.getBoundingClientRect().right > w + 1).slice(0, 10).map((e) => e.tagName.toLowerCase() + (e.id ? '#' + e.id : '')) } }", console errors from console --type error, failed requests (status 400 or more, or no response) from network, squashed_text from eval "${SQUASHED_TEXT}" exactly as written (in every frame, an embedded one too)`;
 function drivePrompt(run, at, cfg, evidence, scratch, base = '') {
     const skill = join(at, cfg.skill);
     const recipe = run.feature ? `the feature recipe ${join(skill, 'features', `${run.feature}.md`)}` : `its feature map ${join(skill, 'features', 'README.md')}, then pick the one feature the outcome is about`;

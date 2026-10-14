@@ -1453,7 +1453,7 @@ const wrongScreens = (asks: Finding[]): Failure[] => asks.map((f) => ({ kind: 'j
 type Harness = { begin: (name: string) => Step; set: (s: Step, status: StepState, extra?: Partial<Step>) => unknown; log: (name: string, value: Record<string, unknown>) => void; spawned: (pgid: number) => void };
 // One drive, check and judge: end (it did not pass), the gate's asks, or the product failures behind end a fix may try.
 type VerifyPass = { checked?: CheckOutcome; end?: { result: 'fail' | 'inconclusive'; reason: string }; asks: Finding[]; fixable: Failure[] };
-// What a verify fix never changes: the verify skill, .done-done.yaml, tests and test-runner configs. Other files a
+// What a verify fix never changes: the verify skill, .done-done.yaml, tests, test-runner configs and the checkout's copied ignored files. Other files a
 // journey runs are not guarded, so review the fix branch.
 const TEST_FILE = /(^|\/)(test|tests|__tests__|e2e|spec)\/|\.(test|spec)\.[^/]*$|_test\.(go|py)$|(^|\/)test_[^/]*\.py$|(^|\/)((playwright|jest|vitest|cypress)\.config\.[^/]*|cypress\.json)$/;
 // The judge's question for a screen it called wrong: the claim is the truth unless it looks wrong or needs a decision.
@@ -1502,14 +1502,20 @@ async function fixVerify(run: Run, cfg: Config, dir: string, first: VerifyPass, 
   // The checkout's ignored state (node_modules, .env.local) is copied, never linked, into the worktree, and copied again over
   // whatever the fixer did to it before each re-run, so the re-run sees the fix commit with the user's own ignored files.
   // ponytail: a full copy each round (a clone where the file system can); a huge node_modules on ext4 is slow, link read-only if it bites.
-  const carry = () => {
+  const carry = (): string | void => {
     git(wt, 'clean', '-fdqX');
-    for (const p of ignored)
-      cpSync(join(repo, p), join(wt, p), { recursive: true, verbatimSymlinks: true, mode: constants.COPYFILE_FICLONE });
+    for (const p of ignored) {
+      try {
+        cpSync(join(repo, p), join(wt, p), { recursive: true, verbatimSymlinks: true, mode: constants.COPYFILE_FICLONE });
+      } catch (e) {
+        return `copy of your ignored ${p} into the fix worktree failed: ${errorText(e)}`;
+      }
+    }
   };
   return inWorktree(repo, wt, async (start) => {
     let base = start;
-    carry();
+    const copied = carry();
+    if (copied) return { blocked: copied };
     for (let k = 1; k <= tries; k++) {
       const step = h.begin('fix');
       const round: Record<string, unknown> = { attempt: k, failures: open };
@@ -1544,7 +1550,8 @@ Answer with summary (what you changed, in one line) and blocker ("" when you fix
       base = round.commit = made.commit;
       run.fix = { commit: made.commit, record: join(recordsDir(cfg), `${run.run_id}-fix${k}.json`) };
       // Verify again at the fix commit; its records are named fix<k>-, and the judge sorts its failures before the next fix.
-      carry();
+      const recopied = carry();
+      if (recopied) return blocked(recopied);
       const next = await again(wt, `fix${k}`);
       round.rerun = { result: next.end?.result ?? (next.asks.length ? 'gate' : 'pass'), reason: next.end?.reason, ...next.logs };
       if (next.end && !next.fixable.length) return blocked(`the re-run after attempt ${k} did not pass: ${next.end.reason}`, []);

@@ -1478,7 +1478,7 @@ async function runSteps(dir) {
 }
 const failures = (list) => list.map((f, i) => ({ id: `F${i + 1}`, ...f }));
 const wrongScreens = (asks) => asks.map((f) => ({ kind: 'judge', file: f.file ?? '', what: f.why }));
-// What a verify fix never changes: the verify skill, .done-done.yaml, tests and test-runner configs. Other files a
+// What a verify fix never changes: the verify skill, .done-done.yaml, tests, test-runner configs and the checkout's copied ignored files. Other files a
 // journey runs are not guarded, so review the fix branch.
 const TEST_FILE = /(^|\/)(test|tests|__tests__|e2e|spec)\/|\.(test|spec)\.[^/]*$|_test\.(go|py)$|(^|\/)test_[^/]*\.py$|(^|\/)((playwright|jest|vitest|cypress)\.config\.[^/]*|cypress\.json)$/;
 // The judge's question for a screen it called wrong: the claim is the truth unless it looks wrong or needs a decision.
@@ -1529,12 +1529,20 @@ async function fixVerify(run, cfg, dir, first, tries, h, again) {
     // ponytail: a full copy each round (a clone where the file system can); a huge node_modules on ext4 is slow, link read-only if it bites.
     const carry = () => {
         git(wt, 'clean', '-fdqX');
-        for (const p of ignored)
-            cpSync(join(repo, p), join(wt, p), { recursive: true, verbatimSymlinks: true, mode: constants.COPYFILE_FICLONE });
+        for (const p of ignored) {
+            try {
+                cpSync(join(repo, p), join(wt, p), { recursive: true, verbatimSymlinks: true, mode: constants.COPYFILE_FICLONE });
+            }
+            catch (e) {
+                return `copy of your ignored ${p} into the fix worktree failed: ${errorText(e)}`;
+            }
+        }
     };
     return inWorktree(repo, wt, async (start) => {
         let base = start;
-        carry();
+        const copied = carry();
+        if (copied)
+            return { blocked: copied };
         for (let k = 1; k <= tries; k++) {
             const step = h.begin('fix');
             const round = { attempt: k, failures: open };
@@ -1573,7 +1581,9 @@ Answer with summary (what you changed, in one line) and blocker ("" when you fix
             base = round.commit = made.commit;
             run.fix = { commit: made.commit, record: join(recordsDir(cfg), `${run.run_id}-fix${k}.json`) };
             // Verify again at the fix commit; its records are named fix<k>-, and the judge sorts its failures before the next fix.
-            carry();
+            const recopied = carry();
+            if (recopied)
+                return blocked(recopied);
             const next = await again(wt, `fix${k}`);
             round.rerun = { result: next.end?.result ?? (next.asks.length ? 'gate' : 'pass'), reason: next.end?.reason, ...next.logs };
             if (next.end && !next.fixable.length)

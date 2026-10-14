@@ -5137,6 +5137,25 @@ console.log(JSON.stringify({ type: 'text', part: { type: 'text', text: JSON.stri
   assert.deepEqual([t.head(), t.sh('branch', '--list', 'done-done/*').toString().trim(), readFileSync(join(t.repo, '.env.local'), 'utf8')], [head, '', 'SECRET=real\n']);
 });
 
+// An unreadable ignored file cannot be copied into the fix worktree: the run ends blocked with the path, and no fixer runs.
+test('verify with auto_fix ends blocked, naming the ignored file, when a copied ignored file cannot be copied', { skip: process.getuid?.() === 0 && 'root reads any file' }, () => {
+  const t = setup('app: notes\nevidence:\n  root: .proof\n  ignore_paths: ["docs/**"]\njudge:\n  enabled: false\nauto_fix:\n  verify: 2\njourneys:\n  shots:\n    command: node shot.mjs\n');
+  const e = pathEnv(t.env, []);
+  writeFileSync(join(t.repo, '.gitignore'), '.proof/\nsecret.key\n');
+  writeFileSync(join(t.repo, 'secret.key'), 'key\n');
+  chmodSync(join(t.repo, 'secret.key'), 0o000);
+  writeFileSync(join(t.repo, 'shot.mjs'), `import { copyFileSync, mkdirSync, readFileSync } from 'node:fs';\nif (readFileSync('src/app.js', 'utf8').includes('BUG')) process.exit(1);\nmkdirSync(process.env.DONE_DONE_EVIDENCE_ROOT, { recursive: true });\ncopyFileSync(${JSON.stringify(join(t.dir, 'screen.png'))}, process.env.DONE_DONE_EVIDENCE_ROOT + '/home.png');\n`);
+  writeFileSync(join(t.repo, 'src', 'app.js'), 'export const title = "BUG";\n');
+  t.sh('add', '-A');
+  t.sh('commit', '-qm', 'a broken title');
+  writeFileSync(join(e.PATH, 'opencode'), `#!${process.execPath}\nrequire('node:fs').writeFileSync(${JSON.stringify(join(e.PATH, 'fixer'))}, '');\n`, { mode: 0o755 });
+  mkdirSync(t.env.DONE_DONE_HOME, { recursive: true });
+  writeFileSync(join(t.env.DONE_DONE_HOME, 'config.yaml'), 'agent: opencode\nagent_config:\n  opencode: { model: opencode-go/author }\n');
+  const r = doctorIn(t.repo, { ...e, PATH: `${e.PATH}:${dirname(process.execPath)}` }, 'verify', 'shots', '--outcome', 'the home screen shows the title Notes', '--foreground');
+  assert.deepEqual([r.code, toon(r).result, existsSync(join(e.PATH, 'fixer'))], [1, 'blocked', false], r.out);
+  assert.match(toon(r).reason, /^fix: copy of your ignored secret\.key into the fix worktree failed/);
+});
+
 const MATRIXED = `app: notes
 judge:
   enabled: false

@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 import { home } from './config.js';
-import { askJudge, backend, judgeable, prepare, readCache, VERSION, writeCache } from './judge.js';
+import { askJudge, backend, prepare, readCache, screen, VERSION, writeCache } from './judge.js';
 import { decodePixels } from './media.js';
 // The defect kinds, each its own question. Each asks for something the judge can see and measure, not whether it was
 // meant that way: a cheap model talks itself out of a judgment ("an intentional style", "the viewer's border"), not out of
@@ -39,7 +39,7 @@ const questions = (mock) => Object.fromEntries(Object.entries(KINDS).map(([kind,
 // A fully transparent pixel is never part of a band or the main colour, so a transparent margin is not a strip.
 const STRIP = { min: 0.02, tolerance: 24, contrast: 64, content: 0.005, alike: 0.03 };
 function bands(c) {
-    const p = c.media.status === 'ok' && judgeable(c) ? decodePixels(c.bytes, c.media.type) : undefined;
+    const p = c.media.status === 'ok' && screen(c) ? decodePixels(c.bytes, c.media.type) : undefined;
     if (!p)
         return undefined;
     const { w, h, rgb, clear } = p;
@@ -129,7 +129,7 @@ export function blankStrips(s) {
 function image(c) {
     if (c.media.status !== 'ok')
         return `${c.name}: ${c.media.why}`;
-    if (!judgeable(c))
+    if (!screen(c))
         return `${c.name}: only PNG and JPEG screens are judged`;
     const i = prepare(c);
     return typeof i === 'string' ? `${c.name}: ${i}` : i;

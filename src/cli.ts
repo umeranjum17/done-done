@@ -11,7 +11,7 @@ import { encode } from '@toon-format/toon';
 import { Document, parseDocument } from 'yaml';
 import { ACPX_INSTALL, agentChoices, agentPath, agentRun, askAgent, editOnlyReason, findBin, JUDGES, modelFor, noAgent, noJudge, notStartable, routeOf, selectAgent, selectJudge, type AgentAnswer, type JudgeChoice } from './agents.js';
 import { AGENTS, CHEAP, type Config, globalConfigText, home, isAgent, loadConfig, parseDuration, UsageError } from './config.js';
-import { backend, type Capture, judge, judgeable, type Judged, onPath, quote } from './judge.js';
+import { backend, type Capture, judge, judgeable, type Judged, onPath, quote, screen } from './judge.js';
 import { startInstance, stopInstance } from './instance.js';
 import { attemptProblem, changedSince, commitFix, dirtyTracked, FIX_SCHEMA, type Finding as MaintainFinding, inWorktree, maintainSteps, type MaintainResult, named, refuseSameSession, repoState, triage, type Triage } from './maintain.js';
 import { cellEnv, cellName, cellSuffix, hasMatrix, matrixManifest, splitMatrix } from './matrix.js';
@@ -695,8 +695,9 @@ async function runCheck(argv: string[], run?: { dir: string; judge: boolean; jud
       // The judge's next step leads the help when its verdict decides the result.
       if (j.judged.some((r) => r.verdict === 'fail')) judgeLevel = 'fail';
       else if (!findings.length && j.judged.some((r) => r.verdict === 'unsure')) judgeLevel = 'inconclusive';
+      const shots = new Set(captures.filter(screen).map((c) => c.name));
       for (const r of j.judged.filter((r) => r.verdict !== 'pass'))
-        findings.push({ level: r.verdict === 'fail' ? 'fail' : 'inconclusive', why: `${r.path}: judge says ${r.verdict === 'fail' ? 'wrong screen' : 'unsure'}: ${r.reason}`, file: r.path });
+        findings.push({ level: r.verdict === 'fail' ? 'fail' : 'inconclusive', why: `${r.path}: judge says ${r.verdict !== 'fail' ? 'unsure' : shots.has(r.path) ? 'wrong screen' : 'wrong output'}: ${r.reason}`, file: r.path });
       const rows = cap<Judged>(j.judged);
       const { choice } = j;
       judged = { ...(choice && { route: choice.route, model: choice.model, independence: choice.independence, author: `${choice.author.agent} (model ${choice.author.model || 'none'})` }), judged: rows.items.map(({ sha256, ...r }) => r) };
@@ -706,7 +707,7 @@ async function runCheck(argv: string[], run?: { dir: string; judge: boolean; jud
       }
       if (rows.omitted) judged.judged_omitted = rows.omitted;
       if (j.notJudged.length) judged.not_judged = j.notJudged;
-      judged.note = 'only PNG and JPEG captures are judged; text, log and video evidence are not';
+      judged.note = 'PNG and JPEG screens and text captures (logs, JSON, CLI output) are judged; video and other files are not';
     }
   }
   const rep = report(findings, files, { cfg, repo, claim: claim?.outcome, source: values.from, judge: judged, judgeLevel });
@@ -1049,7 +1050,7 @@ ${inst}${cells}${dom}
 1. Read the verify skill ${join(skill, 'SKILL.md')} (how to launch, check, drive, capture and clean up this app) and ${recipe}.
 2. ${cfg.instance ? 'Drive that running instance' : 'Launch the app as the skill says, then drive'} that feature through the real user path, step by step as its recipe says.
    Never add steps or data to make the outcome look true: capture what that path shows, even when it contradicts the outcome.
-3. Save PNG screenshots of what a user sees once the path is done (the resulting state the outcome is about) into ${evidence} (also in $DONE_DONE_EVIDENCE_ROOT).
+3. Save PNG screenshots of what a user sees once the path is done (the resulting state the outcome is about) into ${evidence} (also in $DONE_DONE_EVIDENCE_ROOT); when the outcome shows in text (a CLI's output, a log or JSON), save that text there as a .txt, .log or .json file instead.
    The judge checks every screenshot there against the outcome, so a screenshot of an earlier step (such as an empty or half-filled form) fails the drive: keep those in ${scratch}. Save nothing else there, and never edit a capture.
 4. Stop everything you started.
 
@@ -1278,7 +1279,7 @@ async function runSteps(dir: string): Promise<void> {
     const notJudged = judgeRan && run.journey === null ? (checked.judge?.not_judged ?? []) as string[] : [];
     const asks: Finding[] = !clean ? [] : judgeRan ? [...judgeFindings, ...notJudged.map((name): Finding => ({ level: 'inconclusive', why: `${name}: the judge did not read this capture, and an agent drive passes only with a judge pass on every capture` }))]
       : run.journey !== null ? []
-      : run.judge ? [{ level: 'inconclusive', why: 'the judge judged no capture (only PNG and JPEG captures are judged), and an agent drive passes only with a judge pass' }]
+      : run.judge ? [{ level: 'inconclusive', why: 'the judge judged no capture (only PNG, JPEG and text captures are judged), and an agent drive passes only with a judge pass' }]
       : [{ level: 'inconclusive', why: 'the judge is off (--no-judge), and an agent drive passes only with a judge pass' }];
     // With auto_fix.verify, screens the judge calls wrong (and nothing it was unsure of) are a product failure to fix.
     if (tries && asks.length && asks.every((f) => f.level === 'fail'))

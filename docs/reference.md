@@ -156,7 +156,7 @@ Each axis is optional; done-done expands the set axes into cells and drops skipp
 
 ### DOM assertions
 
-A screenshot judge misses page-level defects. With a `dom` block, a run also fails when a captured screen's page overflows the viewport horizontally, logged a console error or had a failed request:
+A capture judge misses page-level defects. With a `dom` block, a run also fails when a captured screen's page overflows the viewport horizontally, logged a console error or had a failed request:
 
 ```yaml
 dom:

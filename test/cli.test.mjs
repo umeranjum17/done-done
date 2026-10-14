@@ -5094,6 +5094,31 @@ test('an inputs path that leaves the worktree or names the repo root is refused 
   }
 });
 
+test('a watched input under a symlinked parent that points outside the repo fails naming it', () => {
+  const t = guarded(GUARDED.replace('inputs: ["data/**"]', 'inputs: ["linkdir/seed.json"]'));
+  mkdirSync(join(dirname(t.repo), 'outdir'));
+  writeFileSync(join(dirname(t.repo), 'outdir', 'seed.json'), '{}\n');
+  symlinkSync(join(dirname(t.repo), 'outdir'), join(t.repo, 'linkdir'));
+  const r = t.dd('verify', 'shots', '--outcome', 'home renders', '--foreground');
+  assert.notEqual(r.code, 0, r.out);
+  assert.match(r.out, /input guard: linkdir\/seed\.json links outside the repo/);
+});
+
+test('an input-guard failure is never handed to the fixer', () => {
+  const t = guarded(GUARDED.replace('inputs: ["data/**"]', 'inputs: ["data/**"]\nauto_fix:\n  verify: 1'));
+  mkdirSync(t.env.DONE_DONE_HOME, { recursive: true });
+  writeFileSync(join(t.env.DONE_DONE_HOME, 'config.yaml'), 'agent: opencode\n');
+  const e = pathEnv(t.env, []);
+  const calls = join(e.PATH, 'calls');
+  symlinkSync(process.execPath, join(e.PATH, 'node'));
+  writeFileSync(join(e.PATH, 'opencode'), `#!${process.execPath}\nrequire('node:fs').appendFileSync(${JSON.stringify(calls)}, 'fixer\\n');\nprocess.exit(1);\n`, { mode: 0o755 });
+  const s = spawnSync(process.execPath, [CLI, 'verify', 'edit', '--outcome', 'home renders', '--foreground'], { cwd: t.repo, env: e, encoding: 'utf8' });
+  const r = { code: s.status, out: s.stdout + s.stderr };
+  assert.equal(toon(r).result, 'fail', r.out);
+  assert.match(toon(r).reason, /check: input guard: data\/seed\.json: changed during the drive/);
+  assert.equal(existsSync(calls), false, 'the fixer is never started for a guard failure');
+});
+
 test('a watched symlink that points outside the repo fails the run naming it', () => {
   const t = guarded();
   writeFileSync(join(dirname(t.repo), 'outside.json'), '{}\n');

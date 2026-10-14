@@ -1011,12 +1011,13 @@ function guardSnapshot(at, patterns) {
         else
             paths.add(p);
     }
+    const root = realpathSync(at);
     return [...paths].sort().map((path) => {
         const full = join(at, path);
         const st = statSync(full, { throwIfNoEntry: false });
         if (!st?.isFile())
             return { path, sha256: null };
-        if (lstatSync(full).isSymbolicLink() && !realpathSync(full).startsWith(`${realpathSync(at)}${sep}`))
+        if (!realpathSync(full).startsWith(`${root}${sep}`))
             throw new Error(`input guard: ${path} links outside the repo`);
         try {
             return { path, sha256: sha256(readFileSync(full)) };
@@ -1339,7 +1340,7 @@ async function runSteps(dir) {
                     const findings = diffs.map((d) => ({ level: 'fail', why: d.why }));
                     set(step, 'failed', { exit: 1, findings });
                     log('check', { result: 'fail', findings });
-                    return { end: { result: 'fail', reason: `check: input guard: ${diffs.map((d) => d.why).join('; ')}` }, asks: [], fixable: diffs.map((d) => ({ kind: 'drive', file: d.path, what: d.why })) };
+                    return { end: { result: 'fail', reason: `check: input guard: ${diffs.map((d) => d.why).join('; ')}` }, asks: [], fixable: [] };
                 }
             }
             // The check's own findings end the check step; the judge, when on and the check did not fail, is its own step.

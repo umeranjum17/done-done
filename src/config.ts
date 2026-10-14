@@ -4,6 +4,7 @@ import { basename, isAbsolute, join, resolve } from 'node:path';
 import { parse } from 'yaml';
 import type { Instance } from './instance.js';
 import { checkMatrix, type Matrix } from './matrix.js';
+import { type Dom, parseDom } from './dom.js';
 
 export class UsageError extends Error {
   // The exact next command, when the error has one.
@@ -27,6 +28,8 @@ export type Config = {
   instance: Instance | null;
   // Primitive 2 (capture matrix): optional theme x width x form axes with skip entries; null: today's behaviour.
   matrix: Matrix | null;
+  // Primitive 14 (DOM assertions): page-check records per capture, allow lists; null when unset: today's behaviour.
+  dom: Dom | null;
   evidence: { local_root: string; root: string; allow_dirty: boolean; ignore_paths: string[] };
   checks: { not_proven: 'inconclusive' | 'allow'; fix_title: string };
   // enabled: verify judges unless false (--judge turns it on for a run); check and receipt judge with --judge or true; rerun repeats its source run.
@@ -68,7 +71,7 @@ export const EFFORT_FLAGS: Record<string, (level: string) => string[]> = {
 const AGENT_TIMEOUT = '30m';
 
 // Where each key may be set. Global-only keys describe the machine; repo-only keys describe the project; `any` may be in either.
-const KEYS: Record<string, { scope: 'global' | 'repo' | 'any'; type: 'string' | 'boolean' | 'string[]' | 'journeys' | 'instance' | 'matrix' | 'agent' | 'agent_config' | 'route' | 'claude_code' | 'args' | 'paths' | 'bin' | 'duration' | 'auto_fix' }> = {
+const KEYS: Record<string, { scope: 'global' | 'repo' | 'any'; type: 'string' | 'boolean' | 'string[]' | 'journeys' | 'instance' | 'matrix' | 'dom' | 'agent' | 'agent_config' | 'route' | 'claude_code' | 'args' | 'paths' | 'bin' | 'duration' | 'auto_fix' }> = {
   agent: { scope: 'any', type: 'agent' },
   auto_fix: { scope: 'any', type: 'auto_fix' },
   agent_config: { scope: 'global', type: 'agent_config' },
@@ -82,6 +85,7 @@ const KEYS: Record<string, { scope: 'global' | 'repo' | 'any'; type: 'string' | 
   journeys: { scope: 'repo', type: 'journeys' },
   instance: { scope: 'repo', type: 'instance' },
   matrix: { scope: 'repo', type: 'matrix' },
+  dom: { scope: 'repo', type: 'dom' },
   'evidence.root': { scope: 'repo', type: 'string' },
   'evidence.allow_dirty': { scope: 'repo', type: 'boolean' },
   'evidence.ignore_paths': { scope: 'repo', type: 'string[]' },
@@ -182,6 +186,13 @@ function apply(target: Config, text: string | undefined, file: string, scope: 'g
       (target as Record<string, unknown>)[key] = { command: v.command, ready: has(r.url) ? { url: r.url } : { command: r.command }, ready_timeout: (v.ready_timeout as string) ?? '30s' };
       continue;
     }
+    if (key === 'dom') {
+      const d = parseDom(value);
+      if (typeof d === 'string') throw new UsageError(`${file}: dom ${d}`);
+      target.from[key] = scope;
+      target.dom = d;
+      continue;
+    }
     if (!ok) throw new UsageError(`${file}: ${key} must be ${want[spec.type] ?? `a ${spec.type}`}${key === 'matrix' ? `: ${checkMatrix(value)}` : ''}`);
     if (key === 'checks.not_proven' && value !== 'inconclusive' && value !== 'allow') throw new UsageError(`${file}: checks.not_proven must be inconclusive or allow`);
     if (key === 'agent_config')
@@ -232,6 +243,7 @@ function defaultConfig(repo: string): Config {
     journeys: {},
     instance: null,
     matrix: null,
+    dom: null,
     evidence: { local_root: join(home(), 'evidence'), root: '', allow_dirty: false, ignore_paths: [] },
     checks: { not_proven: 'inconclusive', fix_title: '^(fix|bugfix|hotfix)\\b' },
     judge: { route: '', model: '', allow_same: false, claude_code: { config_dir: join(home(), 'claude') } },

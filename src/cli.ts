@@ -3,7 +3,7 @@ import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import { createHash, randomBytes } from 'node:crypto';
 import { accessSync, appendFileSync, closeSync, constants, cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir, userInfo } from 'node:os';
-import { delimiter, dirname, isAbsolute, join, matchesGlob, relative, resolve, sep } from 'node:path';
+import { basename, delimiter, dirname, isAbsolute, join, matchesGlob, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createInterface } from 'node:readline/promises';
 import { parseArgs } from 'node:util';
@@ -221,6 +221,11 @@ const COMMANDS: Record<string, { usage: [string, string][]; flags: string[]; mor
   },
   abort: {
     usage: [['done-done abort [--run <run-id>]', 'stop a live run and its journey, and mark it cancelled']],
+    flags: ['--run <run-id>'],
+    more: [RUNS_TEXT],
+  },
+  signoff: {
+    usage: [['done-done signoff [--run <run-id>]', "write the run's sign-off message (contract v1): a gate for a run waiting at its gate, evidence for a finished run; it prints the post command and never posts"]],
     flags: ['--run <run-id>'],
     more: [RUNS_TEXT],
   },
@@ -2110,6 +2115,83 @@ async function cmdRespond(argv: string[]): Promise<number> {
   }
 }
 
+// sign-off's communication contract v1 (github.com/umeranjum17/sign-off, docs/contract.md): done-done sends `gate` and
+// `evidence`, schema 1. Each value is checked against the contract's limits first, so a run that cannot make a valid
+// message writes no file. done-done never posts it: sign-off is the user's choice, so the help line names the post command.
+const GATE_LABELS = { approve: 'Approve', skip: 'Skip the judge', fix: 'Fix first' };
+function cmdSignoff(argv: string[]): number {
+  const { values } = parseArgs({ args: argv, options: { run: { type: 'string' } } });
+  const repo = repoRoot();
+  const cfg = loadConfig(repo);
+  const root = runsRoot(cfg.app);
+  const id = pickId(root, repo, 'signoff', cfg, values.run);
+  const run = loadRun(join(root, id));
+  const refuse = (what: string, help: string): never => { throw new UsageError(`run ${id} cannot make a valid sign-off message, so no file was written: ${what}`, help); };
+  const text = (field: string, v: string, max: number, help = `Read it: done-done status --run ${id}`) => {
+    const n = [...v].length;
+    if (!/\S/.test(v) || n > max) refuse(`${field} is ${n} characters, and the contract takes 1-${max}`, help);
+    if (/[\u0000-\u0009\u000b-\u001f\u007f-\u009f]|\p{Cs}/u.test(v)) refuse(`${field} holds a control character or half of a character`, help);
+    return v;
+  };
+  // At most 116 characters, so dd-evidence-<run id> is still a key-set id (1-128).
+  const runRef = (commit: string) => /^[A-Za-z0-9._-]{1,116}$/.test(id) && /^[0-9a-f]{40}$/.test(commit) ? { run_id: id, commit } : refuse(`run_id ${id} or commit ${commit} is not in the contract's shape`, 'Start a new run: done-done verify --outcome "<what a user can now do>"');
+  const drove = run.journey ?? run.feature ?? 'agent drive';
+  // A finding names the folder that captured it (this run's, a -fixN pass's or a reused source run's), so the message
+  // names the capture file alone: strip any <evidence root>/<one run folder>/ prefix.
+  const esc = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const bare = (s: string) => s.replaceAll(new RegExp(`${esc(cfg.evidence.root)}${esc(sep)}[^${esc(sep)}]+${esc(sep)}`, 'g'), '');
+  let msg: Record<string, unknown>, file: string;
+  if (run.kind === 'verify' && run.status === 'awaiting_approval' && run.gate) {
+    const { findings, spend, head } = run.gate;
+    const more = findings.length > 1 ? ` (and ${findings.length - 1} more)` : '';
+    msg = {
+      contract: 1, kind: 'gate', schema: 1, key: `dd-gate-${id}`, filer: 'done-done',
+      title: text('title', spend ? `Spend ${spend} on the ${cfg.app} ${drove} run?` : `Move the ${cfg.app} ${drove} run on past its judge?`, 160),
+      about: text('about', `${bare(findings[0].what)}${more}`, 500), run: runRef(head.commit),
+      // A spend gate takes approve or skip only (respond refuses fix there).
+      options: (spend ? ['approve', 'skip'] as const : ['approve', 'skip', 'fix'] as const).map((value) => ({ value, label: GATE_LABELS[value] })),
+      recommend_value: findings.some((f) => f.severity === 'error') ? 'fix' : 'approve', close: 'done',
+    };
+    file = join(root, id, 'signoff-gate.json');
+  } else if (run.kind === 'verify' && run.status === 'completed' && run.record) {
+    // A run auto_fix.verify fixed proves the fix pass, never the first failing pass: the receipt is bound to the fix commit.
+    const fixed = run.result === 'changed' && run.fix?.record ? run.fix : undefined;
+    // The message sits in the folder of the run that made the captures (a rerun that reused its drive sends its source's),
+    // so each media path is relative to it and stays inside it.
+    const again = `Capture it again: done-done rerun --run ${id}`;
+    let rec: RunRecord, folder: string;
+    try { rec = JSON.parse(readFileSync(fixed?.record ?? run.record, 'utf8')); } catch { return refuse('its run record is missing or unreadable', again); }
+    try { folder = realpathSync(runDir(cfg, rec.run_id)); } catch { return refuse('its run folder is missing', again); }
+    if (!under(realpathSync(cfg.evidence.root), folder)) refuse(`its run folder ${rec.run_id} is outside the evidence root`, again);
+    const names = rec.files.map((f) => {
+      let p: string, bytes: Buffer;
+      try { p = realpathSync(join(cfg.evidence.root, f.path)); bytes = readFileSync(p); } catch { return refuse(`${f.path} is missing`, again); }
+      if (!under(folder, p) || sha256(bytes) !== f.sha256) refuse(`${f.path} left the run folder or changed after the run`, again);
+      return { name: relative(folder, p), media: /\.(png|jpe?g|webp|mp4|webm)$/i.test(p) && f.bytes <= 50_000_000 };
+    });
+    if (!names.length) refuse('the run recorded no captures, so it has no evidence to send', `Read it: done-done status --run ${id}`);
+    const media = names.filter((f) => f.media).slice(0, 12).map((f) => f.name);
+    const shown = names.slice(0, 12).map((f) => f.name).join(', ') + (names.length > 12 ? `, and ${names.length - 12} more in the run folder` : '');
+    const redo = 'Start a run whose --outcome fits: done-done verify --outcome "<what a user can now do>"';
+    msg = {
+      contract: 1, kind: 'evidence', schema: 1, key: `dd-evidence-${id}`, filer: 'done-done',
+      title: text('title', `${cfg.app} ${drove}: verify ${run.result}`, 160), about: text('about (the outcome)', run.claim!, 500, redo),
+      ...(media.length && { media }),
+      run: {
+        ...runRef(rec.commit), outcome: text('outcome', run.claim!, 1000, redo),
+        repro: text('repro', [`done-done verify`, run.journey ?? (run.feature && `--feature ${run.feature}`), `--outcome "${run.claim}" at ${rec.commit}`].filter(Boolean).join(' ') + (fixed?.branch ? ` on branch ${fixed.branch}` : ''), 1000, redo),
+        proof: text('proof', `${existsSync(join(repo, cfg.skill)) ? basename(cfg.skill) : 'no verify skill'}: done-done verify ${drove}, run ${id}: ${run.result}${run.reason ? ` (${run.reason})` : ''}`, 1000),
+        evidence: text('evidence', shown, 1000),
+      },
+    };
+    file = join(folder, 'signoff-evidence.json');
+  } else return refuse(`it is ${shownStatus(run)}${run.kind === 'verify' ? '' : ` (a ${run.kind} run)`}; signoff writes a gate for a verify run waiting at its gate, or evidence for a finished verify run`, `Read it: done-done status --run ${id}`);
+  writeFileSync(file, `${JSON.stringify(msg, null, 2)}\n`);
+  const at = citable(repo, file);
+  emit({ command: 'signoff', run_id: id, kind: msg.kind, file: at, help: [`Post it to the sign-off board (done-done never posts): npx -y sign-off-axi post --kind ${msg.kind} --from ${arg(at)}`] });
+  return PASS;
+}
+
 function runsOf(repo: string, cfg: Config): Run[] {
   return runsIn(runsRoot(cfg.app)).filter((r) => r.repo === repo).sort((a, b) => b.created.localeCompare(a.created));
 }
@@ -3148,6 +3230,7 @@ async function main(argv: string[]): Promise<number> {
     if (cmd === 'abort') return cmdAbort(rest);
     if (cmd === 'respond') return await cmdRespond(rest);
     if (cmd === 'history') return cmdHistory(rest);
+    if (cmd === 'signoff') return cmdSignoff(rest);
     if (cmd === '__runner') {
       await runSteps(rest[0]);
       return PASS;

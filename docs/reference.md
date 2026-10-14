@@ -389,6 +389,15 @@ A journey with `spends: "<what a run spends>"` (for example `one live generation
 
 `abort` kills the runner's process group (a `maintain` run's agent calls run in it, so they stop too), then its journey's process group, and marks the run `cancelled`; `status` shows a cancelled run as failed (exit 1), with the step that was running marked `cancelled`. It exits 0 when it cancelled the run. A run that had already ended, or whose runner pid cannot be confirmed as this run's, is left alone and exits 1.
 
+### Send a run to sign-off
+
+```sh
+done-done signoff [--run <run-id>]   # writes the message; never posts it
+npx -y sign-off-axi post --kind <gate|evidence> --from <file>   # the command signoff prints
+```
+
+`signoff` writes one message in the [sign-off contract v1](https://github.com/umeranjum17/sign-off/blob/main/docs/contract.md) shape. A run waiting at its gate gets a `gate` (`<run>/signoff-gate.json`): key `dd-gate-<run-id>`, the first finding as `about` (its evidence folder is stripped, so it names the capture file), `run` with `run_id` and `commit`, options `approve` (Approve), `skip` (Skip the judge) and `fix` (Fix first; not on a spend gate), and `recommend_value` `fix` when the judge failed a capture, else `approve`. The board's answer is `done-done respond --action <value>`. A finished run with captures gets an `evidence` (`signoff-evidence.json` in the evidence folder of the run that made the captures, the source run for a rerun that reused its drive, the fix pass for a run `auto_fix.verify` fixed): key `dd-evidence-<run-id>`, the outcome as `about`, up to 12 PNG, JPEG, WebP, MP4 or WebM captures as `media` (paths relative to that folder) and `run` with `run_id`, `commit` and the four Checks lines (`repro` is the `done-done verify` command that made the run, at its commit, and on the fix branch when a fix pass made it). Both have `filer: done-done`. Every value is checked against the contract's limits first; one that breaks them (an outcome over 500 characters, a capture changed since the run) exits 2 and writes no file. done-done works the same without sign-off.
+
 ### Keep the verify skill true
 
 ```sh

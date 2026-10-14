@@ -1766,6 +1766,8 @@ test('a journey that spends parks before it runs until the user approves; respon
   assert.deepEqual([toon(ok).result, toon(ok).spend.reason, spends()], ['pass', 'Umer approved one generation', 1]);
   const no = toon(t.dd('verify', 'paid', '--outcome', 'home and settings render'));
   assert.equal(no.status, 'awaiting_approval', 'every new run asks again');
+  const sg = JSON.parse(readFileSync(toon(t.dd('signoff')).file, 'utf8'));
+  assert.deepEqual([sg.title, sg.options.map((o) => o.value), sg.recommend_value], ['Spend one live generation on the notes paid run?', ['approve', 'skip'], 'approve'], 'its sign-off gate offers what respond takes');
   assert.equal(t.dd('respond', '--run', no.run_id, '--action', 'fix').code, 2, 'a spend gate takes approve or skip');
   const skip = t.dd('respond', '--run', no.run_id, '--action', 'skip', '--reason', 'Umer said no');
   assert.match(toon(skip).reason, /chose skip: the journey was not run, so nothing was spent/);
@@ -2127,6 +2129,16 @@ test('verify judges by default with the judge the user set: opencode judges a cl
     const text = readFileSync(join(runDir, 'agents', n), 'utf8');
     assert.doesNotMatch(text, /home and settings render|Answer the typed questions/, `${n} keeps no prompt text`);
   }
+  // The sign-off message is evidence (contract v1, section 6), key for key; its media resolve inside its own folder.
+  const sent = t.dd('signoff', '--run', o.run_id);
+  assert.equal(sent.code, 0, sent.out);
+  const evFile = join(t.repo, toon(sent).file);
+  assert.equal(toon(sent).help[0], `Post it to the sign-off board (done-done never posts): npx -y sign-off-axi post --kind evidence --from ${toon(sent).file}`);
+  assert.deepEqual(JSON.parse(readFileSync(evFile, 'utf8')), {
+    contract: 1, kind: 'evidence', schema: 1, key: `dd-evidence-${o.run_id}`, filer: 'done-done', title: 'notes shots: verify pass', about: 'home and settings render', media: ['home.png', 'settings.png'],
+    run: { run_id: o.run_id, commit: t.head(), outcome: 'home and settings render', repro: `done-done verify shots --outcome "home and settings render" at ${t.head()}`, proof: `no verify skill: done-done verify shots, run ${o.run_id}: pass`, evidence: 'home.png, settings.png' },
+  });
+  assert.equal(dirname(evFile), join(t.repo, '.proof', o.run_id), 'the message sits in the run folder its media resolve from');
   const v = t.dd('receipt', '--verify', t.head());
   assert.equal(v.code, 0, v.out);
   assert.deepEqual([toon(v).schema, toon(v).judge.route, toon(v).judge.verdicts.map((x) => x.verdict)], [2, 'answerer:opencode', ['pass', 'pass']]);
@@ -2140,6 +2152,14 @@ test('verify judges by default with the judge the user set: opencode judges a cl
   assert.deepEqual([b.findings.length, b.findings[0].id, b.findings[0].severity, b.findings[0].action], [2, 'gate-1', 'error', 'ask-user']);
   assert.match(b.findings[0].what, /judge says wrong screen/);
   assert.ok(b.help.some((h) => h.includes(`done-done respond --run ${b.run_id} --action approve --reason`)), bad.out);
+  // Parked at its gate, the run's sign-off message is a gate that recommends fix, since the judge failed a capture.
+  const gated = t.dd('signoff');
+  assert.equal(gated.code, 0, gated.out);
+  assert.deepEqual(JSON.parse(readFileSync(toon(gated).file, 'utf8')), {
+    contract: 1, kind: 'gate', schema: 1, key: `dd-gate-${b.run_id}`, filer: 'done-done', title: 'Move the notes shots run on past its judge?',
+    about: 'home.png: judge says wrong screen: The list shows the notes. (and 1 more)', run: { run_id: b.run_id, commit: t.head() },
+    options: [{ value: 'approve', label: 'Approve' }, { value: 'skip', label: 'Skip the judge' }, { value: 'fix', label: 'Fix first' }], recommend_value: 'fix', close: 'done',
+  });
   // An approve needs a reason; with one, the run ends overridden (exit 1, never pass) and the receipt says who and why.
   const noReason = t.dd('respond', '--run', b.run_id, '--action', 'approve');
   assert.equal(noReason.code, 2, noReason.out);
@@ -2361,6 +2381,96 @@ process.stdout.write(JSON.stringify({ type: 'result', is_error: false, structure
   const none = verify(right.env, 'x');
   assert.equal(none.code, 2, none.out);
   assert.match(toon(none).error, /needs a journey or a verify skill/);
+});
+
+test('signoff refuses a value past the contract limit, a capture outside its run folder and a run with no message to send, and writes no file', () => {
+  const t = setup();
+  const long = t.dd('verify', 'shots', '--outcome', 'x'.repeat(501), '--foreground');
+  assert.equal(long.code, 0, long.out);
+  const r = t.dd('signoff');
+  assert.equal(r.code, 2, r.out);
+  assert.match(toon(r).error, /cannot make a valid sign-off message, so no file was written: about \(the outcome\) is 501 characters, and the contract takes 1-500$/);
+  assert.equal(existsSync(join(t.repo, '.proof', toon(long).run_id, 'signoff-evidence.json')), false);
+  // A capture that now points outside the run folder would send a media path that escapes it.
+  const ok = toon(t.dd('verify', 'shots', '--outcome', 'home and settings render', '--foreground'));
+  const shot = join(t.repo, '.proof', ok.run_id, 'home.png');
+  writeFileSync(join(t.repo, 'outside.png'), readFileSync(shot));
+  rmSync(shot);
+  symlinkSync(join(t.repo, 'outside.png'), shot);
+  const out = t.dd('signoff', '--run', ok.run_id);
+  assert.equal(out.code, 2, out.out);
+  assert.match(toon(out).error, /home\.png left the run folder or changed after the run/);
+  rmSync(shot);
+  const gone = t.dd('signoff', '--run', ok.run_id);
+  assert.equal(gone.code, 2, gone.out);
+  assert.match(toon(gone).error, /home\.png is missing$/);
+  assert.equal(existsSync(join(t.repo, '.proof', ok.run_id, 'signoff-evidence.json')), false);
+  const m = t.dd('signoff', '--run', 'nope');
+  assert.equal(m.code, 2, m.out);
+});
+
+test('signoff on a rerun that reused its drive sends the captures of the run that made them', () => {
+  const t = setup();
+  const a = toon(t.dd('verify', 'shots', '--outcome', 'home and settings render', '--foreground'));
+  const r = t.dd('rerun', '--run', a.run_id);
+  assert.equal(r.code, 0, r.out);
+  assert.deepEqual(JSON.parse(readFileSync(join(t.env.DONE_DONE_HOME, 'runs', 'notes', toon(r).run_id, 'events.jsonl'), 'utf8').split('\n').find((l) => l.includes('rerun_of'))).reused, ['resolve', 'drive']);
+  const s = t.dd('signoff', '--run', toon(r).run_id);
+  assert.equal(s.code, 0, s.out);
+  const file = join(t.repo, toon(s).file);
+  const m = JSON.parse(readFileSync(file, 'utf8'));
+  assert.deepEqual([m.key, m.media, dirname(file)], [`dd-evidence-${toon(r).run_id}`, ['home.png', 'settings.png'], join(t.repo, '.proof', a.run_id)]);
+});
+
+// auto_fix.verify's sign-off evidence shows the fix pass, the one the run's receipt is bound to, never the failing first pass.
+test('signoff on a verify run fixed by auto_fix sends the fix pass: its captures, its commit and a repro naming its branch', () => {
+  const t = setup('app: notes\nevidence:\n  root: .proof\njudge:\n  enabled: false\nauto_fix:\n  verify: 1\njourneys:\n  shots:\n    command: node shot.mjs\n');
+  const e = pathEnv(t.env, []);
+  writeFileSync(join(t.repo, 'shot.mjs'), `import { copyFileSync, mkdirSync, readFileSync } from 'node:fs';\nif (readFileSync('src/app.js', 'utf8').includes('BUG')) process.exit(1);\nmkdirSync(process.env.DONE_DONE_EVIDENCE_ROOT, { recursive: true });\ncopyFileSync(${JSON.stringify(join(t.dir, 'screen.png'))}, process.env.DONE_DONE_EVIDENCE_ROOT + '/home.png');\n`);
+  writeFileSync(join(t.repo, 'src', 'app.js'), 'export const title = "BUG";\n');
+  t.sh('add', '-A');
+  t.sh('commit', '-qm', 'a broken title');
+  writeFileSync(join(e.PATH, 'opencode'), `#!${process.execPath}
+const { writeFileSync } = require('node:fs');
+writeFileSync('src/app.js', 'export const title = "Notes";\\n');
+console.log(JSON.stringify({ type: 'text', part: { type: 'text', text: JSON.stringify({ summary: 'fixed the title', blocker: '' }) } }));
+`, { mode: 0o755 });
+  mkdirSync(t.env.DONE_DONE_HOME, { recursive: true });
+  writeFileSync(join(t.env.DONE_DONE_HOME, 'config.yaml'), 'agent: opencode\nagent_config:\n  opencode: { model: opencode-go/author }\n');
+  const r = doctorIn(t.repo, { ...e, PATH: `${e.PATH}:${dirname(process.execPath)}` }, 'verify', 'shots', '--outcome', 'the home screen shows the title Notes', '--foreground');
+  assert.deepEqual([r.code, toon(r).result], [1, 'changed'], r.out);
+  const id = toon(r).run_id;
+  const fix = t.sh('rev-parse', `done-done/verify-${id}`).toString().trim();
+  const s = t.dd('signoff', '--run', id);
+  assert.equal(s.code, 0, s.out);
+  const file = join(t.repo, toon(s).file);
+  const folder = join(t.repo, '.proof', `${id}-fix1`);
+  assert.equal(dirname(file), folder, 'the message sits in the fix pass folder its media resolve from');
+  const m = JSON.parse(readFileSync(file, 'utf8'));
+  assert.deepEqual([m.kind, m.title, m.media, m.run.commit], ['evidence', 'notes shots: verify changed', ['home.png'], fix]);
+  assert.equal(m.run.repro, `done-done verify shots --outcome "the home screen shows the title Notes" at ${fix} on branch done-done/verify-${id}`);
+  assert.ok(existsSync(join(folder, m.media[0])), 'the media path resolves from the message folder');
+});
+
+// A gate a fix pass parks names the capture file alone: its findings were captured under <id>-fix1/, never the run's folder.
+test('signoff on a fix-pass gate names the capture file, not the fix pass folder', () => {
+  const t = setup('app: notes\nevidence:\n  root: .proof\nauto_fix:\n  verify: 1\njourneys:\n  shots:\n    command: node shot.mjs\n');
+  const e = pathEnv(t.env, []);
+  writeFileSync(join(t.repo, 'shot.mjs'), `import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';\nif (readFileSync('src/app.js', 'utf8').includes('BUG')) process.exit(1);\nmkdirSync(process.env.DONE_DONE_EVIDENCE_ROOT, { recursive: true });\nwriteFileSync(process.env.DONE_DONE_EVIDENCE_ROOT + '/out.txt', 'the notes list shows three notes\\n'.repeat(3000));\n`);
+  writeFileSync(join(t.repo, 'src', 'app.js'), 'export const title = "BUG";\n');
+  t.sh('add', '-A');
+  t.sh('commit', '-qm', 'a broken title');
+  writeFileSync(join(e.PATH, 'opencode'), `#!${process.execPath}\nconst { writeFileSync } = require('node:fs');\nwriteFileSync('src/app.js', 'export const title = "Notes";\\n');\nconsole.log(JSON.stringify({ type: 'text', part: { type: 'text', text: JSON.stringify({ summary: 'fixed the title', blocker: '' }) } }));\n`, { mode: 0o755 });
+  mkdirSync(t.env.DONE_DONE_HOME, { recursive: true });
+  writeFileSync(join(t.env.DONE_DONE_HOME, 'config.yaml'), 'agent: opencode\nagent_config:\n  opencode: { model: opencode-go/author }\njudge:\n  route: claude-code\n');
+  const env = { ...e, PATH: `${e.PATH}:${dirname(process.execPath)}` };
+  const r = doctorIn(t.repo, env, 'verify', 'shots', '--outcome', 'the home screen shows the title Notes', '--foreground');
+  assert.deepEqual([r.code, toon(r).status, toon(r).step], [4, 'awaiting_approval', 'gate'], r.out);
+  const g = doctorIn(t.repo, env, 'signoff');
+  assert.equal(g.code, 0, g.out);
+  const about = JSON.parse(readFileSync(toon(g).file, 'utf8')).about;
+  assert.match(about, /^out\.txt: judge says unsure: text is \d+ bytes/);
+  assert.ok(!about.includes('.proof'), 'the finding names the capture file, never its fix pass folder');
 });
 
 test('a rerun refused by the judge preflight exits 2 and creates no run folder', () => {

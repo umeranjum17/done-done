@@ -1436,9 +1436,8 @@ async function runSteps(dir) {
             const wrong = p.asks.filter((f) => f.level === 'fail');
             if (tries && wrong.length && wrong.length < p.asks.length) {
                 const sorted = await sortJudged(run, cfg, failures(wrongScreens(wrong)), join(dir, 'agents', `triage${fixed ? '-gate' : ''}.json`), h, true);
-                if (typeof sorted === 'string')
-                    return finish('blocked', `triage: ${sorted}`);
-                p.asks = [...sorted, ...p.asks.filter((f) => f.level !== 'fail')];
+                if (typeof sorted !== 'string')
+                    p.asks = [...sorted, ...p.asks.filter((f) => f.level !== 'fail')];
             }
             begin('gate');
             const findings = p.asks.map((f, i) => ({ id: `gate-${i + 1}`, severity: f.level === 'fail' ? 'error' : 'warning', what: f.why, action: 'ask-user' }));
@@ -1513,11 +1512,13 @@ async function fixVerify(run, cfg, dir, first, tries, h, again) {
     h.begin('fix');
     const repo = run.repo;
     const skill = relative(repo, join(repo, cfg.skill));
-    const off = (p) => p === '.done-done.yaml' || p.startsWith(`${skill}/`) || TEST_FILE.test(p);
     const agent = selectAgent(cfg);
     // done-done's own folders in the repo (an evidence root, DONE_DONE_HOME): a re-run writes there, so they are never the user's checkout.
     const own = [cfg.evidence.root, home()].map((p) => under(repo, p)).filter((p) => p !== null);
     const checkout = repoState(repo, own);
+    const ignored = git(repo, 'ls-files', '-z', '--others', '--ignored', '--exclude-standard', '--directory', ...pathspec(own)).split('\0').filter(Boolean);
+    const carried = (p) => ignored.some((c) => p === c || (c.endsWith('/') && p.startsWith(c)));
+    const off = (p) => p === '.done-done.yaml' || p.startsWith(`${skill}/`) || TEST_FILE.test(p) || carried(p);
     const wt = join(dir, 'fix');
     const scratch = join(dir, 'tmp');
     const rounds = [];
@@ -1528,7 +1529,7 @@ async function fixVerify(run, cfg, dir, first, tries, h, again) {
     // ponytail: a full copy each round (a clone where the file system can); a huge node_modules on ext4 is slow, link read-only if it bites.
     const carry = () => {
         git(wt, 'clean', '-fdqX');
-        for (const p of git(repo, 'ls-files', '-z', '--others', '--ignored', '--exclude-standard', '--directory', ...pathspec(own)).split('\0').filter(Boolean))
+        for (const p of ignored)
             cpSync(join(repo, p), join(wt, p), { recursive: true, verbatimSymlinks: true, mode: constants.COPYFILE_FICLONE });
     };
     return inWorktree(repo, wt, async (start) => {
@@ -1559,7 +1560,7 @@ Answer with summary (what you changed, in one line) and blocker ("" when you fix
             Object.assign(round, { record: a.record ?? a.recordError, ...(a.ok ? { summary: a.answer?.summary, blocker: a.answer?.blocker } : { error: a.error }) });
             // The diff guard: product code only, in the worktree only; anything else drops the attempt with the worktree.
             const changed = (round.changed = changedSince(wt, base, false));
-            const problem = attemptProblem(repo, checkout, wt, base, agent.agent, a, changed, changed.filter(off), 'the verify skill, .done-done.yaml, a test file or a test-runner config, which a fix never changes', 'the product', own);
+            const problem = attemptProblem(repo, checkout, wt, base, agent.agent, a, changed, changed.filter(off), 'the verify skill, .done-done.yaml, a test file, a test-runner config or a copied ignored file of your checkout, which a fix never changes', 'the product', own);
             if (problem)
                 return blocked(problem);
             if (!changed.length)
@@ -1568,7 +1569,7 @@ Answer with summary (what you changed, in one line) and blocker ("" when you fix
             if (typeof made === 'string')
                 return blocked(made);
             if (made.files.some(off))
-                return blocked('the commit holds the verify skill, .done-done.yaml, a test file or a test-runner config (a commit hook added them), so no branch is made');
+                return blocked('the commit holds the verify skill, .done-done.yaml, a test file, a test-runner config or a copied ignored file (a commit hook added them), so no branch is made');
             base = round.commit = made.commit;
             run.fix = { commit: made.commit, record: join(recordsDir(cfg), `${run.run_id}-fix${k}.json`) };
             // Verify again at the fix commit; its records are named fix<k>-, and the judge sorts its failures before the next fix.

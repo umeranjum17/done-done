@@ -5025,7 +5025,7 @@ console.log(JSON.stringify({ type: 'text', part: { type: 'text', text: JSON.stri
   mkdirSync(t.env.DONE_DONE_HOME, { recursive: true });
   writeFileSync(join(t.env.DONE_DONE_HOME, 'config.yaml'), 'agent: opencode\nagent_config:\n  opencode: { model: opencode-go/author }\n');
   const [head, git] = [t.head(), (...a) => t.sh(...a).toString().trim()];
-  const off = /^fix: opencode changed the verify skill, \.done-done\.yaml, a test file or a test-runner config, which a fix never changes/;
+  const off = /^fix: opencode changed the verify skill, \.done-done\.yaml, a test file, a test-runner config or a copied ignored file of your checkout, which a fix never changes/;
   for (const [extra, dirty, code, reason] of [
     ['test/home.test.js', false, 1, off], ['src/app_test.go', false, 1, off], ['test_app.py', false, 1, off], ['spec/home_spec.rb', false, 1, off],
     ['tests/home.js', false, 1, off], ['__tests__/home.js', false, 1, off], ['e2e/home.js', false, 1, off], ['src/app.test.js', false, 1, off], ['src/app.spec.ts', false, 1, off],
@@ -5077,18 +5077,19 @@ console.log(JSON.stringify({ type: 'text', part: { type: 'text', text: JSON.stri
 });
 
 // A mixed judge result is never fixed: the judge sorts the wrong screen (home.png), then it parks with the unsure one.
-test('verify with auto_fix parks a mixed judge result after sorting its wrong screen, and never offers judge.allow_same for the fixer\'s own agent', () => {
+for (const triageFails of [false, true]) test(`verify with auto_fix parks a mixed judge result after sorting its wrong screen${triageFails ? ', and parks it untriaged when the triage call fails' : ''}, and never offers judge.allow_same for the fixer's own agent`, () => {
   const t = setup(JUDGED.replace('journeys:', 'auto_fix:\n  verify: 1\njourneys:'));
   const e = pathEnv(t.env, ['ffprobe']);
   writeFileSync(join(e.PATH, 'opencode'), `#!${process.execPath}\nrequire('node:fs').writeFileSync(${JSON.stringify(join(e.PATH, 'fixer'))}, '');\n`, { mode: 0o755 });
+  if (triageFails) writeFileSync(join(e.PATH, 'triage-fails'), '');
   writeFileSync(join(e.PATH, 'pi'), `#!${process.execPath}
-const { appendFileSync, readFileSync } = require('node:fs');
+const { appendFileSync, existsSync, readFileSync } = require('node:fs');
 const prompt = readFileSync(0, 'utf8');
 const image = process.argv.slice(2).filter((a) => a.startsWith('@')).map((a) => readFileSync(a.slice(1)))[0];
 const triage = /a screen the judge called wrong/.test(prompt);
 appendFileSync(${JSON.stringify(join(e.PATH, 'calls'))}, (triage ? 'triage' : 'judge') + '\\n');
 const p = (probabilities) => ({ probabilities, rationale: 'r', personReason: 'the title is missing' });
-const answer = triage ? Object.fromEntries(JSON.parse(prompt.trim().split('\\n').filter((l) => l.startsWith('{')).pop()).required.map((id) => [id, p({ fix: 0.97, ask: 0.02, unclear: 0.01 })]))
+const answer = triage && existsSync(${JSON.stringify(join(e.PATH, 'triage-fails'))}) ? 'not json' : triage ? Object.fromEntries(JSON.parse(prompt.trim().split('\\n').filter((l) => l.startsWith('{')).pop()).required.map((id) => [id, p({ fix: 0.97, ask: 0.02, unclear: 0.01 })]))
   : { relevance: p(image.equals(readFileSync(${JSON.stringify(join(t.dir, 'screen.png'))})) ? { correct: 0.04, wrong: 0.93, unclear: 0.03 } : { correct: 0.05, wrong: 0.05, unclear: 0.9 }) };
 console.log(JSON.stringify({ type: 'message_end', message: { role: 'assistant', content: [{ type: 'text', text: JSON.stringify(answer) }] } }));
 `, { mode: 0o755 });
@@ -5104,9 +5105,36 @@ console.log(JSON.stringify({ type: 'message_end', message: { role: 'assistant', 
   const r = verify();
   assert.equal(r.code, 4, r.out);
   const m = toon(r);
-  assert.deepEqual(m.steps.map((x) => [x.name, x.status]).filter(([n]) => n === 'triage' || n === 'fix' || n === 'gate'), [['triage', 'completed'], ['fix', 'skipped'], ['gate', 'awaiting_approval']]);
-  assert.deepEqual(m.findings.map((f) => /; triage: fix$/.test(f.what)), [true, false], 'the wrong screen carries its class, the unsure one parks as it is');
-  assert.deepEqual([readFileSync(join(e.PATH, 'calls'), 'utf8').trim().split('\n'), existsSync(join(e.PATH, 'fixer'))], [['judge', 'judge', 'triage'], false], 'no fixer runs');
+  assert.deepEqual(m.steps.map((x) => [x.name, x.status]).filter(([n]) => n === 'triage' || n === 'fix' || n === 'gate'), [['triage', triageFails ? 'failed' : 'completed'], ['fix', 'skipped'], ['gate', 'awaiting_approval']]);
+  assert.deepEqual(m.findings.map((f) => /; triage: fix$/.test(f.what)), triageFails ? [false, false] : [true, false], 'the wrong screen carries its class, the unsure one parks as it is');
+  const calls = readFileSync(join(e.PATH, 'calls'), 'utf8').trim().split('\n');
+  assert.deepEqual([calls.slice(0, 2), calls.slice(2).every((c) => c === 'triage'), existsSync(join(e.PATH, 'fixer'))], [['judge', 'judge'], true, false], 'no fixer runs; a failed triage may be asked again');
+});
+
+// A fixer that un-ignores a copied ignored file (.env.local) and edits it is dropped before anything is committed.
+test('verify with auto_fix drops a fix that un-ignores and edits a copied ignored file, so no fix branch is made', () => {
+  const t = setup('app: notes\nevidence:\n  root: .proof\n  ignore_paths: ["docs/**"]\njudge:\n  enabled: false\nauto_fix:\n  verify: 2\njourneys:\n  shots:\n    command: node shot.mjs\n');
+  const e = pathEnv(t.env, []);
+  writeFileSync(join(t.repo, '.gitignore'), '.proof/\n.env.local\n');
+  writeFileSync(join(t.repo, '.env.local'), 'SECRET=real\n');
+  writeFileSync(join(t.repo, 'shot.mjs'), `import { copyFileSync, mkdirSync, readFileSync } from 'node:fs';\nif (readFileSync('src/app.js', 'utf8').includes('BUG')) process.exit(1);\nmkdirSync(process.env.DONE_DONE_EVIDENCE_ROOT, { recursive: true });\ncopyFileSync(${JSON.stringify(join(t.dir, 'screen.png'))}, process.env.DONE_DONE_EVIDENCE_ROOT + '/home.png');\n`);
+  writeFileSync(join(t.repo, 'src', 'app.js'), 'export const title = "BUG";\n');
+  t.sh('add', '-A');
+  t.sh('commit', '-qm', 'a broken title');
+  writeFileSync(join(e.PATH, 'opencode'), `#!${process.execPath}
+const { writeFileSync } = require('node:fs');
+writeFileSync('src/app.js', 'export const title = "Notes";\\n');
+writeFileSync('.gitignore', '.proof/\\n');
+writeFileSync('.env.local', 'SECRET=changed\\n');
+console.log(JSON.stringify({ type: 'text', part: { type: 'text', text: JSON.stringify({ summary: 'fixed the title', blocker: '' }) } }));
+`, { mode: 0o755 });
+  mkdirSync(t.env.DONE_DONE_HOME, { recursive: true });
+  writeFileSync(join(t.env.DONE_DONE_HOME, 'config.yaml'), 'agent: opencode\nagent_config:\n  opencode: { model: opencode-go/author }\n');
+  const head = t.head();
+  const r = doctorIn(t.repo, { ...e, PATH: `${e.PATH}:${dirname(process.execPath)}` }, 'verify', 'shots', '--outcome', 'the home screen shows the title Notes', '--foreground');
+  assert.equal(r.code, 1, r.out);
+  assert.match(toon(r).reason, /^fix: opencode changed the verify skill, .*a copied ignored file of your checkout/);
+  assert.deepEqual([t.head(), t.sh('branch', '--list', 'done-done/*').toString().trim(), readFileSync(join(t.repo, '.env.local'), 'utf8')], [head, '', 'SECRET=real\n']);
 });
 
 const MATRIXED = `app: notes

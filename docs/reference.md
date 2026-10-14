@@ -173,6 +173,16 @@ done-done never drives the browser: the recipe or journey writes one page-check 
 
 With your browser tool, for example chrome-devtools-axi: `overflow` and `overflowing` from `eval` (document `scrollWidth` beyond `clientWidth`, and the elements whose right edge passes it), `console_errors` from `console --type error`, `failed_requests` (status 400 or more, or 0 for no response) from `network`. The scaffolded verify skill and the agent drive prompt carry the same recipe. Verify's check and `done-done check` fail naming the capture and each issue not on an allow list, and fail when a capture has no record or a record is not this shape. No `dom` block keeps today's behaviour.
 
+### Base-ref before
+
+A before/after change is judged as a pair. With `base_ref` set to a branch, tag or commit (for example `base_ref: origin/main`), `verify` drives the base ref too, after the head's drive and only when it passed:
+
+```yaml
+base_ref: origin/main
+```
+
+done-done checks the base ref out in a scratch git worktree of its own under the run folder (never your checkout) and removes it after. The same journey or agent drive runs there with the same `DONE_DONE_RUN_ID`, its own instance (when an `instance` block is set) and every matrix cell's env, and `DONE_DONE_EVIDENCE_ROOT` is the run folder's `before/`, so a journey must write its captures there, not to a path it builds itself. An agent drive is told it is at the base ref, where the outcome is not expected to hold. The run record keeps `base` (the ref and its commit). Each head capture pairs with the base capture of the same name, matrix cell suffix included (`home.dark.png` with `before/home.dark.png`): the judge gets both images in one request and passes it only when the after screen shows the outcome as a change from before; a base capture is never judged against the outcome alone, and it may match its head capture byte for byte (the judge then sees no change). A head capture with no base capture of its name is reported (inconclusive, exit 3, with why the base drive failed when it did) and judged alone. Without `base_ref` (the default) nothing changes: each capture is judged alone.
+
 ### Check a claim
 
 ```sh
@@ -459,6 +469,7 @@ An `agent_config` entry merges with the defaults field by field, so `claude: { m
 | `instance` | none; the app under test started per run, see [Run-instance harness](#run-instance-harness) |
 | `matrix` | none, so each journey runs once; `theme`, `width`, `form` and `skip` set the [capture matrix](#capture-matrix) |
 | `dom` | none; page-check records per capture, see [DOM assertions](#dom-assertions) |
+| `base_ref` | none; a ref `verify` also drives, pairing its captures with the head's, see [Base-ref before](#base-ref-before) |
 | `evidence.root` | `<local_root>/<app>`, outside the repo. A relative path is under the repo; an absolute path is used as-is |
 | `evidence.allow_dirty` | `false` |
 | `evidence.ignore_paths` | `[]` |

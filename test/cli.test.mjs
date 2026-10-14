@@ -1127,6 +1127,21 @@ test('init drives a CLI with a web build tool over a PTY, not a browser', () => 
   assert.match(body, /^Harness: tmux\/PTY/m);
 });
 
+test('init names one driver for a react and express app: the harness, the route drive and its capture agree', () => {
+  const { repo, dd } = shapeRepo('bare', 'shop');
+  writeFileSync(join(repo, 'package.json'), JSON.stringify({ name: 'shop', dependencies: { react: '^19.0.0', express: '^4.0.0' } }));
+  writeFileSync(join(repo, 'server.js'), "app.get('/api/items', list);\n");
+  const r = dd('init');
+  assert.equal(r.code, 2, r.out);
+  const dir = join(repo, '.agents', 'skills', 'verify-shop');
+  assert.match(readFileSync(join(dir, 'SKILL.md'), 'utf8'), /^Harness: plain HTTP \(curl\)/m);
+  const [feat] = featureFiles(dir).filter((f) => f !== 'README.md');
+  const body = readFileSync(join(dir, 'features', feat), 'utf8');
+  assert.match(body, /^## Driving it with plain HTTP \(curl\)$/m, 'the feature names the harness driver');
+  assert.match(body, /^2\. Send it with `curl -sS -i -X GET BASE\/api\/items`/m, 'the route is driven with curl, not a browser');
+  assert.match(body, /^3\. Capture: save the output and exit status to \$DONE_DONE_EVIDENCE_ROOT\/\S+\.txt/m, 'the capture is text');
+});
+
 test('init never overwrites an existing verify skill', () => {
   const { repo, dd } = shapeRepo('cli', 'notes');
   const skill = join(repo, '.agents', 'skills', 'verify-notes', 'SKILL.md');

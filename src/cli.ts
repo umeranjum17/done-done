@@ -2229,11 +2229,12 @@ function detectApp(repo: string): Detected {
     : web || api
       ? `the launch output prints the app URL and \`curl -sS -o /dev/null <that URL>\` exits 0. BASE below is that URL; ${RECORD}`
       : 'the launch command runs with no error (exit 0, or a prompt waiting for input)';
-  const harness = has('playwright', '@playwright/test', 'cypress', 'puppeteer')
-    ? 'browser/CDP (Playwright)'
-    : cliish ? 'tmux/PTY'
-    : api ? 'plain HTTP (curl)'
-    : web ? 'a browser tool (for example chrome-devtools-axi)'
+  const browserTests = has('playwright', '@playwright/test', 'cypress', 'puppeteer');
+  const driver = browserTests ? 'browser' : cliish ? 'tty' : api ? 'curl' : web ? 'browser' : 'shell';
+  const harness = browserTests ? 'browser/CDP (Playwright)'
+    : driver === 'tty' ? 'tmux/PTY'
+    : driver === 'curl' ? 'plain HTTP (curl)'
+    : driver === 'browser' ? 'a browser tool (for example chrome-devtools-axi)'
     : 'a shell (run the launch command and read its output)';
   const observe = web
     ? 'screenshots of the resulting state the outcome is about'
@@ -2253,15 +2254,15 @@ function detectApp(repo: string): Detected {
   const found: { base: string; title: string; reach: string; drive: string; cap: keyof typeof capture; command: boolean }[] = [
     ...routes.map((r) => {
       const [method, path] = r.split(' ');
-      const drive = !web ? `send it with \`curl -sS -i -X ${method} BASE${path}\`, with the body its handler reads (search the source for "${path}")`
+      const drive = driver !== 'browser' ? `send it with \`curl -sS -i -X ${method} BASE${path}\`, with the body its handler reads (search the source for "${path}")`
         : method === 'GET' ? open.replace('BASE', `BASE${path}`)
         : `find the form or button that sends ${r} (search the source for "${path}"), then fill and submit it as a user does`;
-      return { base: slug(r), title: r, reach: `the ${r} route`, drive, cap: web ? 'page' : 'text', command: false } as const;
+      return { base: slug(r), title: r, reach: `the ${r} route`, drive, cap: driver === 'browser' ? 'page' : 'text', command: false } as const;
     }),
     ...commands.map((c) => ({ base: slug(c), title: `\`${c}\` command`, reach: `the CLI run with \`${c}\``, drive: `run \`${cli} ${c} --help\` to learn its arguments, then \`${cli} ${c} <arguments>\` as a user does`, cap: 'text', command: true }) as const),
   ];
   if (!found.length)
-    found.push(web
+    found.push(driver === 'browser'
       ? { base: 'main', title: 'Main page', reach: 'BASE, the first page a user opens', drive: open, cap: 'page', command: false }
       : { base: 'main', title: 'Main journey', reach: 'what README.md says a user opens or runs first', drive: `read README.md and the entry file for what a user opens or runs first, then open it in a browser tool or run it in a shell as a user does; ${RECORD}`, cap: 'any', command: false });
   const features: (Detected['features'][number] & { command: boolean })[] = [];

@@ -1136,7 +1136,8 @@ async function runSteps(dir: string): Promise<void> {
       const what = `journey ${run.journey} spends (${journey.spends}), so it runs only once the user approves spending for this run`;
       run.gate = { findings: [{ id: 'spend-1', severity: 'warning', what, action: 'ask-user' }], cited: [], head: head(run.repo), spend: journey.spends };
       run.status = 'awaiting_approval';
-      return set((step = run.steps.find((s) => s.name === 'drive')!), 'awaiting_approval', { findings: run.gate.findings });
+      set((step = run.steps.find((s) => s.name === 'drive')!), 'awaiting_approval', { findings: run.gate.findings });
+      return;
     }
 
     // One drive, check and judge of the claim at `at`: the user's checkout, or (`fix` names the re-run) a fix worktree.
@@ -1263,7 +1264,7 @@ async function runSteps(dir: string): Promise<void> {
     if (leaks.length) {
       log('check', { result: 'fail', findings: leaks });
       set(step!, 'failed', { exit: FAIL, findings: leaks });
-      return { end: { result: 'fail', reason: `secrets: ${leaks[0].why}` }, asks: [] };
+      return { end: { result: 'fail', reason: `secrets: ${leaks[0].why}` }, asks: [], fixable: [] };
     }
     // The check's own findings end the check step; the judge, when on and the check did not fail, is its own step.
     let checkFindings = 0;

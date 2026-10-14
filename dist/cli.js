@@ -17,6 +17,7 @@ import { attemptProblem, changedSince, commitFix, dirtyTracked, FIX_SCHEMA, inWo
 import { cellEnv, cellName, cellSuffix, hasMatrix, matrixManifest, splitMatrix } from './matrix.js';
 import { design, KINDS } from './design.js';
 import { checkMedia } from './media.js';
+import { scanSecrets } from './secrets.js';
 const PASS = 0, FAIL = 1, USAGE = 2, INCONCLUSIVE = 3, WAITING = 4;
 // The shape of a journey, so a new user or agent can write one without opening the reference.
 // done-done sets DONE_DONE_EVIDENCE_ROOT (the run's own folder) and replaces ${RUN_ID}, so the example works for any evidence root.
@@ -24,6 +25,8 @@ const journeyExample = 'journeys: { smoke: { command: "<drive the real app> > $D
 const JOURNEYS_TEXT = `journeys (.done-done.yaml): the command runs with DONE_DONE_EVIDENCE_ROOT (this run's own new folder in the evidence
   root) and DONE_DONE_RUN_ID set, and \${RUN_ID} in it is replaced; it must write its files into that folder, e.g.
   ${journeyExample}
+  spends (journeys.<name>.spends): what a run of it spends, e.g. "one live generation"; verify parks such a journey before it runs until
+    the user approves spending for that run (respond --action approve)
   timeout (journeys.<name>.timeout): how long a verify run may drive the journey, e.g. 90s or 30m (default 30m); past it the journey is killed and the run is inconclusive
   matrix (.done-done.yaml): with theme, width or form axes the journey runs once per required cell with DONE_DONE_THEME, DONE_DONE_WIDTH, DONE_DONE_FORM and DONE_DONE_CELL (the capture name suffix) set; name each capture with its suffix, so every cell is captured or skipped with a reason`;
 const CHECKS_TEXT = `Checks block (--from): the newest "## Checks" heading, then these four keys, each at the start of a line:
@@ -196,6 +199,7 @@ const COMMANDS = {
         usage: [
             ['done-done respond [--run <run-id>] --action approve|skip --reason "<why>"', 'move a run on past its gate; it ends overridden, never pass'],
             ['done-done respond [--run <run-id>] --action fix', 'end a run waiting at its gate as fail'],
+            ['done-done respond [--run <run-id>] --action approve --reason "<why>"', 'at a spend gate: run the journey that spends; skip or fix ends the run fail, nothing spent'],
         ],
         flags: ['--run <run-id>', '--action <approve|skip|fix>', '--reason "<why>"'],
         more: [RUNS_TEXT],
@@ -1117,6 +1121,14 @@ async function runSteps(dir) {
             throw new Error(`journeys.${run.journey}.timeout must be a duration such as 30m or 90s, not ${timeout}`);
         if (!reused)
             set(step, 'completed');
+        // A journey that spends real money or credits never runs until the user approved spending for this run.
+        if (journey?.spends && !run.spend && !done('drive')) {
+            const what = `journey ${run.journey} spends (${journey.spends}), so it runs only once the user approves spending for this run`;
+            run.gate = { findings: [{ id: 'spend-1', severity: 'warning', what, action: 'ask-user' }], cited: [], head: head(run.repo), spend: journey.spends };
+            run.status = 'awaiting_approval';
+            set((step = run.steps.find((s) => s.name === 'drive')), 'awaiting_approval', { findings: run.gate.findings });
+            return;
+        }
         // One drive, check and judge of the claim at `at`: the user's checkout, or (`fix` names the re-run) a fix worktree.
         // With auto_fix.verify, a product failure (a drive the product stopped, a screen the judge calls wrong) may be fixed.
         const tries = cfg.auto_fix.verify ?? 0;
@@ -1253,6 +1265,13 @@ async function runSteps(dir) {
             }
             begin('check');
             const files = rec.files.map((f) => join(cfg.evidence.root, f.path));
+            // No secret may sit in the evidence or the run's logs: a hit fails the run naming the file, line and pattern, never the value.
+            const leaks = scanSecrets([...files, join(dir, 'logs'), join(dir, 'agents')], cfg.secrets).map((l) => ({ level: 'fail', why: `${shown(run.repo, l.file)}:${l.line}: holds a secret (${l.pattern}); remove it, or allow a known-safe match with secrets.allow in .done-done.yaml` }));
+            if (leaks.length) {
+                log('check', { result: 'fail', findings: leaks });
+                set(step, 'failed', { exit: FAIL, findings: leaks });
+                return { end: { result: 'fail', reason: `secrets: ${leaks[0].why}` }, asks: [], fixable: [] };
+            }
             // The check's own findings end the check step; the judge, when on and the check did not fail, is its own step.
             let checkFindings = 0;
             const judging = (code, findings) => {
@@ -1521,6 +1540,8 @@ function showRun(dir, cfg, command, gone = false) {
         result.findings = run.gate.findings;
     if (run.response)
         result.response = run.response;
+    if (run.spend)
+        result.spend = run.spend;
     if (ev.items.length)
         result.evidence = ev.items;
     if (ev.omitted)
@@ -1545,25 +1566,30 @@ function showRun(dir, cfg, command, gone = false) {
     result.run = shown(run.repo, dir);
     const id = run.run_id;
     result.help =
-        status === 'awaiting_approval' ? [
-            'Read the findings and look at the captures (evidence above), then answer the gate:',
-            `done-done respond --run ${id} --action approve --reason "<why they do show the outcome>"   (ends overridden, never pass)`,
-            `done-done respond --run ${id} --action skip --reason "<why to go on without a judge pass>"   (ends overridden, never pass)`,
-            `done-done respond --run ${id} --action fix   (ends fail; fix the product, or the verify skill's recipe (done-done maintain checks it against the source), commit, then: done-done rerun --run ${id})`,
+        status === 'awaiting_approval' && run.gate?.spend ? [
+            `Ask the user whether to spend ${run.gate.spend} on this run; never decide it for them. Their yes runs the journey:`,
+            `done-done respond --run ${id} --action approve --reason "<who approved the spend>"`,
+            `Their no: done-done respond --run ${id} --action fix   (ends fail, nothing spent)`,
         ]
-            : run.result === 'overridden' ? [`This head is not proven: ${run.response?.by} chose ${run.response?.action} past the judge, and receipt --verify refuses this receipt`, `Capture proof the judge passes: ${again}`]
-                : code === WAITING ? [`The run goes on without this command; read it later: done-done status --run ${run.run_id}`]
-                    : run.result === 'changed' ? [`Review the fix on its own branch (your branch is untouched): git show ${run.fix.branch}`, `Take it: git merge ${run.fix.branch}, or drop it: git branch -D ${run.fix.branch}`]
-                        : run.kind === 'maintain' && status === 'completed' ? (run.result === 'clean' ? [`The verify skill matches the source; read the readers' recipes: done-done logs --step reconcile --run ${run.run_id}`]
-                            : run.result === 'drift' ? [`Fix the findings in ${cfg.skill} (--full lists them all), commit, then run again: ${again}`, `Or let done-done's agent fix them on a branch: set auto_fix: { maintain: 2 } in .done-done.yaml, then run again: ${again}`]
-                                : /^ask-user:/.test(run.reason ?? '') ? ['Ask the user about each ask-user finding: is the product or the skill wrong? Never decide it for them', `Product wrong: fix the product (maintain never edits product code). Skill wrong: fix ${cfg.skill}, commit, then run again: ${again}`]
-                                    : /^fix:/.test(run.reason ?? '') ? [`Read what each fix attempt did: done-done logs --step fix --run ${run.run_id}`, `Fix the findings in ${cfg.skill} by hand, commit, then run again: ${again}`]
-                                        : /^locate: no verify skill/.test(run.reason ?? '') ? ['Create the verify skill: done-done init']
-                                            : /^locate:/.test(run.reason ?? '') ? [`Make ${cfg.skill} a real folder inside the repository (not a link), commit, then run again: ${again}`]
-                                                : [`Read the step logs in ${shown(run.repo, join(dir, 'logs'))}`, `Fix the cause, then run again: ${again}`])
-                            : code === PASS ? [`Verify this receipt (CI or merge): done-done receipt --verify ${rec.commit}`]
-                                : status === 'cancelled' ? [...(run.kind === 'maintain' ? [] : [`Start again from the failed step: done-done rerun --run ${run.run_id}`]), `List past runs: done-done history`]
-                                    : [`Read the step logs in ${shown(run.repo, join(dir, 'logs'))}`, ...(run.kind === 'maintain' ? [] : [`Fix the cause, commit, then run again from the failed step: done-done rerun --run ${run.run_id}`]), `Or start a new run: ${again}`];
+            : status === 'awaiting_approval' ? [
+                'Read the findings and look at the captures (evidence above), then answer the gate:',
+                `done-done respond --run ${id} --action approve --reason "<why they do show the outcome>"   (ends overridden, never pass)`,
+                `done-done respond --run ${id} --action skip --reason "<why to go on without a judge pass>"   (ends overridden, never pass)`,
+                `done-done respond --run ${id} --action fix   (ends fail; fix the product, or the verify skill's recipe (done-done maintain checks it against the source), commit, then: done-done rerun --run ${id})`,
+            ]
+                : run.result === 'overridden' ? [`This head is not proven: ${run.response?.by} chose ${run.response?.action} past the judge, and receipt --verify refuses this receipt`, `Capture proof the judge passes: ${again}`]
+                    : code === WAITING ? [`The run goes on without this command; read it later: done-done status --run ${run.run_id}`]
+                        : run.result === 'changed' ? [`Review the fix on its own branch (your branch is untouched): git show ${run.fix.branch}`, `Take it: git merge ${run.fix.branch}, or drop it: git branch -D ${run.fix.branch}`]
+                            : run.kind === 'maintain' && status === 'completed' ? (run.result === 'clean' ? [`The verify skill matches the source; read the readers' recipes: done-done logs --step reconcile --run ${run.run_id}`]
+                                : run.result === 'drift' ? [`Fix the findings in ${cfg.skill} (--full lists them all), commit, then run again: ${again}`, `Or let done-done's agent fix them on a branch: set auto_fix: { maintain: 2 } in .done-done.yaml, then run again: ${again}`]
+                                    : /^ask-user:/.test(run.reason ?? '') ? ['Ask the user about each ask-user finding: is the product or the skill wrong? Never decide it for them', `Product wrong: fix the product (maintain never edits product code). Skill wrong: fix ${cfg.skill}, commit, then run again: ${again}`]
+                                        : /^fix:/.test(run.reason ?? '') ? [`Read what each fix attempt did: done-done logs --step fix --run ${run.run_id}`, `Fix the findings in ${cfg.skill} by hand, commit, then run again: ${again}`]
+                                            : /^locate: no verify skill/.test(run.reason ?? '') ? ['Create the verify skill: done-done init']
+                                                : /^locate:/.test(run.reason ?? '') ? [`Make ${cfg.skill} a real folder inside the repository (not a link), commit, then run again: ${again}`]
+                                                    : [`Read the step logs in ${shown(run.repo, join(dir, 'logs'))}`, `Fix the cause, then run again: ${again}`])
+                                : code === PASS ? [`Verify this receipt (CI or merge): done-done receipt --verify ${rec.commit}`]
+                                    : status === 'cancelled' ? [...(run.kind === 'maintain' ? [] : [`Start again from the failed step: done-done rerun --run ${run.run_id}`]), `List past runs: done-done history`]
+                                        : [`Read the step logs in ${shown(run.repo, join(dir, 'logs'))}`, ...(run.kind === 'maintain' ? [] : [`Fix the cause, commit, then run again from the failed step: done-done rerun --run ${run.run_id}`]), `Or start a new run: ${again}`];
     emit(result);
     return code;
 }
@@ -1867,7 +1893,7 @@ function answeredBy(repo) {
 // Answer a run waiting at its gate. approve and skip write the receipt as overridden (with who and why) and end the run
 // overridden, never pass; fix ends it fail. The runner has exited, so this command finishes the run; the respond lock
 // lets only one answer (or an abort) close it.
-function cmdRespond(argv) {
+async function cmdRespond(argv) {
     const { values } = parseArgs({ args: argv, options: { run: { type: 'string' }, action: { type: 'string' }, reason: { type: 'string' } } });
     const action = values.action;
     if (action !== 'approve' && action !== 'skip' && action !== 'fix')
@@ -1888,6 +1914,20 @@ function cmdRespond(argv) {
         const by = answeredBy(repo);
         run.response = { action, by, ...(reason && { reason }), at: now() };
         logEvent(dir, { step: 'gate', response: action, by, ...(reason && { reason }) });
+        // The spend gate: approve runs the journey in a new runner; skip or fix ends the run with nothing spent.
+        if (run.gate.spend) {
+            const drive = run.steps.find((s) => s.name === 'drive');
+            if (action !== 'approve') {
+                setStep(dir, run, drive, 'failed');
+                finishRun(dir, run, 'fail', `gate: ${by} chose ${action}: the journey was not run, so nothing was spent`);
+                return showRun(dir, cfg, 'respond');
+            }
+            Object.assign(run, { spend: { by, reason, at: run.response.at }, status: 'pending', gate: undefined, response: undefined, runner: undefined });
+            setStep(dir, run, drive, 'pending');
+            for (const lock of ['runner.lock', 'respond.lock'])
+                rmSync(join(dir, lock));
+            return launch(dir, cfg, 'respond', {});
+        }
         if (action === 'fix') {
             setStep(dir, run, gate, 'failed');
             finishRun(dir, run, 'fail', `gate: ${by} chose fix: ${reason || run.gate.findings[0].what}`);
@@ -2980,7 +3020,7 @@ async function main(argv) {
         if (cmd === 'abort')
             return cmdAbort(rest);
         if (cmd === 'respond')
-            return cmdRespond(rest);
+            return await cmdRespond(rest);
         if (cmd === 'history')
             return cmdHistory(rest);
         if (cmd === '__runner') {

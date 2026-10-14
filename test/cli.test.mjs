@@ -5094,7 +5094,16 @@ test('an inputs path that leaves the worktree or names the repo root is refused 
   }
 });
 
-test('a watched input that cannot be read fails the run naming it, never passes', { skip: process.getuid?.() === 0 }, () => {
+test('a watched symlink that points outside the repo fails the run naming it', () => {
+  const t = guarded();
+  writeFileSync(join(dirname(t.repo), 'outside.json'), '{}\n');
+  symlinkSync(join(dirname(t.repo), 'outside.json'), join(t.repo, 'data', 'escape.json'));
+  const r = t.dd('verify', 'shots', '--outcome', 'home renders', '--foreground');
+  assert.notEqual(r.code, 0, r.out);
+  assert.match(r.out, /input guard: data\/escape\.json links outside the repo/);
+});
+
+test('a watched input that cannot be read fails the run naming it, never passes',{ skip: process.getuid?.() === 0 }, () => {
   const t = guarded();
   chmodSync(join(t.repo, 'data', 'seed.json'), 0o000);
   const r = t.dd('verify', 'shots', '--outcome', 'home renders', '--foreground');

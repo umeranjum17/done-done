@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import { createHash, randomBytes } from 'node:crypto';
-import { accessSync, appendFileSync, closeSync, constants, existsSync, lstatSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { accessSync, appendFileSync, closeSync, constants, existsSync, lstatSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir, userInfo } from 'node:os';
 import { dirname, isAbsolute, join, matchesGlob, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -1016,6 +1016,8 @@ function guardSnapshot(at, patterns) {
         const st = statSync(full, { throwIfNoEntry: false });
         if (!st?.isFile())
             return { path, sha256: null };
+        if (lstatSync(full).isSymbolicLink() && !realpathSync(full).startsWith(`${realpathSync(at)}${sep}`))
+            throw new Error(`input guard: ${path} links outside the repo`);
         try {
             return { path, sha256: sha256(readFileSync(full)) };
         }

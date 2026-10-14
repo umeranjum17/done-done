@@ -128,7 +128,7 @@ function flatten(doc: unknown, file: string): Map<string, unknown> {
 
 // An input pattern in its canonical repo-relative form: no leading ./, no trailing /, and '' for the repo root.
 export function inputPattern(p: string): string {
-  return p.replace(/^(\.\/)+/, '').replace(/\/+$/, '').replace(/^\.$/, '');
+  return p.split('/').filter((s) => s !== '' && s !== '.').join('/');
 }
 
 // A binary: a bare name looked up on PATH, or an absolute path (~ is the home folder).

@@ -17,6 +17,10 @@ function errorLine(text) {
     const line = (top.findLast((l) => ERROR_WORD.test(l)) ?? top.at(-1) ?? lines.at(-1) ?? '').trim();
     return line.length > 200 ? `${line.slice(0, 199)}…` : line;
 }
+// opencode prints this on stderr and auto-rejects the ask when a headless run reaches a permission a non-interactive
+// call can never answer. The drive then ends with no answer, so name the permission and paths it refused instead of
+// the bare "no JSON object in the answer" its empty output would give.
+const PERMISSION_REJECT = /permission requested:\s*(\S+)\s*\(([^)]*)\);\s*auto-rejecting/;
 class ProviderError extends Error {
     detail;
     constructor(text, prefix = '', suffix = '') {
@@ -126,9 +130,15 @@ const ADAPTERS = {
             }
             return extractJsonObject(text, c.schema.required);
         },
-        // An edit step keeps the user's own permissions, where a folder outside cwd asks and so is refused in `run`; only the
-        // run's own folders are allowed.
-        env: (c) => ({ OPENCODE_PERMISSION: JSON.stringify(c.tools === 'edit' ? { external_directory: Object.fromEntries((c.dirs ?? []).flatMap((d) => [[d, 'allow'], [`${d}/*`, 'allow']])) } : { '*': 'deny' }) }),
+        // A headless `run` cannot answer a permission ask, so any ask auto-rejects and the drive ends with no answer.
+        // Driving the app runs commands that read or execute paths outside the repo (a browser, a system binary), so the
+        // author drive allows every external directory. Tool-less calls keep the deny-all scope.
+        env: (c) => ({ OPENCODE_PERMISSION: JSON.stringify(c.tools === 'edit' ? { external_directory: { '*': 'allow' } } : { '*': 'deny' }) }),
+        // A permission the run refused: the drive could not continue, so this is the reason, not a missing answer.
+        reject: (stderr) => {
+            const m = PERMISSION_REJECT.exec(stripVTControlCharacters(stderr));
+            return m ? `it asked for permission to ${m[1]} (${m[2]}), which a headless run cannot answer and auto-rejects` : '';
+        },
     },
     // pi -p reads the prompt on stdin (probed 12 Oct: with no positional message, stdin becomes the user
     // message); --mode json streams JSONL events whose assistant message_end holds the answer text,
@@ -391,6 +401,10 @@ export async function askAgent(c) {
             res = await start(bin, argv(dir), c, cwd, adapter.file ? '' : promptText, { ...process.env, ...c.env, ...adapter.env?.(c) });
             if (res.error)
                 throw res.error;
+            // A permission the run refused explains a call with no answer; name it rather than the exit code text.
+            const refused = adapter.reject?.(String(res.stderr ?? '')) ?? '';
+            if (res.status !== 0 && refused)
+                throw new ProviderError(refused, `${c.agent} exited ${res.status}: `);
             if (res.status !== 0) {
                 // An agent that exits non-zero may still say why in its own output (claude: a usage limit, a bad model).
                 let text = String(res.stderr || res.stdout).trim().slice(-500);
@@ -418,6 +432,9 @@ export async function askAgent(c) {
             catch (e) {
                 if (e instanceof ProviderError)
                     throw e;
+                // A refused permission is why there is no usable answer, not a bad answer: name it instead of "no JSON object".
+                if (refused)
+                    throw new ProviderError(refused, `${c.agent} did not finish: `);
                 // Only a tool-less call is asked again: an edit or read step may already have changed the repo or read it.
                 lastError = e.message;
                 if (c.tools !== 'none' || attempts >= (c.attempts ?? ASK_ATTEMPTS))

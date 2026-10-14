@@ -3827,6 +3827,45 @@ test('opencode read calls get a deny-all permission and no read allowance', asyn
   assert.deepEqual(JSON.parse(s.calls()[0].permission), { '*': 'deny' });
 });
 
+test('the opencode author drive allows every external directory, while a tool-less call stays deny-all', async () => {
+  const { repo, env } = setup();
+  const s = stubAgents(env);
+  const { askAgent } = await import(pathToFileURL(join(dirname(fileURLToPath(import.meta.url)), '..', 'dist', 'agents.js')).href);
+  const call = { agent: 'opencode', model: 'm', path: join(s.env.PATH, 'opencode'), prompt: 'p', schema: { type: 'object', properties: { ok: { type: 'boolean' } }, required: ['ok'] }, cwd: repo, timeoutMs: 60_000, record: join(s.env.PATH, 'rec.json') };
+  const old = process.env.PATH;
+  process.env.PATH = s.env.PATH;
+  try {
+    await askAgent({ ...call, tools: 'edit', dirs: [join(env.DONE_DONE_HOME, 'evidence'), join(env.DONE_DONE_HOME, 'tmp')] });
+    await askAgent({ ...call, tools: 'none' });
+  } finally {
+    process.env.PATH = old;
+  }
+  const [drive, judge] = s.calls();
+  // A headless run cannot answer a permission ask, so the drive allows every external path the app it drives may touch.
+  assert.deepEqual(JSON.parse(drive.permission), { external_directory: { '*': 'allow' } }, 'the author drive allows external directories');
+  assert.deepEqual(JSON.parse(judge.permission), { '*': 'deny' }, 'a tool-less call keeps the deny-all scope');
+});
+
+test('an opencode auto-reject names the refused permission instead of "no JSON object"', async () => {
+  const { repo, env } = setup();
+  const s = pathEnv(env, []);
+  writeFileSync(join(s.PATH, 'opencode'), `#!${process.execPath}
+process.stderr.write('! permission requested: external_directory (/usr/bin/*); auto-rejecting\\n');
+`, { mode: 0o755 });
+  const { askAgent } = await import(pathToFileURL(join(dirname(fileURLToPath(import.meta.url)), '..', 'dist', 'agents.js')).href);
+  const old = process.env.PATH;
+  process.env.PATH = s.PATH;
+  let out;
+  try {
+    out = await askAgent({ agent: 'opencode', model: 'm', path: join(s.PATH, 'opencode'), prompt: 'p', schema: { type: 'object', properties: { ok: { type: 'boolean' } }, required: ['ok'] }, cwd: repo, timeoutMs: 60_000, tools: 'edit', record: join(s.PATH, 'rec.json') });
+  } finally {
+    process.env.PATH = old;
+  }
+  assert.equal(out.ok, false);
+  assert.match(out.error, /permission to external_directory \(\/usr\/bin\/\*\)/, out.error);
+  assert.doesNotMatch(out.error, /no JSON object in the answer/, 'the refused permission is the reason, not a bad answer');
+});
+
 test('braces in the prose before the JSON in the final answer do not break it', () => {
   const { repo, env } = setup();
   const s = stubPiGemini(env);

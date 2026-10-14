@@ -2284,7 +2284,7 @@ process.stdout.write(JSON.stringify({ type: 'result', is_error: false, structure
   assert.match(toon(none).error, /needs a journey or a verify skill/);
 });
 
-test('signoff refuses a value past the contract limit and writes no file, and refuses a run with no message to send', () => {
+test('signoff refuses a value past the contract limit, a capture outside its run folder and a run with no message to send, and writes no file', () => {
   const t = setup();
   const long = t.dd('verify', 'shots', '--outcome', 'x'.repeat(501), '--foreground');
   assert.equal(long.code, 0, long.out);
@@ -2292,6 +2292,15 @@ test('signoff refuses a value past the contract limit and writes no file, and re
   assert.equal(r.code, 2, r.out);
   assert.match(toon(r).error, /cannot make a valid sign-off message, so no file was written: about \(the outcome\) is 501 characters, and the contract takes 1-500$/);
   assert.equal(existsSync(join(t.repo, '.proof', toon(long).run_id, 'signoff-evidence.json')), false);
+  // A capture that now points outside the run folder would send a media path that escapes it.
+  const ok = toon(t.dd('verify', 'shots', '--outcome', 'home and settings render', '--foreground'));
+  const shot = join(t.repo, '.proof', ok.run_id, 'home.png');
+  writeFileSync(join(t.repo, 'outside.png'), readFileSync(shot));
+  rmSync(shot);
+  symlinkSync(join(t.repo, 'outside.png'), shot);
+  const out = t.dd('signoff', '--run', ok.run_id);
+  assert.equal(out.code, 2, out.out);
+  assert.match(toon(out).error, /home\.png left the run folder or changed after the run/);
   const m = t.dd('signoff', '--run', 'nope');
   assert.equal(m.code, 2, m.out);
 });

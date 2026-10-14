@@ -110,7 +110,7 @@ done-done run review
 - hashes every file in the run's folder. Every checkout of a repo shares the evidence root, so a run records only its own folder and never another run's files;
 - writes a run record to `<root>/.done-done/runs/<run-id>.json`.
 
-A non-zero command exit, or a run that wrote nothing, fails. A run that wrote nothing names its folder and the two names the command gets it under: `DONE_DONE_EVIDENCE_ROOT` and `DONE_DONE_RUN_ID` (or `${RUN_ID}` in the command).
+A non-zero command exit, or a run that wrote nothing, fails. A run that wrote nothing names its folder and the two names the command gets it under: `DONE_DONE_EVIDENCE_ROOT` and `DONE_DONE_RUN_ID` (or `${RUN_ID}` in the command). `run <journey>` refuses a journey with `spends` until the user approves it, see [Journeys that spend](#journeys-that-spend).
 
 For a proof you drive by hand or through an agent:
 

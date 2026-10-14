@@ -6,13 +6,13 @@ import { join } from 'node:path';
 export type Secrets = { patterns: Record<string, string>; allow: string[] };
 export type Leak = { file: string; line: number; pattern: string };
 
-// Common secret shapes. key-value needs a long value with letters and digits, so a plain word is not a secret.
+// Common secret shapes. key-value flags a key, secret, token or password value of 8 characters or more with no spaces or quotes; an auth value needs 24 characters with letters and digits.
 const SHAPES: Record<string, RegExp> = {
   'private-key': /-----BEGIN [A-Z ]*PRIVATE KEY-----/,
   'github-token': /\b(?:gh[pousr]_[A-Za-z0-9]{36,}|github_pat_\w{22,})/,
   'api-key': /\b(?:sk-[\w-]{20,}|AKIA[0-9A-Z]{16}|AIza[\w-]{35}|xox[abprs]-[\w-]{10,}|glpat-[\w-]{20,}|npm_[A-Za-z0-9]{36})/,
   bearer: /\bbearer\s+[\w.~+/-]{20,}=*/i,
-  'key-value': /(?:key|token|secret|passw(?:or)?d|auth)\w*["']?\s*[:=]\s*["']?(?=[\w+/.-]*\d)(?=[\w+/.-]*[A-Za-z])[\w+/.-]{24,}/i,
+  'key-value': /(?:(?:key|secret|token|passw(?:or)?d)\w*["']?\s*[:=]\s*["']?[^\s"']{8,}|auth\w*["']?\s*[:=]\s*["']?(?=[\w+/.-]*\d)(?=[\w+/.-]*[A-Za-z])[\w+/.-]{24,})/i,
 };
 
 // Every file under `paths` (files or folders), minus binaries such as images: a NUL byte in the first 8 KB marks one.

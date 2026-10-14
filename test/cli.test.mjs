@@ -1065,6 +1065,13 @@ function shapeRepo(kind, name) {
   return { dir, repo, env, dd };
 }
 
+// An API repo (express, no CLI signal): its routes drive over curl, so route features are written.
+function apiShape(name) {
+  const s = shapeRepo('bare', name);
+  writeFileSync(join(s.repo, 'package.json'), JSON.stringify({ name, dependencies: { express: '^4.0.0' } }));
+  return s;
+}
+
 const featureFiles = (skillDir) => readdirSync(join(skillDir, 'features')).sort();
 
 test('init scaffolds a verify skill with real launch and features for a web app', () => {
@@ -1142,6 +1149,29 @@ test('init names one driver for a react and express app: the harness, the route 
   assert.match(body, /^3\. Capture: save the output and exit status to \$DONE_DONE_EVIDENCE_ROOT\/\S+\.txt/m, 'the capture is text');
 });
 
+test('init drives a CLI with routes over its commands only, never with curl', () => {
+  const { repo, dd } = shapeRepo('cli', 'notes');
+  const pkg = JSON.parse(readFileSync(join(repo, 'package.json'), 'utf8'));
+  writeFileSync(join(repo, 'package.json'), JSON.stringify({ ...pkg, dependencies: { ...pkg.dependencies, express: '^4.0.0' } }));
+  writeFileSync(join(repo, 'server.js'), "app.get('/api/items', list);\n");
+  assert.equal(dd('init').code, 2);
+  const dir = join(repo, '.agents', 'skills', 'verify-notes');
+  assert.deepEqual(featureFiles(dir), ['README.md', 'add.md', 'list.md'], 'a route is not a feature under a PTY harness');
+  assert.match(readFileSync(join(dir, 'SKILL.md'), 'utf8'), /^- GET \/api\/items: reference only/m, 'the route is listed as reference');
+  for (const f of ['add', 'list']) assert.doesNotMatch(readFileSync(join(dir, 'features', `${f}.md`), 'utf8'), /curl/, `${f} names no curl driver`);
+});
+
+test('init drives a repo with no detected surface through a shell, with a text capture', () => {
+  const { repo, dd } = shapeRepo('bare', 'shop');
+  assert.equal(dd('init').code, 2);
+  const dir = join(repo, '.agents', 'skills', 'verify-shop');
+  assert.deepEqual(featureFiles(dir), ['README.md', 'main.md']);
+  const body = readFileSync(join(dir, 'features', 'main.md'), 'utf8');
+  assert.match(body, /^## Driving it with a shell \(run the launch command and read its output\)$/m, 'the feature names the shell harness');
+  assert.match(body, /^2\. Read README\.md and the entry file.*run it in a shell/m, 'the drive runs in the shell');
+  assert.match(body, /^3\. Capture: save the output and exit status to \$DONE_DONE_EVIDENCE_ROOT\/main\.txt,/m, 'the capture is text');
+});
+
 test('init never overwrites an existing verify skill', () => {
   const { repo, dd } = shapeRepo('cli', 'notes');
   const skill = join(repo, '.agents', 'skills', 'verify-notes', 'SKILL.md');
@@ -1154,19 +1184,19 @@ test('init never overwrites an existing verify skill', () => {
 });
 
 test('init maps the app, not its dependencies, and lists each feature slug once', () => {
-  const { repo, dd } = shapeRepo('cli', 'notes');
+  const { repo, dd } = apiShape('notes');
   mkdirSync(join(repo, 'node_modules', 'lib'), { recursive: true });
   writeFileSync(join(repo, 'node_modules', 'lib', 'index.js'), "router.get('/vendored/route');\nprogram.command('vendored');\n");
   writeFileSync(join(repo, 'routes.js'), "app.get('/a/b');\napp.get('/a-b');\n");
   const r = dd('init');
   assert.equal(r.code, 2, r.out);
   const dir = join(repo, '.agents', 'skills', 'verify-notes');
-  assert.deepEqual(featureFiles(dir), ['README.md', 'add.md', 'get-a-b-2.md', 'get-a-b.md', 'list.md'], 'node_modules is skipped and each distinct route keeps its own file');
+  assert.deepEqual(featureFiles(dir), ['README.md', 'get-a-b-2.md', 'get-a-b.md'], 'node_modules is skipped and each distinct route keeps its own file');
   assert.match(readFileSync(join(dir, 'features', 'get-a-b-2.md'), 'utf8'), /^# GET \/a-b$/m);
 });
 
 test('init keeps distinct routes whose slugs collide after truncation', () => {
-  const { repo, dd } = shapeRepo('cli', 'notes');
+  const { repo, dd } = apiShape('notes');
   writeFileSync(join(repo, 'routes.js'), "app.get('/api/organizations/:id/members/invitations/pending');\napp.get('/api/organizations/:id/members/invitations/expired');\n");
   const r = dd('init');
   assert.equal(r.code, 2, r.out);
@@ -1178,7 +1208,7 @@ test('init keeps distinct routes whose slugs collide after truncation', () => {
 });
 
 test('init maps app.del as DELETE and does not turn a middleware mount into an endpoint', () => {
-  const { repo, dd } = shapeRepo('cli', 'notes');
+  const { repo, dd } = apiShape('notes');
   writeFileSync(join(repo, 'routes.js'), "app.use('/static');\napp.del('/items/1');\n");
   const r = dd('init');
   assert.equal(r.code, 2, r.out);
@@ -1199,16 +1229,16 @@ test('init does not read a README that is a symlink out of the repo', () => {
 
 test('init keeps a command in the feature map and says how many features it left out', () => {
   const { repo, dd } = shapeRepo('cli', 'notes');
-  writeFileSync(join(repo, 'routes.js'), ['1', '2', '3', '4', '5', '6'].map((n) => `app.get('/r${n}');`).join('\n') + '\n');
+  writeFileSync(join(repo, 'commands.js'), ['1', '2', '3', '4', '5', '6'].map((n) => `program.command('c${n}');`).join('\n') + '\n');
   const r = dd('init');
   assert.equal(r.code, 2, r.out);
   const dir = join(repo, '.agents', 'skills', 'verify-notes');
-  assert.deepEqual(featureFiles(dir), ['README.md', 'add.md', 'get-r1.md', 'get-r2.md', 'get-r3.md', 'get-r4.md']);
-  assert.match(readFileSync(join(dir, 'features', 'README.md'), 'utf8'), /3 more found and not listed/, 'six routes and two commands show five, and say three were left out');
+  assert.equal(featureFiles(dir).length, 6, 'README plus five features');
+  assert.match(readFileSync(join(dir, 'features', 'README.md'), 'utf8'), /3 more found and not listed/, 'eight commands show five, and say three were left out');
 });
 
 test('init reads server routes only, not client calls or component files', () => {
-  const { repo, dd } = shapeRepo('cli', 'notes');
+  const { repo, dd } = apiShape('notes');
   mkdirSync(join(repo, 'src', 'components'), { recursive: true });
   writeFileSync(join(repo, 'src', 'components', 'Cart.js'), "app.get('/from-component');\n");
   writeFileSync(join(repo, 'src', 'Page.jsx'), "app.get('/from-jsx');\n");
@@ -1216,7 +1246,7 @@ test('init reads server routes only, not client calls or component files', () =>
   writeFileSync(join(repo, 'server.js'), "app.get('/server');\n");
   const r = dd('init');
   assert.equal(r.code, 2, r.out);
-  assert.deepEqual(featureFiles(join(repo, '.agents', 'skills', 'verify-notes')), ['README.md', 'add.md', 'get-server.md', 'list.md']);
+  assert.deepEqual(featureFiles(join(repo, '.agents', 'skills', 'verify-notes')), ['README.md', 'get-server.md']);
 });
 
 test('init takes the readiness port only from the dev script', () => {

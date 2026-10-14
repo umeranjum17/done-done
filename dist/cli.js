@@ -1133,7 +1133,8 @@ async function runSteps(dir) {
             set(step, 'completed');
         // A journey that spends real money or credits never runs until the user approved spending for this run.
         if (journey?.spends && !run.spend && !done('drive')) {
-            const what = `journey ${run.journey} spends (${journey.spends}), so it runs only once the user approves spending for this run`;
+            const cells = hasMatrix(cfg.matrix) ? splitMatrix(cfg.matrix).required.length : 0;
+            const what = `journey ${run.journey} spends (${journey.spends}), so it runs only once the user approves spending for this run` + (cells ? `; the approval covers every matrix cell, so it runs ${cells} times, once per cell` : '');
             run.gate = { findings: [{ id: 'spend-1', severity: 'warning', what, action: 'ask-user' }], cited: [], head: head(run.repo), spend: journey.spends };
             run.status = 'awaiting_approval';
             set((step = run.steps.find((s) => s.name === 'drive')), 'awaiting_approval', { findings: run.gate.findings });

@@ -1689,6 +1689,13 @@ test('a journey that spends parks before it runs until the user approves; respon
   assert.match(plain.out, /done-done verify paid --outcome/, plain.out);
 });
 
+test('a spends journey with a matrix parks naming every cell its one approval covers', () => {
+  const t = matrixed(MATRIXED.replace('    command: node make-cells.mjs\n', '    command: node make-cells.mjs\n    spends: one live generation\n'), 'true', () => '');
+  const parked = toon(t.dd('verify', 'cells', '--outcome', 'every cell renders'));
+  assert.equal(parked.status, 'awaiting_approval', 'a spending matrix journey parks');
+  assert.match(parked.findings[0].what, /the approval covers every matrix cell, so it runs 4 times, once per cell/);
+});
+
 test('verify --foreground fails at a broken journey and skips the rest; usage errors name the next step', () => {
   const { dd } = slowRepo();
   assert.equal(toon(dd('status')).help[0], 'Start one: done-done verify <journey> --outcome "<what a user can now do>"');

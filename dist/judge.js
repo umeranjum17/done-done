@@ -22,6 +22,17 @@ const QUESTION = {
     personReason: true,
     images: ['capture'],
 };
+const PAIR_OPTIONS = {
+    correct: 'The after screenshot shows the outcome as a change from the before screenshot: before lacks it, and after shows the screen and state the outcome describes.',
+    wrong: 'The after screenshot does not show the outcome as a change: it looks the same as before, shows a different screen, an error, a crash, a dialog or overlay hiding the content, or a state that contradicts the outcome.',
+    unclear: OPTIONS.unclear,
+};
+const PAIR = {
+    ...QUESTION,
+    instructions: 'The image before is a screen before a change (the base ref); the image capture is the same screen after it, cited as proof that the outcome in the state was achieved. Judge only what is visible in the two.',
+    options: PAIR_OPTIONS,
+    images: ['before', 'capture'],
+};
 // The answer the answerer asks its agent for: the kit's reply shape for each choice question.
 const answerSchema = (questions) => ({
     type: 'object',
@@ -216,34 +227,38 @@ export async function judge(cfg, choose, outcome, captures, records) {
         }
         choice ??= choose();
         const { route, model } = choice;
-        const key = createHash('sha256').update(JSON.stringify([VERSION, c.sha256, outcome, route, model])).digest('hex');
+        const pair = c.before && judgeable(c.before) ? c.before : undefined;
+        const row = { path: c.name, sha256: c.sha256, ...(pair && { before: pair.name }) };
+        const key = createHash('sha256').update(JSON.stringify([VERSION, c.sha256, outcome, route, model, ...(pair ? [pair.sha256] : [])])).digest('hex');
         const hit = readCache(dir, key);
         if (['pass', 'fail', 'unsure'].includes(hit?.verdict) && typeof hit.reason === 'string') {
-            judged.push({ path: c.name, sha256: c.sha256, verdict: hit.verdict, reason: hit.reason, cached: true });
+            judged.push({ ...row, verdict: hit.verdict, reason: hit.reason, cached: true });
             continue;
         }
         const image = prepare(c);
-        if (typeof image === 'string') {
-            judged.push({ path: c.name, sha256: c.sha256, verdict: 'unsure', reason: image, cached: false });
+        const before = pair ? prepare(pair) : undefined;
+        if (typeof image === 'string' || typeof before === 'string') {
+            judged.push({ ...row, verdict: 'unsure', reason: typeof image === 'string' ? image : `its base capture ${pair.name}: ${before}`, cached: false });
             continue;
         }
         if (calls++ >= MAX_CALLS) {
-            judged.push({ path: c.name, sha256: c.sha256, verdict: 'unsure', reason: `not judged: one check sends at most ${MAX_CALLS} captures to the model, so cite fewer`, cached: false });
+            judged.push({ ...row, verdict: 'unsure', reason: `not judged: one check sends at most ${MAX_CALLS} captures to the model, so cite fewer`, cached: false });
             continue;
         }
         call = join(records, `judge-${stamp}-${calls}`);
         be ??= await backend(cfg, choice, (request) => `${call}-${request}.agent.json`);
-        const answers = await askJudge(cfg, be, choice, { outcome }, { relevance: QUESTION }, { capture: image });
+        // A pair is one request holding both images: does the after screen show the outcome as a change from before?
+        const answers = await askJudge(cfg, be, choice, { outcome }, { relevance: before ? PAIR : QUESTION }, before ? { before, capture: image } : { capture: image });
         if (typeof answers === 'string') {
-            judged.push({ path: c.name, sha256: c.sha256, verdict: 'unsure', reason: answers, cached: false });
+            judged.push({ ...row, verdict: 'unsure', reason: answers, cached: false });
             continue;
         }
         const a = answers.relevance;
-        const reason = a.personReason || a.rationale || OPTIONS[String(a.answer)] || '';
-        const row = a.abstained ? { path: c.name, sha256: c.sha256, verdict: 'unsure', reason: `not confident enough (${a.reason})`, cached: false }
-            : { path: c.name, sha256: c.sha256, verdict: a.answer === 'correct' ? 'pass' : a.answer === 'wrong' ? 'fail' : 'unsure', reason, cached: false };
-        writeCache(dir, key, { verdict: row.verdict, reason: row.reason, route, model });
-        judged.push(row);
+        const reason = a.personReason || a.rationale || (before ? PAIR_OPTIONS : OPTIONS)[String(a.answer)] || '';
+        const verdict = a.abstained ? { ...row, verdict: 'unsure', reason: `not confident enough (${a.reason})`, cached: false }
+            : { ...row, verdict: a.answer === 'correct' ? 'pass' : a.answer === 'wrong' ? 'fail' : 'unsure', reason, cached: false };
+        writeCache(dir, key, { verdict: verdict.verdict, reason: verdict.reason, route, model });
+        judged.push(verdict);
     }
     return { judged, notJudged, choice };
 }

@@ -1582,6 +1582,107 @@ test('verify waits until the run ends by default', () => {
   assert.equal(toon(r).result, 'pass');
 });
 
+test('a verify run fails when its log or text evidence holds a secret, naming where but never the value', () => {
+  const t = setup(JUDGED.replace('journeys:', 'judge:\n  enabled: false\nsecrets:\n  patterns:\n    house-key: "HOUSE-\\\\d{4}"\n  allow: ["F4KE"]\njourneys:'));
+  const leak = join(t.dir, 'leak.txt');
+  appendFileSync(join(t.repo, '.done-done.yaml'), '  logged:\n    command: node make-shots.mjs ${RUN_ID} && cat ../leak.txt\n  saved:\n    command: node make-shots.mjs ${RUN_ID} && cp ../leak.txt "$DONE_DONE_EVIDENCE_ROOT/session.log"\n');
+  t.sh('add', '-A'); t.sh('commit', '-qm', 'journeys');
+  // Fake values, split so this file holds no secret shape itself.
+  const fakes = [
+    ['private-key', `-----BEGIN RSA ${'PRIVATE'} KEY-----`],
+    ['github-token', `gh${'p_'}${'fake0'.repeat(8)}`],
+    ['api-key', `s${'k-'}${'fake0'.repeat(5)}`],
+    ['bearer', `Authorization: Bear${'er'} ${'fake0'.repeat(5)}`],
+    ['key-value', `API_TOKEN=${'f4ke0'.repeat(6)}`],
+    ['key-value', `DB_${'PASSWORD'}=Tr0ub4dor&3xtra`],
+    ['house-key', 'door HOUSE-1234'],
+  ];
+  for (const [pattern, value] of fakes) {
+    writeFileSync(leak, `starting\n${value}\n`);
+    const r = t.dd('verify', 'logged', '--outcome', 'home and settings render');
+    assert.match(toon(r).reason, new RegExp(`^secrets: .*/drive\\.log:2: holds a secret \\(${pattern}\\)`));
+    const shownLog = t.dd('logs', '--step', 'check', '--run', toon(r).run_id).out;
+    assert.ok(![r.out, shownLog].some((o) => o.includes(value.slice(-12))), `the ${pattern} value is never printed`);
+  }
+  writeFileSync(leak, `token=${'gh'}p_${'F4KE0'.repeat(8)}\n`);
+  const evid = t.dd('verify', 'saved', '--outcome', 'home and settings render');
+  assert.equal(evid.code, 0, `an allowed known-safe match passes: ${evid.out}`);
+  writeFileSync(leak, `session ${'sk'}-${'fake0'.repeat(5)}\n`);
+  assert.match(toon(t.dd('verify', 'saved', '--outcome', 'home and settings render')).reason, /^secrets: \.proof\/.*\/session\.log:1: holds a secret \(api-key\)/);
+  writeFileSync(leak, 'saved 3 notes\n');
+  assert.equal(t.dd('verify', 'logged', '--outcome', 'home and settings render').code, 0, 'clean evidence passes');
+  writeFileSync(join(t.repo, '.done-done.yaml'), 'app: notes\nsecrets:\n  allow: ["("]\n');
+  assert.match(t.dd('status').out, /secrets\.allow must be a list of valid regexes/);
+});
+
+test('a failed verify drive whose output holds a secret names where and never prints the value', () => {
+  const t = setup(JUDGED.replace('journeys:', 'judge:\n  enabled: false\njourneys:'));
+  const token = `API_${'TOKEN'}=${'f4ke0'.repeat(6)}`;
+  writeFileSync(join(t.dir, 'leak.txt'), `starting\n${token}\n`);
+  appendFileSync(join(t.repo, '.done-done.yaml'), '  failer:\n    command: cat ../leak.txt; exit 1\n');
+  t.sh('add', '-A'); t.sh('commit', '-qm', 'failing journey');
+  const r = t.dd('verify', 'failer', '--outcome', 'home and settings render');
+  assert.match(toon(r).reason, /^drive: secrets: .*\/drive\.log:2: holds a secret \(key-value\)/);
+  assert.equal(r.out.includes(token.slice(-12)), false, 'the secret value is never printed');
+});
+
+test('auto_fix.verify never re-runs a spends journey: one approval buys one spend, and the reason says so', () => {
+  const t = setup(JUDGED.replace('journeys:', 'judge:\n  enabled: false\nauto_fix:\n  verify: 2\njourneys:'));
+  appendFileSync(join(t.repo, '.done-done.yaml'), '  paid:\n    command: echo spent >> ../spent.txt && node shot.mjs\n    spends: one live generation\n');
+  writeFileSync(join(t.repo, 'shot.mjs'), `import { copyFileSync, mkdirSync, readFileSync } from 'node:fs';\nif (readFileSync('src/app.js', 'utf8').includes('BUG')) process.exit(1);\nmkdirSync(process.env.DONE_DONE_EVIDENCE_ROOT, { recursive: true });\ncopyFileSync(${JSON.stringify(join(t.dir, 'screen.png'))}, process.env.DONE_DONE_EVIDENCE_ROOT + '/home.png');\n`);
+  writeFileSync(join(t.repo, 'src', 'app.js'), 'export const title = "BUG";\n');
+  t.sh('add', '-A'); t.sh('commit', '-qm', 'a spending journey and a broken title');
+  const e = pathEnv(t.env, []);
+  writeFileSync(join(e.PATH, 'opencode'), `#!${process.execPath}
+const { writeFileSync } = require('node:fs');
+writeFileSync('src/app.js', 'export const title = "Notes";\\n');
+console.log(JSON.stringify({ type: 'text', part: { type: 'text', text: JSON.stringify({ summary: 'fixed the title', blocker: '' }) } }));
+`, { mode: 0o755 });
+  mkdirSync(t.env.DONE_DONE_HOME, { recursive: true });
+  writeFileSync(join(t.env.DONE_DONE_HOME, 'config.yaml'), 'agent: opencode\nagent_config:\n  opencode: { model: opencode-go/author }\n');
+  const spent = join(t.dir, 'spent.txt');
+  const spends = () => (existsSync(spent) ? readFileSync(spent, 'utf8').split('\n').filter(Boolean).length : 0);
+  const parked = toon(t.dd('verify', 'paid', '--outcome', 'home and settings render'));
+  assert.equal(parked.status, 'awaiting_approval', JSON.stringify(parked));
+  const r = t.dd('respond', '--run', parked.run_id, '--action', 'approve', '--reason', 'Umer approved one generation');
+  assert.equal(r.code, 1, r.out);
+  assert.equal(spends(), 1, 'one approval buys one spend');
+  assert.match(toon(r).reason, /auto_fix\.verify does not re-run a spends journey/);
+});
+
+test('a journey that spends parks before it runs until the user approves; respond approve runs it', () => {
+  const t = setup();
+  const spent = join(t.dir, 'spent.txt');
+  appendFileSync(join(t.repo, '.done-done.yaml'), '  paid:\n    command: node make-shots.mjs ${RUN_ID} && echo spent >> ../spent.txt\n    spends: one live generation\n');
+  t.sh('add', '-A'); t.sh('commit', '-qm', 'paid journey');
+  const spends = () => (existsSync(spent) ? readFileSync(spent, 'utf8').split('\n').filter(Boolean).length : 0);
+  const parked = toon(t.dd('verify', 'paid', '--outcome', 'home and settings render'));
+  assert.deepEqual([parked.status, parked.step, spends()], ['awaiting_approval', 'drive', 0], 'nothing runs before approval');
+  assert.match(parked.findings[0].what, /journey paid spends \(one live generation\)/);
+  assert.ok(parked.help.includes(`done-done respond --run ${parked.run_id} --action approve --reason "<who approved the spend>"`), parked.help);
+  assert.equal(t.dd('verify', 'paid', '--outcome', 'x').code, 2, 'a parked spend blocks a new run around it');
+  const ok = t.dd('respond', '--run', parked.run_id, '--action', 'approve', '--reason', 'Umer approved one generation');
+  assert.equal(ok.code, 0, ok.out);
+  assert.deepEqual([toon(ok).result, toon(ok).spend.reason, spends()], ['pass', 'Umer approved one generation', 1]);
+  const no = toon(t.dd('verify', 'paid', '--outcome', 'home and settings render'));
+  assert.equal(no.status, 'awaiting_approval', 'every new run asks again');
+  assert.equal(t.dd('respond', '--run', no.run_id, '--action', 'fix').code, 2, 'a spend gate takes approve or skip');
+  const skip = t.dd('respond', '--run', no.run_id, '--action', 'skip', '--reason', 'Umer said no');
+  assert.match(toon(skip).reason, /chose skip: the journey was not run, so nothing was spent/);
+  assert.equal(spends(), 1);
+  const plain = t.dd('run', 'paid');
+  const withCommand = t.dd('run', 'paid', '--', 'sh', '-c', 'echo spent >> ../spent.txt');
+  assert.deepEqual([plain.code, withCommand.code, spends()], [2, 2, 1], 'run refuses a spends journey, with or without a command');
+  assert.match(plain.out, /done-done verify paid --outcome/, plain.out);
+});
+
+test('a spends journey with a matrix parks naming every cell its one approval covers', () => {
+  const t = matrixed(MATRIXED.replace('    command: node make-cells.mjs\n', '    command: node make-cells.mjs\n    spends: one live generation\n'), 'true', () => '');
+  const parked = toon(t.dd('verify', 'cells', '--outcome', 'every cell renders'));
+  assert.equal(parked.status, 'awaiting_approval', 'a spending matrix journey parks');
+  assert.match(parked.findings[0].what, /the approval covers every matrix cell, so it runs 4 times, once per cell/);
+});
+
 test('verify --foreground fails at a broken journey and skips the rest; usage errors name the next step', () => {
   const { dd } = slowRepo();
   assert.equal(toon(dd('status')).help[0], 'Start one: done-done verify <journey> --outcome "<what a user can now do>"');
@@ -1919,6 +2020,10 @@ test('verify judges by default with the judge the user set: opencode judges a cl
   const noReason = t.dd('respond', '--run', b.run_id, '--action', 'approve');
   assert.equal(noReason.code, 2, noReason.out);
   assert.match(toon(noReason).error, /needs --reason/);
+  const runJson = join(t.env.DONE_DONE_HOME, 'runs', 'notes', b.run_id, 'run.json'), saved = readFileSync(runJson, 'utf8');
+  writeFileSync(runJson, '{');
+  assert.equal(t.dd('respond', '--run', b.run_id, '--action', 'approve', '--reason', 'dark mode is on').code, 2);
+  writeFileSync(runJson, saved);
   const ok2 = t.dd('respond', '--run', b.run_id, '--action', 'approve', '--reason', 'dark mode is on in the capture');
   assert.equal(ok2.code, 1, ok2.out);
   const a = toon(ok2);
@@ -1993,7 +2098,7 @@ if (process.env.DRIVE === 'probe') {
   });
   appendFileSync(${JSON.stringify(join(s.bin, 'calls.jsonl'))}, JSON.stringify({ probe: probes }) + '\\n');
 }
-process.stdout.write(JSON.stringify({ type: 'result', is_error: false, structured_output: { feature: 'features/add-note.md', captures: process.env.DRIVE === 'log' ? ['note.png', 'session.log'] : ['note.png'], blocker: '' } }));
+process.stdout.write(JSON.stringify({ type: 'result', is_error: false, structured_output: { feature: 'features/add-note.md', captures: process.env.DRIVE === 'log' ? ['note.png', 'session.log'] : ['note.png'], blocker: process.env.DRIVE === 'blocker' ? process.env.BLOCKER : '' } }));
 `, { mode: 0o755 });
     return s;
   };
@@ -2116,6 +2221,11 @@ process.stdout.write(JSON.stringify({ type: 'result', is_error: false, structure
   assert.equal(wip.code, 1, wip.out);
   assert.match(wip.o.reason, /^drive: claude changed tracked files in the repo during the drive/);
   t.sh('checkout', '--', 'src/app.js', '.done-done.yaml');
+  const secret = 'API_' + 'TOKEN=' + 'f4ke0'.repeat(6);
+  const blocked = verify({ ...right.env, DRIVE: 'blocker', BLOCKER: `login rejected ${secret}` }, 'the note Umer added shows in the list');
+  assert.match(blocked.o.reason, /^drive: secrets: .*holds a secret \(key-value\)/);
+  const status = spawnSync(process.execPath, [CLI, 'status', '--run', blocked.o.run_id], { cwd: t.repo, env: right.env, encoding: 'utf8' });
+  assert.equal([blocked.out, status.stdout + status.stderr].some((o) => o.includes(secret)), false, 'the blocker secret is never printed');
   // Usage errors before any run: an unknown feature, a journey with --feature, no verify skill.
   assert.match(toon(verify(right.env, 'x', '--feature', 'nope')).error, /no feature nope in \.agents\/skills\/verify-notes\/features; it has: add-note/);
   rmSync(skill, { recursive: true });
@@ -5216,4 +5326,45 @@ test('a dom block asks for a page-check record of a gif capture too', () => {
     'home.dark.gif: no page-check record home.dark.dom.json next to it (the dom block needs one per captured screen)',
     'home.light.gif: no page-check record home.light.dom.json next to it (the dom block needs one per captured screen)',
   ]);
+});
+
+// base_ref: verify drives the base ref too, in a done-done worktree, and the judge sees each head capture with its base capture.
+test('base_ref pairs each cell with its base capture in one judge request, and reports a head capture with none', () => {
+  const t = matrixed(MATRIXED.replace('  width: [390, 1280]\n', '').replace('  enabled: false\n', ''), '!cell', (t) =>
+    `const page = readFileSync('page.txt', 'utf8').trim();\nif (existsSync(${JSON.stringify(t.dir)} + '/' + page + '.' + cell + '.png')) copyFileSync(${JSON.stringify(t.dir)} + '/' + page + '.' + cell + '.png', root + '/home.' + cell + '.png');`);
+  writeFileSync(join(t.repo, 'make-cells.mjs'), readFileSync(join(t.repo, 'make-cells.mjs'), 'utf8').replace('mkdirSync }', 'mkdirSync, existsSync, readFileSync }'));
+  ['old.light', 'old.dark', 'new.light', 'new.dark'].forEach((n, i) => writeFileSync(join(t.dir, `${n}.png`), screen(i * 11)));
+  writeFileSync(join(t.repo, 'page.txt'), 'old\n');
+  t.sh('add', '-A'); t.sh('commit', '-qm', 'old page');
+  const base = t.head();
+  writeFileSync(join(t.repo, 'page.txt'), 'new\n');
+  t.sh('commit', '-qam', 'new page');
+  const s = stubAgents(t.env, JSON.stringify({ relevance: { probabilities: CORRECT, rationale: 'The page is new.', personReason: 'The page is new.' } }));
+  writeFileSync(join(t.env.DONE_DONE_HOME, 'config.yaml'), 'agent: claude\njudge:\n  route: answerer:opencode\n');
+  symlinkSync(process.execPath, join(s.bin, 'node'));
+  const verify = () => {
+    const r = spawnSync(process.execPath, [CLI, 'verify', 'cells', '--outcome', 'home shows the new page', '--foreground'], { cwd: t.repo, env: s.env, encoding: 'utf8' });
+    return { code: r.status, out: r.stdout + r.stderr, run: toon({ out: r.stdout }) };
+  };
+  // Key off: each capture is judged alone and nothing is driven at a base ref.
+  const off = verify();
+  assert.equal(off.code, 0, off.out);
+  assert.deepEqual([s.calls().map((c) => c.attached.length), existsSync(join(t.repo, '.proof', off.run.run_id, 'before'))], [[1, 1], false]);
+  writeFileSync(join(t.repo, '.done-done.yaml'), `${readFileSync(join(t.repo, '.done-done.yaml'), 'utf8')}base_ref: ${base}\n`);
+  t.sh('commit', '-qam', 'compare with the old page');
+  const on = verify();
+  assert.equal(on.code, 0, on.out);
+  const calls = s.calls().slice(2);
+  assert.ok(calls.length === 2 && calls.every((c) => c.attached.join() === 'PNG,PNG' && c.file.includes('base ref')), 'one request per cell holds its before and after images');
+  const proof = join(t.repo, '.proof', on.run.run_id);
+  for (const cell of ['light', 'dark']) assert.deepEqual(readFileSync(join(proof, 'before', `home.${cell}.png`)), readFileSync(join(t.dir, `old.${cell}.png`)), `the ${cell} base capture is the base ref's page`);
+  const judged = decode(readFileSync(join(t.env.DONE_DONE_HOME, 'runs', 'notes', on.run.run_id, 'logs', 'judge.log'), 'utf8')).judged;
+  assert.deepEqual(judged.map((j) => [basename(j.path), j.before.replace(`${proof}/`, '')]).sort(), [['home.dark.png', 'before/home.dark.png'], ['home.light.png', 'before/home.light.png']], 'pairs by screen name and cell');
+  assert.equal(JSON.parse(readFileSync(join(t.repo, '.proof', '.done-done', 'runs', `${on.run.run_id}.json`), 'utf8')).base.commit, base);
+  assert.equal(t.sh('worktree', 'list').toString().trim().split('\n').length, 1, 'the base worktree is removed after the run');
+  // A head capture whose base capture is missing is reported, never passed silently.
+  rmSync(join(t.dir, 'old.dark.png'));
+  const gap = verify();
+  assert.equal(gap.code, 3, gap.out);
+  assert.match(gap.run.reason, /home\.dark\.png: no base capture to compare with: the drive at base_ref \w+ saved no before\/home\.dark\.png/);
 });

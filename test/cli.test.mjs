@@ -1754,9 +1754,10 @@ if (process.argv.includes('auth')) {
 }
 const content = JSON.parse(readFileSync(0, 'utf8')).message.content;
 const images = content.filter((c) => c.type === 'image');
-const img = Buffer.from(images[0].source.data, 'base64');
-appendFileSync(dir + '/calls.jsonl', JSON.stringify({ model: process.argv[process.argv.indexOf('--model') + 1], images: images.length, width: img.readUInt32BE(16), prompt: content.at(-1).text }) + '\\n');
-const p = stub.answer;
+const img = images[0] && Buffer.from(images[0].source.data, 'base64');
+appendFileSync(dir + '/calls.jsonl', JSON.stringify({ model: process.argv[process.argv.indexOf('--model') + 1], images: images.length, width: img?.readUInt32BE(16), prompt: content.at(-1).text }) + '\\n');
+const state = JSON.parse(content.at(-1).text).state;
+const p = 'before' in state && state.before === state.capture ? { correct: 0.04, wrong: 0.93, unclear: 0.03 } : stub.answer;
 if (p === 'error') process.exit(process.stdout.write(JSON.stringify({ type: 'result', subtype: 'success', is_error: true, result: 'usage limit reached' })) && 0);
 const pick = Object.keys(p).sort((a, b) => p[b] - p[a])[0];
 process.stdout.write(JSON.stringify({ type: 'result', subtype: 'success', is_error: false, result: '', structured_output: { relevance: { probabilities: p, pick, personReason: stub.reason } } }));
@@ -1842,7 +1843,7 @@ test('judge wrong screen fails with exit 1, unsure and low confidence are inconc
   assert.doesNotMatch(err.out, /auth login/);
 });
 
-test('judge.enabled turns the judge on; text evidence is not judged; a failed check is not judged', () => {
+test('judge.enabled turns the judge on; text evidence is judged too; a failed check is not judged', () => {
   const j = judgeSetup(CORRECT, { projectYaml: 'app: notes\nevidence:\n  root: .proof\njudge:\n  enabled: true\njourneys:\n  shots:\n    command: node make-shots.mjs ${RUN_ID}\n' });
   const r = j.dd('run', '--', `node make-shots.mjs \${RUN_ID} && node -e "require('fs').writeFileSync(process.env.DONE_DONE_EVIDENCE_ROOT + '/session.log','saved 3 notes')"`);
   assert.equal(r.code, 0, r.out);
@@ -1850,9 +1851,9 @@ test('judge.enabled turns the judge on; text evidence is not judged; a failed ch
   const ok = j.dd('check', '--outcome', 'three notes are saved', `${mixed}/home.png`, `${mixed}/session.log`);
   assert.equal(ok.code, 0, ok.out);
   const d = toon(ok);
-  assert.deepEqual(d.judge.judged.map((x) => x.path), [`${mixed}/home.png`]);
-  assert.deepEqual(d.judge.not_judged, [`${mixed}/session.log`]);
-  assert.match(d.judge.note, /text, log and video evidence are not/);
+  assert.deepEqual(d.judge.judged.map((x) => x.path), [`${mixed}/home.png`, `${mixed}/session.log`]);
+  assert.equal(d.judge.not_judged, undefined);
+  assert.match(d.judge.note, /text captures \(logs, JSON, CLI output\) are judged; video and other files are not/);
   const bad = j.dd('check', '--outcome', 'three notes are saved', `${mixed}/home.png`, '.proof/nope.png');
   assert.equal(bad.code, 1, bad.out);
   assert.match(toon(bad).judge.skipped, /already failed/);
@@ -1860,7 +1861,30 @@ test('judge.enabled turns the judge on; text evidence is not judged; a failed ch
   const stray = j.dd('check', '--outcome', 'three notes are saved', 'stray.png');
   assert.equal(stray.code, 3, stray.out);
   assert.deepEqual(toon(stray).judge.judged, [], 'a capture with no run record is never sent');
-  assert.equal(j.calls().length, 1);
+  assert.equal(j.calls().length, 2);
+});
+
+test('the judge reads text and JSON captures as text: a wrong count fails with its reason, over-cap text is unsure, a re-run is a cache hit', () => {
+  const j = judgeSetup(CORRECT);
+  const r = j.dd('run', '--', `node -e "const fs = require('fs'), d = process.env.DONE_DONE_EVIDENCE_ROOT; fs.writeFileSync(d + '/count.json', JSON.stringify({ notes: 3 })); fs.writeFileSync(d + '/sync.log', 'synced 3 notes'); fs.writeFileSync(d + '/big.log', 'x'.repeat(70000))"`);
+  assert.equal(r.code, 0, r.out);
+  const ev = `.proof/${toon(r).run_id}`;
+  const ok = j.dd('check', '--judge', '--outcome', 'three notes are saved', `${ev}/count.json`, `${ev}/sync.log`);
+  assert.equal(ok.code, 0, ok.out);
+  assert.deepEqual(toon(ok).judge.judged.map((x) => [x.path, x.verdict, x.cached]), [[`${ev}/count.json`, 'pass', false], [`${ev}/sync.log`, 'pass', false]]);
+  const calls = j.calls();
+  assert.deepEqual(calls.map((c) => c.images), [0, 0], 'a text capture goes as text, not an image');
+  assert.ok(calls[0].prompt.includes('notes\\":3') && calls[1].prompt.includes('synced 3 notes') && calls.every((c) => c.prompt.includes('three notes are saved')), calls[0].prompt);
+  const again = j.dd('check', '--judge', '--outcome', 'three notes are saved', `${ev}/count.json`, `${ev}/sync.log`);
+  assert.ok(toon(again).judge.judged.every((x) => x.cached && x.verdict === 'pass'), again.out);
+  j.stub({ correct: 0.04, wrong: 0.93, unclear: 0.03 });
+  const bad = j.dd('check', '--judge', '--outcome', 'five notes are saved', `${ev}/count.json`);
+  assert.equal(bad.code, 1, bad.out);
+  assert.match(toon(bad).findings[0].why, /count\.json: judge says wrong output: The screen shows the notes list\./);
+  const big = j.dd('check', '--judge', '--outcome', 'three notes are saved', `${ev}/big.log`);
+  assert.equal(big.code, 3, big.out);
+  assert.match(toon(big).judge.judged[0].reason, /text is 70000 bytes, over the 65536 bytes the judge reads/);
+  assert.equal(j.calls().length, 3, 'a cache hit and an over-cap capture ask no model');
 });
 
 test('judge.enabled: false: verify judges only with --judge, and a rerun repeats its source run; --no-judge turns it off', () => {
@@ -1902,14 +1926,14 @@ test('a failed verify suggests running again with the judge choice it was starte
 
 test('a judge that judged no capture leaves a schema 1 receipt with no judge block', () => {
   const j = judgeSetup(CORRECT, { projectYaml: 'app: notes\nevidence:\n  root: .proof\njudge:\n  enabled: true\njourneys:\n  shots:\n    command: node make-shots.mjs ${RUN_ID}\n' });
-  const r = j.dd('run', '--', `node -e "require('fs').writeFileSync(process.env.DONE_DONE_EVIDENCE_ROOT + '/session.log','saved 3 notes')"`);
+  const r = j.dd('run', '--', `node -e "require('fs').writeFileSync(process.env.DONE_DONE_EVIDENCE_ROOT + '/session.bin','saved 3 notes')"`);
   assert.equal(r.code, 0, r.out);
-  const log = `.proof/${toon(r).run_id}/session.log`;
+  const log = `.proof/${toon(r).run_id}/session.bin`;
   const rec = j.dd('receipt', '--outcome', 'three notes are saved', log);
   assert.equal(rec.code, 0, rec.out);
   const verified = toon(j.dd('receipt', '--verify', j.head()));
   assert.deepEqual([verified.result, verified.schema, verified.judge], ['pass', 1, undefined]);
-  assert.equal(j.calls().length, 0, 'text evidence is never sent to the model');
+  assert.equal(j.calls().length, 0, 'a file the judge does not read is never sent to the model');
 });
 
 test('judge with no sign-in is a config error naming the sign-in command, and writes no receipt', () => {
@@ -2087,9 +2111,10 @@ test('verify with no journey: the author agent drives the verify skill feature, 
 const { appendFileSync, copyFileSync, readFileSync, writeFileSync } = require('node:fs');
 const { spawnSync } = require('node:child_process');
 appendFileSync(${JSON.stringify(join(s.bin, 'calls.jsonl'))}, JSON.stringify({ agent: 'claude', argv: process.argv.slice(2), stdin: readFileSync(0, 'utf8'), cwd: process.cwd(), evidence: process.env.DONE_DONE_EVIDENCE_ROOT, tmp: process.env.TMPDIR }) + '\\n');
-copyFileSync(${JSON.stringify(join(t.dir, 'screen.png'))}, process.env.DONE_DONE_EVIDENCE_ROOT + '/note.png');
+if (process.env.DRIVE === 'text') writeFileSync(process.env.DONE_DONE_EVIDENCE_ROOT + '/count.json', JSON.stringify({ notes: 1 }));
+else copyFileSync(${JSON.stringify(join(t.dir, 'screen.png'))}, process.env.DONE_DONE_EVIDENCE_ROOT + '/note.png');
 if (process.env.DRIVE === 'edit') appendFileSync('src/app.js', '// changed\\n');
-if (process.env.DRIVE === 'log') writeFileSync(process.env.DONE_DONE_EVIDENCE_ROOT + '/session.log', 'ok\\n');
+if (process.env.DRIVE === 'log') writeFileSync(process.env.DONE_DONE_EVIDENCE_ROOT + '/session.bin', 'ok\\n');
 if (process.env.DRIVE === 'switch') writeFileSync(process.env.DONE_DONE_HOME + '/config.yaml', 'agent: opencode\\njudge:\\n  route: answerer:opencode\\n');
 if (process.env.DRIVE === 'probe') {
   const probes = [['respond', '--action', 'approve', '--reason', 'looks fine'], ['receipt', '--verify', 'HEAD'], ['verify', '--outcome', 'x']].map((argv) => {
@@ -2098,7 +2123,7 @@ if (process.env.DRIVE === 'probe') {
   });
   appendFileSync(${JSON.stringify(join(s.bin, 'calls.jsonl'))}, JSON.stringify({ probe: probes }) + '\\n');
 }
-process.stdout.write(JSON.stringify({ type: 'result', is_error: false, structured_output: { feature: 'features/add-note.md', captures: process.env.DRIVE === 'log' ? ['note.png', 'session.log'] : ['note.png'], blocker: process.env.DRIVE === 'blocker' ? process.env.BLOCKER : '' } }));
+process.stdout.write(JSON.stringify({ type: 'result', is_error: false, structured_output: { feature: 'features/add-note.md', captures: process.env.DRIVE === 'log' ? ['note.png', 'session.bin'] : process.env.DRIVE === 'text' ? ['count.json'] : ['note.png'], blocker: process.env.DRIVE === 'blocker' ? process.env.BLOCKER : '' } }));
 `, { mode: 0o755 });
     return s;
   };
@@ -2126,7 +2151,7 @@ process.stdout.write(JSON.stringify({ type: 'result', is_error: false, structure
   assert.equal(drive.tmp, join(runDir, 'tmp'), "the drive's scratch is the run's own tmp folder");
   assert.deepEqual(drive.argv.slice(drive.argv.indexOf('--permission-mode')), ['--permission-mode', 'acceptEdits', '--allowedTools', 'Bash', '--add-dir', drive.evidence, '--add-dir', drive.tmp, '--effort', 'low'], 'edits only in the repo, the evidence folder and the run scratch, at the configured effort');
   assert.match(drive.stdin, /Never add steps or data to make the outcome look true/, 'the drive is told not to stage the claim');
-  assert.match(drive.stdin, /a screenshot of an earlier step \(such as an empty or half-filled form\) fails the drive: keep those in /, 'the drive saves only screenshots of the outcome, since the judge checks each against it');
+  assert.match(drive.stdin, /a capture of an earlier step \(such as an empty or half-filled form, or text from before the outcome\) fails the drive: keep those in /, 'the drive saves only captures of the outcome, since the judge checks each against it');
   assert.match(drive.stdin, /for example \{"feature":"features\/<name>\.md","captures":\["<name>\.png"\],"blocker":""\}[\s\S]*"required":\["feature","captures","blocker"\]\}\nThat object holds your own values, never the schema itself/, 'the prompt shows an answer and ends on words, not the schema a weak model copies back');
   assert.match(drive.stdin, /Outcome to prove: the note Umer added shows in the list[\s\S]*verify-notes\/features\/add-note\.md/, 'the claim and the feature recipe go on stdin');
   assert.ok(!drive.argv.some((a) => a.includes('Umer added')), 'never in argv');
@@ -2166,11 +2191,15 @@ process.stdout.write(JSON.stringify({ type: 'result', is_error: false, structure
   writeFileSync(join(t.env.DONE_DONE_HOME, 'config.yaml'), 'agent: claude\njudge:\n  route: answerer:opencode\n');
   assert.equal(switched.code, 0, switched.out);
   assert.deepEqual(right.calls().slice(seen + 1).map((c) => c.agent), ['opencode'], 'the judge is not the drive agent claude');
+  // A drive whose only capture is text (a CLI's JSON output) passes on the judge's pass, the text sent with no attachment.
+  const texted = verify({ ...right.env, DRIVE: 'text' }, 'the notes CLI reports the one note Umer added');
+  assert.equal(texted.code, 0, texted.out);
+  assert.deepEqual([right.calls().at(-1).agent, right.calls().at(-1).attached], ['opencode', []]);
   // A capture the judge cannot read is not covered by the judge's pass on the others: the run parks at the gate.
   const logged = verify({ ...right.env, DRIVE: 'log' }, 'the note Umer added shows in the list');
   assert.equal(logged.code, 4, logged.out);
   assert.deepEqual([logged.o.status, logged.o.step, logged.o.findings.length], ['awaiting_approval', 'gate', 1]);
-  assert.match(logged.o.findings[0].what, /session\.log: the judge did not read this capture/);
+  assert.match(logged.o.findings[0].what, /session\.bin: the judge did not read this capture/);
   // While that run waits at its gate, a new verify or a rerun of the same claim is refused: it would go around the gate.
   const calls = right.calls().length;
   for (const again of [verify(right.env, 'the note Umer added shows in the list'), spawnSync(process.execPath, [CLI, 'rerun', '--run', logged.o.run_id], { cwd: t.repo, env: right.env, encoding: 'utf8' })]) {
@@ -3096,18 +3125,18 @@ test('judge.route must name a judge, and judge.model is the judge\'s model', () 
   assert.match(d.checks[7].detail, /^claude-code \(model x; from config\)/);
 });
 
-test('a text-only judged receipt needs no judge, so no installed agent does not block it', () => {
+test('a judged receipt citing nothing the judge reads needs no judge, so no installed agent does not block it', () => {
   const t = setup('app: notes\nevidence:\n  root: .proof\njudge:\n  enabled: true\njourneys:\n  shots:\n    command: node make-shots.mjs ${RUN_ID}\n');
-  const r = t.dd('run', '--', `node -e "require('fs').writeFileSync(process.env.DONE_DONE_EVIDENCE_ROOT + '/session.log','saved 3 notes')"`);
+  const r = t.dd('run', '--', `node -e "require('fs').writeFileSync(process.env.DONE_DONE_EVIDENCE_ROOT + '/session.bin','saved 3 notes')"`);
   assert.equal(r.code, 0, r.out);
-  const log = `.proof/${toon(r).run_id}/session.log`;
+  const log = `.proof/${toon(r).run_id}/session.bin`;
   const rec = doctorIn(t.repo, pathEnv(t.env, []), 'receipt', '--outcome', 'three notes are saved', log);
   assert.equal(rec.code, 0, rec.out);
   const v = t.dd('receipt', '--verify', t.head());
   assert.deepEqual([toon(v).result, toon(v).schema, toon(v).judge], ['pass', 1, undefined]);
 });
 
-test('verify --judge on text-only evidence leaves the judge step skipped and writes no judge log', () => {
+test('verify --judge on evidence the judge does not read leaves the judge step skipped and writes no judge log', () => {
   const t = setup(`app: notes
 evidence:
   root: .proof
@@ -3115,7 +3144,7 @@ judge:
   enabled: true
 journeys:
   shots:
-    command: node -e "require('fs').writeFileSync(process.env.DONE_DONE_EVIDENCE_ROOT + '/session.log', 'saved 3 notes')"
+    command: node -e "require('fs').writeFileSync(process.env.DONE_DONE_EVIDENCE_ROOT + '/session.bin', 'saved 3 notes')"
 `);
   mkdirSync(t.env.DONE_DONE_HOME, { recursive: true });
   writeFileSync(join(t.env.DONE_DONE_HOME, 'config.yaml'), 'agent: claude\njudge:\n  route: answerer:opencode\n');
@@ -5367,4 +5396,28 @@ test('base_ref pairs each cell with its base capture in one judge request, and r
   const gap = verify();
   assert.equal(gap.code, 3, gap.out);
   assert.match(gap.run.reason, /home\.dark\.png: no base capture to compare with: the drive at base_ref \w+ saved no before\/home\.dark\.png/);
+});
+
+test('base_ref judges a text capture against its base text: identical text fails, changed text passes', () => {
+  const j = judgeSetup(CORRECT, { projectYaml: 'app: notes\nevidence:\n  root: .proof\njudge:\n  enabled: true\njourneys:\n  count:\n    command: node count.mjs\n' });
+  writeFileSync(join(j.repo, 'count.mjs'), "import { readFileSync, writeFileSync } from 'node:fs';\nwriteFileSync(process.env.DONE_DONE_EVIDENCE_ROOT + '/count.json', readFileSync('page.txt'));\n");
+  writeFileSync(join(j.repo, 'page.txt'), '{"notes":3}\n');
+  j.sh('add', '-A');
+  j.sh('commit', '-qm', 'three notes');
+  const base = j.head();
+  writeFileSync(join(j.repo, '.done-done.yaml'), `${readFileSync(join(j.repo, '.done-done.yaml'), 'utf8')}base_ref: ${base}\n`);
+  j.sh('commit', '-qam', 'compare with three notes');
+  const verify = (outcome) => j.dd('verify', 'count', '--outcome', outcome, '--foreground');
+  const judgedOf = (r) => decode(readFileSync(join(j.env.DONE_DONE_HOME, 'runs', 'notes', toon(r).run_id, 'logs', 'judge.log'), 'utf8')).judged;
+  const same = verify('three notes are saved');
+  assert.equal(same.code, 4, same.out);
+  assert.match(same.out, /count\.json: judge says wrong output/, 'the judge reads identical text as no change');
+  assert.deepEqual(judgedOf(same).map((x) => x.verdict), ['fail']);
+  assert.equal(j.dd('abort', '--run', toon(same).run_id).code, 0);
+  assert.equal(JSON.parse(j.calls().at(-1).prompt).state.before, '{"notes":3}\n', 'the request holds the base text as well as the capture');
+  writeFileSync(join(j.repo, 'page.txt'), '{"notes":4}\n');
+  j.sh('commit', '-qam', 'a fourth note');
+  const changed = verify('a fourth note is saved');
+  assert.equal(changed.code, 0, changed.out);
+  assert.deepEqual(judgedOf(changed).map((x) => x.verdict), ['pass']);
 });

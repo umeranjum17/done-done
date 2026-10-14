@@ -17,6 +17,7 @@ import { attemptProblem, changedSince, commitFix, dirtyTracked, FIX_SCHEMA, inWo
 import { cellEnv, cellName, cellSuffix, hasMatrix, matrixManifest, splitMatrix } from './matrix.js';
 import { design, KINDS } from './design.js';
 import { checkMedia } from './media.js';
+import { domIssues, isDomRecord } from './dom.js';
 const PASS = 0, FAIL = 1, USAGE = 2, INCONCLUSIVE = 3, WAITING = 4;
 // The shape of a journey, so a new user or agent can write one without opening the reference.
 // done-done sets DONE_DONE_EVIDENCE_ROOT (the run's own folder) and replaces ${RUN_ID}, so the example works for any evidence root.
@@ -609,7 +610,12 @@ async function runCheck(argv, run) {
         const hash = sha256(bytes);
         hashes.push(hash);
         cited.push({ path: receiptPath(repo, cfg, path), sha256: hash });
-        if (seen.has(hash))
+        // A page-check record is a capture's companion: two clean cells of one page write the same bytes, and the judge never reads one.
+        const record = !!cfg.dom && isDomRecord(name);
+        if (cfg.dom && ['png', 'jpeg', 'webp', 'gif', 'mp4', 'webm'].includes(v.type))
+            for (const why of domIssues(cfg.dom, path))
+                findings.push({ level: 'fail', why: `${name}: ${why}` });
+        if (seen.has(hash) && !record)
             findings.push({ level: 'fail', why: `${name}: byte-identical to ${seen.get(hash)}` });
         seen.set(hash, name);
         // A file in the evidence root is claimed by the record that lists its path; a copy elsewhere, by its bytes.
@@ -635,7 +641,7 @@ async function runCheck(argv, run) {
         }
         const rec = claims[0];
         // Only a capture tied to a run record can reach the judge, so a stray cited file is never sent.
-        if (v.status === 'ok')
+        if (v.status === 'ok' && !record)
             captures.push({ name, bytes, sha256: hash, media: v });
         const stale = staleness(repo, cfg, rec.commit, now.commit);
         if (stale)
@@ -647,7 +653,7 @@ async function runCheck(argv, run) {
     }
     // The capture matrix: every required cell needs a capture named with its suffix, never silently missing.
     if (hasMatrix(cfg.matrix))
-        for (const c of matrixManifest(cfg.matrix, files).cells.filter((c) => !c.files.length))
+        for (const c of matrixManifest(cfg.matrix, files.filter((f) => !cfg.dom || !isDomRecord(f))).cells.filter((c) => !c.files.length))
             findings.push({ level: 'fail', why: `cell ${c.cell} has no capture: name one file *${c.suffix}* (journeys name captures with DONE_DONE_CELL)` });
     // Reuse: fail only when every cited file was already used for a different claim id. The ledger lives in the
     // evidence root next to the run records it guards: one per app (repo), shared by every checkout of it, never in git.
@@ -1010,16 +1016,20 @@ async function agentDrive(repo, cfg, feature) {
 // With a verify skill and no journey, the next step can be an agent drive.
 const driveHint = (repo, cfg) => existsSync(join(repo, cfg.skill, 'SKILL.md'))
     ? ['Have your coding agent drive a verify skill feature: done-done verify --outcome "<what a user can now do>" [--feature <name>]'] : [];
+// The page-check record shape and how to collect it with chrome-devtools-axi, for the drive prompt and the verify skill scaffold.
+const DOM_RECORD = '{"url": "<page url>", "overflow": <true when content is wider than the viewport>, "overflowing": ["<element>", ...], "console_errors": ["<message>", ...], "failed_requests": [{"url": "<url>", "status": <HTTP status, 0 when none>}]}'
+    + "; with your browser tool (for example chrome-devtools-axi): overflow from eval \"() => { const w = document.documentElement.clientWidth; return { overflow: document.documentElement.scrollWidth > w, overflowing: [...document.querySelectorAll('body *')].filter((e) => e.getBoundingClientRect().right > w + 1).slice(0, 10).map((e) => e.tagName.toLowerCase() + (e.id ? '#' + e.id : '')) } }\", console errors from console --type error, failed requests (status 400 or more, or no response) from network";
 function drivePrompt(run, at, cfg, evidence, scratch) {
     const skill = join(at, cfg.skill);
     const recipe = run.feature ? `the feature recipe ${join(skill, 'features', `${run.feature}.md`)}` : `its feature map ${join(skill, 'features', 'README.md')}, then pick the one feature the outcome is about`;
     const inst = cfg.instance ? `\n\nThe app is already running at $DONE_DONE_BASE_URL (started by done-done on its own port with its own HOME; DONE_DONE_PORT is its port). Drive that instance: do not start your own server or hard-code a port.` : '';
     const matrix = hasMatrix(cfg.matrix) ? splitMatrix(cfg.matrix) : null;
     const cells = !matrix ? '' : `\n\nThe repo asks for every theme x width x form cell below: drive each cell (theme and width are the recipe's job) and save one PNG per cell whose file name holds its suffix, e.g. ${evidence}/home.<suffix>.png:\n${matrix.required.map((c) => `- ${cellName(c)}: *${cellSuffix(c)}*`).join('\n')}${matrix.skipped.length ? `\nSkipped (capture nothing for these):\n${matrix.skipped.map((s) => `- ${cellName(s.cell)} (${s.reason})`).join('\n')}` : ''}`;
+    const dom = cfg.dom ? `\n\nThe repo checks each page: next to every capture write its page-check record, the capture's name with .dom.json for its extension (e.g. home.dom.json for home.png), as the verify skill's Evidence section says: ${DOM_RECORD}. Record what the page shows; never fix the page.` : '';
     return `You drive the real ${run.app} app the way a user does, to capture proof of one outcome. Someone else judges your captures.
 
 Outcome to prove: ${run.claim}
-${inst}${cells}
+${inst}${cells}${dom}
 1. Read the verify skill ${join(skill, 'SKILL.md')} (how to launch, check, drive, capture and clean up this app) and ${recipe}.
 2. ${cfg.instance ? 'Drive that running instance' : 'Launch the app as the skill says, then drive'} that feature through the real user path, step by step as its recipe says.
    Never add steps or data to make the outcome look true: capture what that path shows, even when it contradicts the outcome.
@@ -2076,7 +2086,7 @@ ${found.join('\n')}
 
 ## Evidence
 
-Capture ${d.observe}. Exercise the real user path, not internal setters; done-done's judge checks every screenshot in the run folder against the outcome, so save only screenshots of the resulting state there and keep any of earlier steps outside it; verify side effects alongside what is visible. Evidence goes to the run folder \`done-done run\` prints. When .done-done.yaml sets a matrix block, each journey runs once per theme x width x form cell with DONE_DONE_THEME, DONE_DONE_WIDTH, DONE_DONE_FORM and DONE_DONE_CELL set: name each capture with its cell suffix, so every cell is captured or skipped with a reason, never silently missing.
+Capture ${d.observe}. Exercise the real user path, not internal setters; done-done's judge checks every screenshot in the run folder against the outcome, so save only screenshots of the resulting state there and keep any of earlier steps outside it; verify side effects alongside what is visible. Evidence goes to the run folder \`done-done run\` prints. When .done-done.yaml sets a matrix block, each journey runs once per theme x width x form cell with DONE_DONE_THEME, DONE_DONE_WIDTH, DONE_DONE_FORM and DONE_DONE_CELL set: name each capture with its cell suffix, so every cell is captured or skipped with a reason, never silently missing. When .done-done.yaml sets a dom block, write next to each capture its page-check record, the capture's name with .dom.json for its extension (home.dark.390w.png -> home.dark.390w.dom.json): ${DOM_RECORD}.
 
 ## Cleanup
 

@@ -5288,12 +5288,32 @@ test('a rerun whose watched inputs changed drives again instead of reusing the s
   assert.match(toon(r).reason, /input guard: fixtures\/seed\.json: changed during the drive/);
 });
 
-test('a literal input still guards in a repo whose file listing exceeds 1 MiB', () => {
+test('a glob input still guards in a repo whose file listing exceeds 1 MiB', () => {
   const t = guarded();
   mkdirSync(join(t.repo, 'scratch'));
   for (let i = 0; i < 12000; i++) writeFileSync(join(t.repo, 'scratch', `${String(i).padStart(5, '0')}-${'x'.repeat(90)}.txt`), '');
   const s = toon(t.dd('verify', 'shots', '--outcome', 'home renders', '--foreground'));
   assert.equal(s.result, 'pass', s.reason);
+  const run = JSON.parse(readFileSync(guardRun(t, s.run_id), 'utf8'));
+  assert.deepEqual(run.guarded.before.map((f) => f.path), ['data/seed.json']);
+});
+
+test('a glob input watches a dotfile under it like any other file', () => {
+  const t = guarded(`${GUARDED}  dot:\n    command: node make-shots.mjs \${RUN_ID} && echo tampered >> data/.cache.json\n`);
+  writeFileSync(join(t.repo, 'data', '.cache.json'), '{}\n');
+  t.sh('add', '-A'); t.sh('commit', '-qm', 'dotfile');
+  const d = t.dd('verify', 'dot', '--outcome', 'home renders', '--foreground');
+  assert.equal(d.code, 1, d.out);
+  assert.match(toon(d).reason, /input guard: data\/\.cache\.json: changed during the drive/);
+});
+
+test('a watched input that is a symlink to a folder fails the run naming it, never passes empty', () => {
+  const t = guarded(GUARDED.replace('inputs: ["data/**"]', 'inputs: ["linkdir"]'));
+  symlinkSync(join(t.repo, 'data'), join(t.repo, 'linkdir'));
+  t.sh('add', '-A'); t.sh('commit', '-qm', 'folder link');
+  const r = t.dd('verify', 'shots', '--outcome', 'home renders', '--foreground');
+  assert.notEqual(r.code, 0, r.out);
+  assert.match(r.out, /input guard: linkdir reaches linkdir, a symlink to a folder/);
 });
 
 test('a non-ASCII untracked input is guarded by its real name', () => {

@@ -162,7 +162,7 @@ One verify run proves it did not change the inputs it reads (fixtures, data file
 inputs: ["data/**", "fixtures/seed.json"]
 ```
 
-`inputs` is a list of repo-relative paths or globs, in the no-mistakes style. done-done hashes every matching file before the drive (journey or agent drive) and again after; the check step fails the run when a file changed, appeared or disappeared, naming each path but never printing file contents. The before/after hash lists go into the run record. With no `inputs` key, a run behaves as before.
+`inputs` is a list of repo-relative paths or globs, in the no-mistakes style. Dotfiles match too, so `data/**` watches `data/.cache.json`; a watched folder reached through a symlink fails the check. done-done hashes every matching file before the drive (journey or agent drive) and again after; the check step fails the run when a file changed, appeared or disappeared, naming each path but never printing file contents. The before/after hash lists go into the run record. With no `inputs` key, a run behaves as before.
 
 ### DOM assertions
 

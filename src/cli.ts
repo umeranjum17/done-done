@@ -1038,16 +1038,41 @@ function guardCandidates(at: string): string[] {
   return [...new Set(listed.split('\0').filter(Boolean))].sort();
 }
 
+// Node's matchesGlob skips dotfiles, so a watched glob matches them itself: '**' spans folders, '*' and '?' stay in one.
+const GLOB_TOKEN = /(\*\*\/|\*\*|\*|\?|\{[^}]*\}|\[[^\]]*\])/;
+const globEscape = (s: string) => s.replace(/[.+^$()|\\]/g, '\\$&');
+function guardGlob(p: string): RegExp {
+  const part = (t: string, i: number) => {
+    if (i % 2 === 0) return globEscape(t);
+    if (t === '**/') return '(?:.*/)?';
+    if (t === '**') return '.*';
+    if (t === '*') return '[^/]*';
+    if (t === '?') return '[^/]';
+    return t[0] === '{' ? `(?:${t.slice(1, -1).split(',').map(globEscape).join('|')})` : t;
+  };
+  return new RegExp(`^${p.split(GLOB_TOKEN).map(part).join('')}$`);
+}
+
 function guardSnapshot(at: string, patterns: string[]): GuardFile[] {
   if (!patterns.length) return [];
   let candidates: string[] | undefined;
   const listed = () => (candidates ??= guardCandidates(at));
+  let links: string[] | undefined;
+  const folderLinks = () => (links ??= listed().filter((c) => lstatSync(join(at, c), { throwIfNoEntry: false })?.isSymbolicLink() && statSync(join(at, c), { throwIfNoEntry: false })?.isDirectory()));
   const paths = new Set<string>();
   for (const raw of patterns) {
     const p = inputPattern(raw);
-    if (/[*?{\[]/.test(p)) {
-      for (const c of listed()) if (c === p || c.startsWith(`${p}/`) || matchesGlob(c, p)) paths.add(c);
-    } else if (existsSync(join(at, p)) && statSync(join(at, p)).isDirectory()) {
+    const glob = /[*?{\[]/.test(p);
+    const folder = !glob && existsSync(join(at, p)) && statSync(join(at, p)).isDirectory();
+    if (glob || folder) {
+      const base = glob ? p.slice(0, p.search(/[*?{\[]/)).replace(/\/[^/]*$/, '') : p;
+      const link = folderLinks().find((s) => base === '' || s === base || s.startsWith(`${base}/`) || base.startsWith(`${s}/`));
+      if (link) throw new Error(`input guard: ${p} reaches ${link}, a symlink to a folder`);
+    }
+    if (glob) {
+      const re = guardGlob(p);
+      for (const c of listed()) if (c === p || c.startsWith(`${p}/`) || re.test(c)) paths.add(c);
+    } else if (folder) {
       for (const c of listed()) if (c.startsWith(`${p}/`)) paths.add(c);
     } else paths.add(p);
   }
@@ -1055,7 +1080,8 @@ function guardSnapshot(at: string, patterns: string[]): GuardFile[] {
   return [...paths].sort().map((path) => {
     const full = join(at, path);
     const st = statSync(full, { throwIfNoEntry: false });
-    if (!st?.isFile()) return { path, sha256: null };
+    if (!st) return { path, sha256: null };
+    if (!st.isFile()) throw new Error(`input guard: ${path} is not a plain file`);
     if (!realpathSync(full).startsWith(`${root}${sep}`)) throw new Error(`input guard: ${path} links outside the repo`);
     try {
       return { path, sha256: sha256(readFileSync(full)) };

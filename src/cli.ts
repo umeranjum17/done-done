@@ -2232,11 +2232,12 @@ function detectApp(repo: string): Detected {
       ? `the launch output prints the app URL and \`curl -sS -o /dev/null <that URL>\` exits 0. BASE below is that URL; ${RECORD}`
       : 'the launch command runs with no error (exit 0, or a prompt waiting for input)';
   const driver = browserTests ? 'browser' : cliish ? 'tty' : api ? 'curl' : web ? 'browser' : 'shell';
-  const harness = browserTests ? 'browser/CDP (Playwright)'
-    : driver === 'tty' ? 'tmux/PTY'
-    : driver === 'curl' ? 'plain HTTP (curl)'
-    : driver === 'browser' ? 'a browser tool (for example chrome-devtools-axi)'
-    : 'a shell (run the launch command and read its output)';
+  const harness = browserTests ? 'browser/CDP (Playwright)' : {
+    tty: 'tmux/PTY',
+    curl: 'plain HTTP (curl)',
+    browser: 'a browser tool (for example chrome-devtools-axi)',
+    shell: 'a shell (run the launch command and read its output)',
+  }[driver];
   const observe = web
     ? 'screenshots of the resulting state the outcome is about'
     : cliish

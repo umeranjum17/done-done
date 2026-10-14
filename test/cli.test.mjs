@@ -2323,6 +2323,36 @@ test('signoff on a rerun that reused its drive sends the captures of the run tha
   assert.deepEqual([m.key, m.media, dirname(file)], [`dd-evidence-${toon(r).run_id}`, ['home.png', 'settings.png'], join(t.repo, '.proof', a.run_id)]);
 });
 
+// auto_fix.verify's sign-off evidence shows the fix pass, the one the run's receipt is bound to, never the failing first pass.
+test('signoff on a verify run fixed by auto_fix sends the fix pass: its captures, its commit and a repro naming its branch', () => {
+  const t = setup('app: notes\nevidence:\n  root: .proof\njudge:\n  enabled: false\nauto_fix:\n  verify: 1\njourneys:\n  shots:\n    command: node shot.mjs\n');
+  const e = pathEnv(t.env, []);
+  writeFileSync(join(t.repo, 'shot.mjs'), `import { copyFileSync, mkdirSync, readFileSync } from 'node:fs';\nif (readFileSync('src/app.js', 'utf8').includes('BUG')) process.exit(1);\nmkdirSync(process.env.DONE_DONE_EVIDENCE_ROOT, { recursive: true });\ncopyFileSync(${JSON.stringify(join(t.dir, 'screen.png'))}, process.env.DONE_DONE_EVIDENCE_ROOT + '/home.png');\n`);
+  writeFileSync(join(t.repo, 'src', 'app.js'), 'export const title = "BUG";\n');
+  t.sh('add', '-A');
+  t.sh('commit', '-qm', 'a broken title');
+  writeFileSync(join(e.PATH, 'opencode'), `#!${process.execPath}
+const { writeFileSync } = require('node:fs');
+writeFileSync('src/app.js', 'export const title = "Notes";\\n');
+console.log(JSON.stringify({ type: 'text', part: { type: 'text', text: JSON.stringify({ summary: 'fixed the title', blocker: '' }) } }));
+`, { mode: 0o755 });
+  mkdirSync(t.env.DONE_DONE_HOME, { recursive: true });
+  writeFileSync(join(t.env.DONE_DONE_HOME, 'config.yaml'), 'agent: opencode\nagent_config:\n  opencode: { model: opencode-go/author }\n');
+  const r = doctorIn(t.repo, { ...e, PATH: `${e.PATH}:${dirname(process.execPath)}` }, 'verify', 'shots', '--outcome', 'the home screen shows the title Notes', '--foreground');
+  assert.deepEqual([r.code, toon(r).result], [1, 'changed'], r.out);
+  const id = toon(r).run_id;
+  const fix = t.sh('rev-parse', `done-done/verify-${id}`).toString().trim();
+  const s = t.dd('signoff', '--run', id);
+  assert.equal(s.code, 0, s.out);
+  const file = join(t.repo, toon(s).file);
+  const folder = join(t.repo, '.proof', `${id}-fix1`);
+  assert.equal(dirname(file), folder, 'the message sits in the fix pass folder its media resolve from');
+  const m = JSON.parse(readFileSync(file, 'utf8'));
+  assert.deepEqual([m.kind, m.title, m.media, m.run.commit], ['evidence', 'notes shots: verify changed', ['home.png'], fix]);
+  assert.equal(m.run.repro, `done-done verify shots --outcome "the home screen shows the title Notes" at ${fix} on branch done-done/verify-${id}`);
+  assert.ok(existsSync(join(folder, m.media[0])), 'the media path resolves from the message folder');
+});
+
 test('a rerun refused by the judge preflight exits 2 and creates no run folder', () => {
   const t = setup(JUDGED);
   mkdirSync(t.env.DONE_DONE_HOME, { recursive: true });

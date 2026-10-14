@@ -2260,12 +2260,14 @@ function cmdSignoff(argv) {
         file = join(root, id, 'signoff-gate.json');
     }
     else if (run.kind === 'verify' && run.status === 'completed' && run.record) {
+        // A run auto_fix.verify fixed proves the fix pass, never the first failing pass: the receipt is bound to the fix commit.
+        const fixed = run.result === 'changed' && run.fix?.record ? run.fix : undefined;
         // The message sits in the folder of the run that made the captures (a rerun that reused its drive sends its source's),
         // so each media path is relative to it and stays inside it.
         const again = `Capture it again: done-done rerun --run ${id}`;
         let rec, folder;
         try {
-            rec = JSON.parse(readFileSync(run.record, 'utf8'));
+            rec = JSON.parse(readFileSync(fixed?.record ?? run.record, 'utf8'));
         }
         catch {
             return refuse('its run record is missing or unreadable', again);
@@ -2302,7 +2304,7 @@ function cmdSignoff(argv) {
             ...(media.length && { media }),
             run: {
                 ...runRef(rec.commit), outcome: text('outcome', run.claim, 1000, redo),
-                repro: text('repro', [`done-done verify`, run.journey ?? (run.feature && `--feature ${run.feature}`), `--outcome "${run.claim}" at ${rec.commit}`].filter(Boolean).join(' '), 1000, redo),
+                repro: text('repro', [`done-done verify`, run.journey ?? (run.feature && `--feature ${run.feature}`), `--outcome "${run.claim}" at ${rec.commit}`].filter(Boolean).join(' ') + (fixed?.branch ? ` on branch ${fixed.branch}` : ''), 1000, redo),
                 proof: text('proof', `${existsSync(join(repo, cfg.skill)) ? basename(cfg.skill) : 'no verify skill'}: done-done verify ${drove}, run ${id}: ${run.result}${run.reason ? ` (${run.reason})` : ''}`, 1000),
                 evidence: text('evidence', shown, 1000),
             },

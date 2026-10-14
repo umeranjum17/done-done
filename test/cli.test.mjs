@@ -5209,7 +5209,8 @@ test('squashed text: the measurement flags a title wrapped one letter per line, 
   // label in a narrow box, a normal paragraph and a visually hidden label do not.
   const limits = measure('<p>A normal paragraph of plain words wraps over a few lines at this width and is never squashed.</p><div style="width:4ch"><b>OK</b></div>'
     + '<div class="clip" style="width:5ch;white-space:nowrap;overflow:hidden">Continue to checkout</div><div style="width:10ch;word-break:break-all"><i class="long">Supercalifragilistic</i></div>'
-    + '<label class="sr" style="position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)">Search the release board</label>');
+    + '<label class="sr" style="position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)">Search the release board</label>'
+    + '<div style="transform:scale(0.65);width:90px"><p>Revenue</p></div>');
   assert.deepEqual(limits.map((q) => [q.element, q.chars < 8, q.lines, q.words]), [['div.clip', true, 1, 3], ['i.long', false, 2, 1]]);
   const { r, d, why } = domVerify('dom:\n', { light: { ...CLEAN, squashed_text: measure(card(120)) }, dark: { ...CLEAN, squashed_text: narrow } });
   assert.equal(r.code, 1, r.out);

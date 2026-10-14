@@ -4954,3 +4954,72 @@ test('one verify run captures every matrix cell, and status shows the manifest',
   const rec = JSON.parse(readFileSync(join(t.repo, '.proof', '.done-done', 'runs', `${s.run_id}.json`), 'utf8'));
   assert.equal(rec.matrix.cells.length, 4, 'the run record keeps the manifest');
 });
+
+const GUARDED = `app: notes
+judge:
+  enabled: false
+evidence:
+  root: .proof
+  ignore_paths: ["docs/**"]
+inputs: ["data/**"]
+journeys:
+  shots:
+    command: node make-shots.mjs \${RUN_ID}
+  edit:
+    command: node make-shots.mjs \${RUN_ID} && echo tampered >> data/seed.json
+  add:
+    command: node make-shots.mjs \${RUN_ID} && echo new > data/extra.json
+  remove:
+    command: node make-shots.mjs \${RUN_ID} && rm data/seed.json
+`;
+// A repo with a committed data file watched by the input guard.
+const guarded = (yaml = GUARDED) => {
+  const t = setup(yaml);
+  mkdirSync(join(t.repo, 'data'), { recursive: true });
+  writeFileSync(join(t.repo, 'data', 'seed.json'), '{"token":"secret-value-xyz"}\n');
+  t.sh('add', '-A'); t.sh('commit', '-qm', 'data file');
+  return t;
+};
+const guardRun = (t, journey) => join(t.env.DONE_DONE_HOME, 'runs', 'notes', journey, 'run.json');
+
+test('an honest drive leaves the watched inputs alone and passes, keeping the hash lists', () => {
+  const t = guarded();
+  const s = toon(t.dd('verify', 'shots', '--outcome', 'home renders', '--foreground'));
+  assert.equal(s.result, 'pass');
+  const run = JSON.parse(readFileSync(guardRun(t, s.run_id), 'utf8'));
+  const want = createHash('sha256').update(readFileSync(join(t.repo, 'data', 'seed.json'))).digest('hex');
+  assert.deepEqual(run.guarded.before, [{ path: 'data/seed.json', sha256: want }]);
+  assert.deepEqual(run.guarded.after, run.guarded.before, 'the run record keeps the before/after hash lists');
+});
+
+test('a drive that edits a watched input fails naming the path, never its contents', () => {
+  const t = guarded();
+  const r = t.dd('verify', 'edit', '--outcome', 'home renders', '--foreground');
+  assert.equal(r.code, 1, r.out);
+  assert.match(toon(r).reason, /input guard: data\/seed\.json: changed during the drive/);
+  assert.ok(!r.out.includes('secret-value-xyz'), 'file contents are never printed');
+  const run = JSON.parse(readFileSync(guardRun(t, toon(r).run_id), 'utf8'));
+  assert.notEqual(run.guarded.before[0].sha256, run.guarded.after[0].sha256);
+});
+
+test('a drive that adds or removes a watched file fails naming it', () => {
+  const added = guarded();
+  const a = added.dd('verify', 'add', '--outcome', 'home renders', '--foreground');
+  assert.equal(a.code, 1, a.out);
+  assert.match(toon(a).reason, /input guard: data\/extra\.json: appeared during the drive/);
+  const removed = guarded();
+  const d = removed.dd('verify', 'remove', '--outcome', 'home renders', '--foreground');
+  assert.equal(d.code, 1, d.out);
+  assert.match(toon(d).reason, /input guard: data\/seed\.json: disappeared during the drive/);
+});
+
+test('without an inputs key the guard stays off and the run behaves as before', () => {
+  const t = guarded(GUARDED.replace('inputs: ["data/**"]\n', ''));
+  const a = t.dd('verify', 'add', '--outcome', 'home renders', '--foreground');
+  assert.equal(a.code, 0, a.out, 'an added file with no inputs key still passes');
+  assert.equal(JSON.parse(readFileSync(guardRun(t, toon(a).run_id), 'utf8')).guarded, undefined);
+  const e = t.dd('verify', 'edit', '--outcome', 'home renders', '--foreground');
+  assert.equal(e.code, 1, e.out);
+  assert.match(toon(e).reason, /tracked files have uncommitted changes/, 'an edited file still fails only at the receipt, as before');
+  assert.ok(!e.out.includes('input guard'), 'the guard says nothing with no inputs key');
+});

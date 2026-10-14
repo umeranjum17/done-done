@@ -154,6 +154,16 @@ Each axis is optional; done-done expands the set axes into cells and drops skipp
 
 `run` and `verify` run the journey once per required cell and a non-zero exit in any cell fails the run; `verify` also applies one `journeys.<name>.timeout` to all the cells together. Each cell's run gets `DONE_DONE_THEME`, `DONE_DONE_WIDTH`, `DONE_DONE_FORM` and `DONE_DONE_CELL` (the capture name suffix: `dark.390w.phone` for that cell) set. The recipe sets the app's theme and width from those values - done-done never knows how - and names each capture with its suffix. An agent drive instead names every cell and suffix in its prompt. The run record and `status` carry the manifest: every required cell with its captures, every skipped cell with its reason. Verify's check, `done-done check` and `receipt` all fail naming the missing cell when a non-skipped cell has no capture, so every proof of HEAD must cover every non-skipped cell: captured or skipped with a reason, never silently missing.
 
+### Input guard
+
+One verify run proves it did not change the inputs it reads (fixtures, data files):
+
+```yaml
+inputs: ["data/**", "fixtures/seed.json"]
+```
+
+`inputs` is a list of repo-relative paths or globs, in the no-mistakes style. done-done hashes every matching file before the drive (journey or agent drive) and again after; the check step fails the run when a file changed, appeared or disappeared, naming each path but never printing file contents. The before/after hash lists go into the run record. With no `inputs` key, a run behaves as before.
+
 ### Check a claim
 
 ```sh

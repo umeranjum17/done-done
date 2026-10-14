@@ -23,6 +23,8 @@ export type Config = {
   app: string;
   skill: string;
   journeys: Record<string, { command: string; timeout?: string }>;
+  // Primitive 17 (input guard): repo-relative paths or globs the drive must leave alone. Empty: today's behaviour.
+  inputs: string[];
   // Primitive 1 (run-instance harness): start the app under test on its own port per run. Null when unset: today's behaviour.
   instance: Instance | null;
   // Primitive 2 (capture matrix): optional theme x width x form axes with skip entries; null: today's behaviour.
@@ -80,6 +82,7 @@ const KEYS: Record<string, { scope: 'global' | 'repo' | 'any'; type: 'string' | 
   app: { scope: 'repo', type: 'string' },
   skill: { scope: 'repo', type: 'string' },
   journeys: { scope: 'repo', type: 'journeys' },
+  inputs: { scope: 'repo', type: 'string[]' },
   instance: { scope: 'repo', type: 'instance' },
   matrix: { scope: 'repo', type: 'matrix' },
   'evidence.root': { scope: 'repo', type: 'string' },
@@ -230,6 +233,7 @@ function defaultConfig(repo: string): Config {
     app: basename(repo),
     skill: '',
     journeys: {},
+    inputs: [],
     instance: null,
     matrix: null,
     evidence: { local_root: join(home(), 'evidence'), root: '', allow_dirty: false, ignore_paths: [] },

@@ -38,6 +38,9 @@ const RUNS_TEXT = `runs: each verify or maintain run lives in $DONE_DONE_HOME/ru
   drive: the journey when there is one; else the author agent (agent: in config) drives one feature of the verify skill the way a user
   does and saves screenshots into the run's evidence folder; it may run commands and edit files only in the repo and that folder where
   its CLI can limit it (pi cannot), and a drive that changes a tracked file fails
+  inputs (.done-done.yaml): repo-relative paths or globs the drive must leave alone (fixtures, data files);
+  hashed before and after the drive; the check step fails naming each changed, appeared or
+  disappeared path (never file contents), and the before/after hash lists go into the run record; no key: unchanged
   gate: a judge fail or unsure (or an agent drive with no judged capture) parks the run as awaiting_approval (exit 4); answer it with
   respond: approve or skip (each needs --reason) ends the run overridden, never pass, and its receipt says who and why, so
   receipt --verify refuses it; fix ends the run fail`;
@@ -971,6 +974,77 @@ function skillHash(repo, cfg) {
         return '';
     }
 }
+// Every file the guard can see: tracked files plus untracked ones (ignored files never match).
+function guardCandidates(at) {
+    let tracked = [];
+    try {
+        tracked = execFileSync('git', ['ls-files', '-z'], { cwd: at, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).split('\0').filter(Boolean);
+    }
+    catch {
+        tracked = [];
+    }
+    let untracked = [];
+    try {
+        for (const line of execFileSync('git', ['status', '--porcelain', '--untracked-files=all'], { cwd: at, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).split('\n')) {
+            const m = /^\?\? (.+)$/.exec(line);
+            if (m)
+                untracked.push(m[1].replace(/^"(.*)"$/, '$1'));
+        }
+    }
+    catch {
+        untracked = [];
+    }
+    return [...new Set([...tracked, ...untracked])].sort();
+}
+function guardSnapshot(at, patterns) {
+    if (!patterns.length)
+        return [];
+    const candidates = guardCandidates(at);
+    const paths = new Set();
+    for (const p of patterns) {
+        if (/[*?{\[]/.test(p)) {
+            for (const c of candidates)
+                if (c === p || c.startsWith(`${p}/`) || matchesGlob(c, p))
+                    paths.add(c);
+        }
+        else if (existsSync(join(at, p)) && statSync(join(at, p)).isDirectory()) {
+            for (const c of candidates)
+                if (c.startsWith(`${p}/`))
+                    paths.add(c);
+        }
+        else
+            paths.add(p);
+    }
+    return [...paths].sort().map((path) => {
+        try {
+            if (!statSync(join(at, path)).isFile())
+                return { path, sha256: null };
+            return { path, sha256: sha256(readFileSync(join(at, path))) };
+        }
+        catch {
+            return { path, sha256: null };
+        }
+    });
+}
+// Each difference names only its path, never file contents.
+function guardDiff(before, after) {
+    const a = new Map(after.map((f) => [f.path, f.sha256]));
+    const b = new Map(before.map((f) => [f.path, f.sha256]));
+    const out = [];
+    for (const [path, h] of b) {
+        const g = a.get(path);
+        if (h === null && g !== null && g !== undefined)
+            out.push(`${path}: appeared during the drive`);
+        else if (h !== null && g !== null && g !== undefined && g !== h)
+            out.push(`${path}: changed during the drive`);
+        else if (h !== null && (g === null || g === undefined))
+            out.push(`${path}: disappeared during the drive`);
+    }
+    for (const [path, g] of a)
+        if (g !== null && !b.has(path))
+            out.push(`${path}: appeared during the drive`);
+    return out.sort();
+}
 // The drive's input is the journey command, or for an agent drive the author agent and model that drove it.
 function inputsOf(repo, cfg, journey, author) {
     const h = head(repo);
@@ -1131,6 +1205,7 @@ async function runSteps(dir) {
                 const evidence = runDir(cfg, rec.run_id);
                 const tracked = () => sha256(execFileSync('git', ['diff', 'HEAD', '--binary'], { cwd: at, maxBuffer: Infinity, stdio: ['ignore', 'pipe', 'pipe'] }));
                 const before = tracked();
+                const guardBefore = guardSnapshot(at, cfg.inputs);
                 const scratch = join(dir, 'tmp');
                 mkdirSync(scratch, { recursive: true });
                 // With an instance block the app is already running at $DONE_DONE_BASE_URL; the drive uses it, never a fixed port.
@@ -1159,6 +1234,8 @@ async function runSteps(dir) {
                 const blocker = String(answer?.blocker ?? '').trim();
                 rec.exit = a.ok && !blocker ? 0 : 1;
                 const changed = tracked() !== before;
+                if (cfg.inputs.length)
+                    run.guarded = { before: guardBefore, after: guardSnapshot(at, cfg.inputs) };
                 const sealed = closeRun(at, cfg, rec);
                 if (!fix)
                     run.record = join(recordsDir(cfg), `${rec.run_id}.json`);
@@ -1177,6 +1254,7 @@ async function runSteps(dir) {
             else {
                 begin('drive');
                 rec = openRun(at, cfg, run.journey, command.replaceAll('${RUN_ID}', id), id);
+                const guardBefore = guardSnapshot(at, cfg.inputs);
                 const fd = openSync(join(dir, 'logs', `${fix}drive.log`), 'a');
                 // With an instance block the app starts first on its own port; the journey talks to $DONE_DONE_BASE_URL.
                 let instEnv = {};
@@ -1231,6 +1309,8 @@ async function runSteps(dir) {
                 closeSync(fd);
                 if (run.runner?.instance_pgid)
                     stopInstance(run.runner.instance_pgid);
+                if (cfg.inputs.length)
+                    run.guarded = { before: guardBefore, after: guardSnapshot(at, cfg.inputs) };
                 const sealed = closeRun(at, cfg, rec);
                 if (!fix)
                     run.record = join(recordsDir(cfg), `${rec.run_id}.json`);
@@ -1244,6 +1324,17 @@ async function runSteps(dir) {
             }
             begin('check');
             const files = rec.files.map((f) => join(cfg.evidence.root, f.path));
+            // The input guard: the drive must leave the watched inputs alone. A difference fails the check step,
+            // naming each path but never file contents; the before/after hash lists stay in the run record.
+            if (run.guarded) {
+                const diffs = guardDiff(run.guarded.before, run.guarded.after);
+                if (diffs.length) {
+                    const findings = diffs.map((why) => ({ level: 'fail', why }));
+                    set(step, 'failed', { exit: 1, findings });
+                    log('check', { result: 'fail', findings });
+                    return { end: { result: 'fail', reason: `check: input guard: ${diffs.join('; ')}` }, asks: [] };
+                }
+            }
             // The check's own findings end the check step; the judge, when on and the check did not fail, is its own step.
             let checkFindings = 0;
             const judging = (code, findings) => {

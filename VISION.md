@@ -39,7 +39,7 @@ What ships now:
 What comes next:
 
 - `auto_fix` for each `verify` step, like no-mistakes.
-- More project-agnostic primitives, such as an `init` base for new projects.
+- More project-agnostic primitives.
 - Help to write the proof steps for your app.
 
 Custom behaviour from a project becomes a new primitive in done-done.

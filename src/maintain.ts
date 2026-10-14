@@ -4,7 +4,7 @@ import { accessSync, closeSync, constants, existsSync, lstatSync, mkdirSync, ope
 import { dirname, extname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import type { Question } from '@byokit/decide';
 import { type AgentAnswer, askAgent, editOnlyReason, type JudgeChoice, notStartable, selectAgent, selectJudge } from './agents.js';
-import { type Config, UsageError } from './config.js';
+import { type Config } from './config.js';
 import { askJudge, backend } from './judge.js';
 
 // `done-done maintain`, part 1 and read only: locate the verify skill, check its feature index in plain code, send one
@@ -68,8 +68,10 @@ const digest = (abs: string) => {
   }
   return hash.digest('hex');
 };
-export const repoState = (repo: string) => {
-  const paths = [...new Set([...git(repo, 'diff', '--name-only', '-z', 'HEAD').split('\0'), ...git(repo, 'ls-files', '-z', '--others', '--exclude-standard').split('\0')])].filter(Boolean);
+// skip: repo paths left out (done-done's own folders in the repo), as git pathspecs.
+export const pathspec = (skip: string[]) => ['--', '.', ...skip.map((p) => `:(exclude)${p}`)];
+export const repoState = (repo: string, skip: string[] = []) => {
+  const paths = [...new Set([...git(repo, 'diff', '--name-only', '-z', 'HEAD', ...pathspec(skip)).split('\0'), ...git(repo, 'ls-files', '-z', '--others', '--exclude-standard', ...pathspec(skip)).split('\0')])].filter(Boolean);
   const files: string[] = [];
   const extra: string[] = [];
   for (const p of paths) {
@@ -85,7 +87,7 @@ export const repoState = (repo: string) => {
     else if (st?.isFile() && readable(abs)) files.push(p);
     else if (st?.isFile()) extra.push(`${p} unreadable ${st.mode}`);
   }
-  return [git(repo, 'rev-parse', 'HEAD'), git(repo, 'status', '--porcelain', '--untracked-files=all'), ...extra, ...files.map((p) => `${p} ${digest(join(repo, p))}`)].join('\n');
+  return [git(repo, 'rev-parse', 'HEAD'), git(repo, 'status', '--porcelain', '--untracked-files=all', ...pathspec(skip)), ...extra, ...files.map((p) => `${p} ${digest(join(repo, p))}`)].join('\n');
 };
 const lines = (p: string) => readFileSync(p, 'utf8').split('\n');
 
@@ -478,13 +480,6 @@ const tryText = (p: string) => {
   }
 };
 
-// The judge on a fix path (auto_fix) is never the fixer's own agent, at any model, even when judge.allow_same accepts it for a plain verify.
-export function refuseSameSession(choice: JudgeChoice): JudgeChoice {
-  if (choice.independence !== 'agent')
-    throw new UsageError(`judge: the judge ${choice.agent} (model ${choice.model}) is the fixer's own agent (${choice.author.agent}) at any model, and the judge is never the agent that did the work; judge.allow_same does not apply to auto_fix`, 'Ask the user for another judge agent and save it: done-done init --judge <agent> --judge-model <model>');
-  return choice;
-}
-
 // The fix-branch flow every auto_fix step shares: the user's agent edits a detached done-done worktree, plain code
 // checks each attempt, and done-done makes the commit; the user's branch and checkout are never touched.
 
@@ -509,8 +504,8 @@ export async function inWorktree<T>(repo: string, wt: string, body: (base: strin
 }
 
 // Why plain code drops one fix attempt, or '' when it may go on. bad: the changed paths the step forbids, named as badWhat.
-export function attemptProblem(repo: string, checkout: string, wt: string, base: string, who: string, a: AgentAnswer, changed: string[], bad: string[], badWhat: string, target: string): string {
-  if (repoState(repo) !== checkout) return `${who} changed your checkout at ${repo} during the fix; done-done does not undo changes there, so check git status`;
+export function attemptProblem(repo: string, checkout: string, wt: string, base: string, who: string, a: AgentAnswer, changed: string[], bad: string[], badWhat: string, target: string, skip: string[] = []): string {
+  if (repoState(repo, skip) !== checkout) return `${who} changed your checkout at ${repo} during the fix; done-done does not undo changes there, so check git status`;
   if (git(wt, 'rev-parse', 'HEAD').trim() !== base) return `${who} made a commit; done-done makes the commit itself, so the attempt is dropped`;
   if (bad.length) return `${who} changed ${badWhat} (${named(bad)}), so the attempt is dropped with the done-done worktree; your branch is untouched`;
   // A lost answer after edits still gets the re-run: the re-run, not the agent's word, says whether the fix holds.
@@ -542,7 +537,7 @@ async function fix<S>(run: MaintainRun, dir: string, cfg: Config, h: Harness<S>,
     return { result: 'blocked', reason: `dirty: uncommitted changes to tracked files (${named(dirty)}); commit them, or set auto_fix: { maintain: 0 }, then run again` };
   }
   const agent = selectAgent(cfg);
-  const choice = refuseSameSession(selectJudge(cfg, agent));
+  const choice = selectJudge(cfg, agent, true);
   const checkout = repoState(repo);
   const wt = join(dir, 'fix');
   const scratch = join(dir, 'tmp');

@@ -2310,6 +2310,19 @@ test('signoff refuses a value past the contract limit, a capture outside its run
   assert.equal(m.code, 2, m.out);
 });
 
+test('signoff on a rerun that reused its drive sends the captures of the run that made them', () => {
+  const t = setup();
+  const a = toon(t.dd('verify', 'shots', '--outcome', 'home and settings render', '--foreground'));
+  const r = t.dd('rerun', '--run', a.run_id);
+  assert.equal(r.code, 0, r.out);
+  assert.deepEqual(JSON.parse(readFileSync(join(t.env.DONE_DONE_HOME, 'runs', 'notes', toon(r).run_id, 'events.jsonl'), 'utf8').split('\n').find((l) => l.includes('rerun_of'))).reused, ['resolve', 'drive']);
+  const s = t.dd('signoff', '--run', toon(r).run_id);
+  assert.equal(s.code, 0, s.out);
+  const file = join(t.repo, toon(s).file);
+  const m = JSON.parse(readFileSync(file, 'utf8'));
+  assert.deepEqual([m.key, m.media, dirname(file)], [`dd-evidence-${toon(r).run_id}`, ['home.png', 'settings.png'], join(t.repo, '.proof', a.run_id)]);
+});
+
 test('a rerun refused by the judge preflight exits 2 and creates no run folder', () => {
   const t = setup(JUDGED);
   mkdirSync(t.env.DONE_DONE_HOME, { recursive: true });

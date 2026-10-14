@@ -2260,16 +2260,24 @@ function cmdSignoff(argv) {
         file = join(root, id, 'signoff-gate.json');
     }
     else if (run.kind === 'verify' && run.status === 'completed' && run.record) {
-        // The message sits in the run's evidence folder, so each media path is relative to it and stays inside it.
+        // The message sits in the folder of the run that made the captures (a rerun that reused its drive sends its source's),
+        // so each media path is relative to it and stays inside it.
         const again = `Capture it again: done-done rerun --run ${id}`;
-        let rec;
+        let rec, folder;
         try {
             rec = JSON.parse(readFileSync(run.record, 'utf8'));
         }
         catch {
             return refuse('its run record is missing or unreadable', again);
         }
-        const folder = realpathSync(runDir(cfg, id));
+        try {
+            folder = realpathSync(runDir(cfg, rec.run_id));
+        }
+        catch {
+            return refuse('its run folder is missing', again);
+        }
+        if (!under(realpathSync(cfg.evidence.root), folder))
+            refuse(`its run folder ${rec.run_id} is outside the evidence root`, again);
         const names = rec.files.map((f) => {
             let p, bytes;
             try {

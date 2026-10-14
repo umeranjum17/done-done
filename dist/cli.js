@@ -1509,7 +1509,7 @@ async function sortJudged(run, cfg, open, record, h, park = false) {
 // auto_fix.verify: the user's agent fixes product code in a done-done worktree at the verified head, done-done commits it and
 // `again` verifies there, up to `tries` times; a pass or a gate keeps a done-done/verify-<run-id> branch, never the user's.
 async function fixVerify(run, cfg, dir, first, tries, h, again) {
-    h.begin('fix');
+    const fixStep = h.begin('fix');
     const repo = run.repo;
     const skill = relative(repo, join(repo, cfg.skill));
     const agent = selectAgent(cfg);
@@ -1542,7 +1542,7 @@ async function fixVerify(run, cfg, dir, first, tries, h, again) {
         let base = start;
         const copied = carry();
         if (copied)
-            return { blocked: copied };
+            return (h.set(fixStep, 'failed'), run.findings = open, { blocked: copied });
         for (let k = 1; k <= tries; k++) {
             const step = h.begin('fix');
             const round = { attempt: k, failures: open };

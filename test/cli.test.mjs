@@ -5152,7 +5152,7 @@ test('verify with auto_fix ends blocked, naming the ignored file, when a copied 
   mkdirSync(t.env.DONE_DONE_HOME, { recursive: true });
   writeFileSync(join(t.env.DONE_DONE_HOME, 'config.yaml'), 'agent: opencode\nagent_config:\n  opencode: { model: opencode-go/author }\n');
   const r = doctorIn(t.repo, { ...e, PATH: `${e.PATH}:${dirname(process.execPath)}` }, 'verify', 'shots', '--outcome', 'the home screen shows the title Notes', '--foreground');
-  assert.deepEqual([r.code, toon(r).result, existsSync(join(e.PATH, 'fixer'))], [1, 'blocked', false], r.out);
+  assert.deepEqual([r.code, toon(r).result, existsSync(join(e.PATH, 'fixer')), toon(r).steps.find((x) => x.name === 'fix').status], [1, 'blocked', false, 'failed'], r.out);
   assert.match(toon(r).reason, /^fix: copy of your ignored secret\.key into the fix worktree failed/);
 });
 

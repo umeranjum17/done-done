@@ -2142,8 +2142,9 @@ function ensureIgnored(repo: string, rel: string): boolean {
 
 // `init` also scaffolds the project's verify skill from the repo's own files: a port of the
 // fleet create-verification-skill interview (surface, run, drive, observe, isolate).
-// Scaffold only: where only a live drive can fill a blank, a TODO marker stands in place of
-// an invented command. An existing skill is never overwritten, so re-run is idempotent.
+// Every line is an action: a detected handle gets concrete drive and capture steps, and a blank detection cannot
+// fill gets the steps to find it and record it there, never an invented command. An existing skill is never
+// overwritten, so re-run is idempotent.
 function headText(p: string, max = 12000): string {
   try {
     if (!lstatSync(p).isFile()) return '';
@@ -2160,9 +2161,12 @@ type Detected = {
   harness: string;
   observe: string;
   isolate: string;
-  features: { slug: string; title: string; reach: string }[];
+  features: { slug: string; title: string; reach: string; drive: string; capture: string }[];
   omitted: number;
 };
+
+// Where a drive stops and how it records what it found, for every step that asks it to find something.
+const RECORD = 'once the drive works, write what you found here in place of this instruction (after the drive: a `done-done verify` drive changes no repo file)';
 
 const slug = (t: string) => t.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40) || 'feature';
 
@@ -2209,7 +2213,8 @@ function detectApp(repo: string): Detected {
   const commands = [...text.matchAll(/\.command\(\s*['"`]([^'"`\s\]]+)/g)]
     .map((m) => m[1])
     .filter((c, i, a) => a.indexOf(c) === i);
-  const web = has('react', 'next', 'vue', 'nuxt', 'svelte', 'solid', 'vite', 'webpack', 'playwright', '@playwright/test', 'cypress', 'puppeteer');
+  // A page served as HTML is a web UI even with no framework dependency.
+  const web = has('react', 'next', 'vue', 'nuxt', 'svelte', 'solid', 'vite', 'webpack', 'playwright', '@playwright/test', 'cypress', 'puppeteer') || /text\/html|<html[\s>]/i.test(text);
   const cliish = bins.length > 0 || commands.length > 0 || has('commander', 'yargs', 'oclif', 'cac');
   const api = routes.length > 0 || has('express', 'fastify', 'koa', 'hono');
   const surface = web ? 'web UI' : cliish ? 'CLI' : api ? 'API/service' : 'app (unrecognized surface)';
@@ -2217,37 +2222,54 @@ function detectApp(repo: string): Detected {
     scripts.dev ? `npm run dev (${scripts.dev})`
     : scripts.start ? `npm start (${scripts.start})`
     : bins.length ? `node ${bins[0]} --help`
-    : make ? 'TODO(live drive): pick the dev target from the Makefile and record it here'
-    : 'TODO(live drive): how the app starts locally (no npm script, bin or Makefile found)';
+    : make ? `Read the Makefile for the target that starts the app (dev, run, serve or start) and start it with \`make <target>\`; ${RECORD}.`
+    : `No start script, bin or Makefile was found: read README.md and the entry file for how the app starts, and start it; ${RECORD}.`;
   const port = `${scripts.dev ?? ''} ${scripts.start ?? ''}`.match(/(?:localhost:|--port[= ])(\d{4,5})/)?.[1];
   const ready = port
-    ? `http://localhost:${port} answers (TODO(live drive): confirm the ready log line)`
+    ? `\`curl -sS -o /dev/null http://localhost:${port}/\` exits 0. BASE below is http://localhost:${port}`
     : web || api
-      ? 'TODO(live drive): the URL and ready log line the server prints'
-      : 'TODO(live drive): how to tell the app is ready (log line, port, prompt)';
+      ? `the launch output prints the app URL and \`curl -sS -o /dev/null <that URL>\` exits 0. BASE below is that URL; ${RECORD}`
+      : 'the launch command runs with no error (exit 0, or a prompt waiting for input)';
   const harness = has('playwright', '@playwright/test', 'cypress', 'puppeteer')
     ? 'browser/CDP (Playwright)'
+    : web ? 'a browser tool (for example chrome-devtools-axi)'
     : cliish ? 'tmux/PTY'
     : api ? 'plain HTTP (curl)'
-    : 'TODO(live drive)';
+    : 'a shell (run the launch command and read its output)';
   const observe = web
     ? 'screenshots of the resulting state the outcome is about'
     : cliish
       ? 'terminal transcripts, exit codes and side effects (files written, rows inserted)'
       : api
         ? 'response bodies, status codes and side effects (rows inserted, messages sent)'
-        : 'TODO(live drive): what evidence this surface can capture';
+        : 'screenshots of a page it shows, or its output saved as text when the outcome is text';
   const isolate = web || port
-    ? 'TODO(live drive): confirm two instances run side by side (ports, data dirs, profiles); until then drive one instance at a time'
+    ? 'Drive one instance at a time unless .done-done.yaml has an instance block, which gives each run its own port and HOME'
     : 'each run uses its own invocation; never drive a shared session the user owns';
+  const cli = bins.length ? `node ${bins[0]}` : scripts.start ? 'npm start --' : '<the launch command>';
+  const shot = (s: string) => `screenshot the resulting page to $DONE_DONE_EVIDENCE_ROOT/${s}.png`;
+  const saved = (s: string) => `save the output and exit status to $DONE_DONE_EVIDENCE_ROOT/${s}.txt`;
+  const capture = { page: shot, text: saved, any: (s: string) => `${shot(s)}, or for a text outcome ${saved(s)}` };
+  const open = 'open BASE in the browser, take a snapshot and act on the page by its visible labels';
+  const found: { base: string; title: string; reach: string; drive: string; cap: keyof typeof capture; command: boolean }[] = [
+    ...routes.map((r) => {
+      const [method, path] = r.split(' ');
+      const drive = !web ? `send it with \`curl -sS -i -X ${method} BASE${path}\`, with the body its handler reads (search the source for "${path}")`
+        : method === 'GET' ? open.replace('BASE', `BASE${path}`)
+        : `find the form or button that sends ${r} (search the source for "${path}"), then fill and submit it as a user does`;
+      return { base: slug(r), title: r, reach: `the ${r} route`, drive, cap: web ? 'page' : 'text', command: false } as const;
+    }),
+    ...commands.map((c) => ({ base: slug(c), title: `\`${c}\` command`, reach: `the CLI run with \`${c}\``, drive: `run \`${cli} ${c} --help\` to learn its arguments, then \`${cli} ${c} <arguments>\` as a user does`, cap: 'text', command: true }) as const),
+  ];
+  if (!found.length)
+    found.push(web
+      ? { base: 'main', title: 'Main page', reach: 'BASE, the first page a user opens', drive: open, cap: 'page', command: false }
+      : { base: 'main', title: 'Main journey', reach: 'what README.md says a user opens or runs first', drive: `read README.md and the entry file for what a user opens or runs first, then open it in a browser tool or run it in a shell as a user does; ${RECORD}`, cap: 'any', command: false });
   const features: (Detected['features'][number] & { command: boolean })[] = [];
-  for (const f of [
-    ...routes.map((r) => ({ base: slug(r), title: r, reach: `the ${r} route`, command: false })),
-    ...commands.map((c) => ({ base: slug(c), title: `\`${c}\` command`, reach: `the CLI run with \`${c}\``, command: true })),
-  ]) {
+  for (const f of found) {
     let s = f.base;
     for (let n = 2; features.some((g) => g.slug === s); n++) s = `${f.base}-${n}`;
-    features.push({ slug: s, title: f.title, reach: f.reach, command: f.command });
+    features.push({ slug: s, title: f.title, reach: f.reach, drive: f.drive, capture: capture[f.cap](s), command: f.command });
   }
   const commandsFound = features.filter((f) => f.command);
   const shown = [...features.filter((f) => !f.command).slice(0, commandsFound.length ? 4 : 5), ...commandsFound].slice(0, 5);
@@ -2257,7 +2279,7 @@ function detectApp(repo: string): Detected {
 function verifySkillMd(app: string, d: Detected): string {
   const name = `verify-${app}`;
   const found = [
-    ...(d.features.length ? d.features.map((f) => `- ${f.title}: ${f.reach}`) : ['- TODO(live drive): no routes or commands found; map the first feature on the first live drive']),
+    ...d.features.map((f) => `- ${f.title}: ${f.reach}`),
     ...(d.omitted ? [`- ${d.omitted} more found and not listed; add them by hand or run maintain later.`] : []),
   ];
   return `---
@@ -2267,14 +2289,14 @@ description: Drive the ${app} ${d.surface} the way a user does and capture proof
 
 # ${name}
 
-Scaffolded by \`done-done init\` from this repo's own files (surface: ${d.surface}). Lines marked TODO need one live drive before they can be trusted.
+Scaffolded by \`done-done init\` from this repo's own files (surface: ${d.surface}). Where a step says to find something, the first drive finds it and records it there.
 
 ## Launch
 
 ${d.launch}
 
 Ready when ${d.ready}. Tear down what you started; never kill by process name.
-When the repo's .done-done.yaml has an instance block, done-done already runs the app at $DONE_DONE_BASE_URL (its own port and HOME): drive that URL, never a hard-coded port.
+When the repo's .done-done.yaml has an instance block, done-done already runs the app at $DONE_DONE_BASE_URL (its own port and HOME): BASE is then that URL, never a hard-coded port.
 
 ## Doctor
 
@@ -2288,7 +2310,14 @@ ${found.join('\n')}
 
 ## Evidence
 
-Capture ${d.observe}. Exercise the real user path, not internal setters; done-done's judge checks every capture in the run folder against the outcome, so save only captures of the resulting state there and keep any of earlier steps outside it; verify side effects alongside what is visible. Evidence goes to the run folder \`done-done run\` prints. When .done-done.yaml sets a matrix block, each journey runs once per theme x width x form cell with DONE_DONE_THEME, DONE_DONE_WIDTH, DONE_DONE_FORM and DONE_DONE_CELL set: name each capture with its cell suffix, so every cell is captured or skipped with a reason, never silently missing. When .done-done.yaml sets a dom block, write next to each capture its page-check record, the capture's name with .dom.json for its extension (home.dark.390w.png -> home.dark.390w.dom.json): ${DOM_RECORD}.
+Capture ${d.observe}. Exercise the real user path, not internal setters; done-done's judge checks every capture in the run folder against the outcome, so save only captures of the resulting state there and keep any of earlier steps outside it; verify side effects alongside what is visible. Evidence goes to the run folder \`done-done run\` prints. Every drive uses these done-done primitives:
+
+- Matrix: when .done-done.yaml sets a matrix block, each journey runs once per theme x width x form cell with DONE_DONE_THEME, DONE_DONE_WIDTH, DONE_DONE_FORM and DONE_DONE_CELL set: name each capture with its cell suffix, so every cell is captured or skipped with a reason, never silently missing.
+- DOM: when .done-done.yaml sets a dom block, write next to each capture its page-check record, the capture's name with .dom.json for its extension (home.dark.390w.png -> home.dark.390w.dom.json): ${DOM_RECORD}.
+- Text: for a text outcome, save the CLI output, log or JSON itself as a .txt, .log or .json capture; the check needs it to hold text and JSON to parse.
+- Secrets: never write a secret (key, token, password, Bearer header) into evidence or logs; verify scans them and fails the run on a hit.
+- Spends: a journey with \`spends:\` runs only after the user approves the spend at verify's gate; never run it another way.
+- Before/after: with \`base_ref\` set, verify also drives the base ref into the run folder's before/; save the same captures under the same names there, so each pairs with its base capture.
 
 ## Cleanup
 
@@ -2297,13 +2326,11 @@ Stop the instances this run started and remove scratch state. Evidence survives 
 }
 
 function verifyFeatureMd(app: string, d: Detected, f: Detected['features'][number]): string {
-  return `# ${f.title}\n\nPart of the ${app} verification map; reached at ${f.reach}.\n\n## Sub-features\n\nTODO(live drive): list what this covers.\n\n## How to get to it (user POV)\n\n${f.reach}.\n\n## Driving it with ${d.harness}\n\nTODO(live drive): the exact selectors or commands that drive it.\n\n## Gotchas\n\nTODO(live drive): what surprised the first live drive.\n`;
+  return `# ${f.title}\n\nPart of the ${app} verification map; reached at ${f.reach}.\n\n## Sub-features\n\nList each thing a user can do here; ${RECORD}.\n\n## How to get to it (user POV)\n\n${f.reach}.\n\n## Driving it with ${d.harness}\n\n1. Launch the app as SKILL.md says and wait until it is ready.\n2. ${f.drive[0].toUpperCase()}${f.drive.slice(1)}.\n3. Capture: ${f.capture}, as SKILL.md's Evidence section says.\n4. Stop what you started.\n\n## Gotchas\n\nWrite here what surprised a drive (a slow load, a login wall, a label that moved) and what worked instead, after the drive.\n`;
 }
 
 function verifyFeaturesMd(app: string, d: Detected): string {
-  const index = d.features.length
-    ? d.features.map((f) => `- [${f.title}](${f.slug}.md): ${f.reach}`).join('\n')
-    : 'TODO(live drive): no features found in source; map the first one here.';
+  const index = d.features.map((f) => `- [${f.title}](${f.slug}.md): ${f.reach}`).join('\n');
   const more = d.omitted ? `\n\n${d.omitted} more found and not listed; add them by hand or run maintain later.` : '';
   return `# ${app} features\n\nThe repo's maintained verification map; a proof that drives one entry point is incomplete when this lists others.\n\n${index}${more}\n`;
 }

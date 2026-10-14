@@ -14,6 +14,7 @@ import { AGENTS, CHEAP, type Config, globalConfigText, home, isAgent, loadConfig
 import { backend, type Capture, judge, judgeable, type Judged, onPath, quote } from './judge.js';
 import { startInstance, stopInstance } from './instance.js';
 import { type Finding as MaintainFinding, maintainSteps, type MaintainResult, refuseSameSession } from './maintain.js';
+import { cellEnv, cellName, cellSuffix, hasMatrix, matrixManifest, splitMatrix } from './matrix.js';
 import { design, KINDS } from './design.js';
 import { checkMedia } from './media.js';
 
@@ -26,7 +27,8 @@ const journeyExample = 'journeys: { smoke: { command: "<drive the real app> > $D
 const JOURNEYS_TEXT = `journeys (.done-done.yaml): the command runs with DONE_DONE_EVIDENCE_ROOT (this run's own new folder in the evidence
   root) and DONE_DONE_RUN_ID set, and \${RUN_ID} in it is replaced; it must write its files into that folder, e.g.
   ${journeyExample}
-  timeout (journeys.<name>.timeout): how long a verify run may drive the journey, e.g. 90s or 30m (default 30m); past it the journey is killed and the run is inconclusive`;
+  timeout (journeys.<name>.timeout): how long a verify run may drive the journey, e.g. 90s or 30m (default 30m); past it the journey is killed and the run is inconclusive
+  matrix (.done-done.yaml): with theme, width or form axes the journey runs once per required cell with DONE_DONE_THEME, DONE_DONE_WIDTH, DONE_DONE_FORM and DONE_DONE_CELL (the capture name suffix) set; name each capture with its suffix, so every cell is captured or skipped with a reason`;
 const CHECKS_TEXT = `Checks block (--from): the newest "## Checks" heading, then these four keys, each at the start of a line:
   outcome: <what a user can now do>
   repro: <command that failed before and passes now, or n/a; a fix PR needs one>
@@ -289,6 +291,7 @@ type RunRecord = {
   exit: number | null;
   files: { path: string; sha256: string; bytes: number }[];
   author?: { agent: string; model: string }; // the agent that drove the run, when no journey did
+  matrix?: ReturnType<typeof matrixManifest>; // the capture-matrix manifest, when a matrix block is set
 };
 
 // A path as the user should see it: repo-relative inside the repo, else with the home directory as ~.
@@ -373,6 +376,7 @@ function closeRun(repo: string, cfg: Config, rec: RunRecord): { code: number; re
       return { path: p, sha256: sha256(b), bytes: b.length };
     });
   rec.ended_at = new Date().toISOString();
+  if (hasMatrix(cfg.matrix)) rec.matrix = matrixManifest(cfg.matrix!, rec.files.map((f) => f.path));
   const record = writeRecord(cfg, rec);
   const rel = (p: string) => citable(repo, join(cfg.evidence.root, p));
   let reason = '';
@@ -393,6 +397,7 @@ function closeRun(repo: string, cfg: Config, rec: RunRecord): { code: number; re
   if (reason) result.reason = reason;
   result.evidence = rows.items;
   if (rows.omitted) result.evidence_omitted = rows.omitted;
+  if (rec.matrix) result.matrix = rec.matrix;
   result.help = [reason
     ? `Fix the capture, commit, then re-run: ${captureHint(cfg)}`
     : `Check this proof: done-done check --outcome "<what you proved>" ${rel(rec.files[0].path)}`];
@@ -469,17 +474,28 @@ async function cmdRun(argv: string[]): Promise<number> {
       return emitted({ code: closed.code, result: { ...closed.result, reason: `instance: ${(e as Error).message}` } });
     }
   }
-  // The journey's own stdout goes to our stderr, never our stdout: stdout carries only done-done's
-  // result document (TOON or --json), so a noisy journey cannot break `run --json | JSON.parse`.
-  const r = await new Promise<number | null>((done) => {
-    spawn(expanded, {
-      cwd: repo, shell: true, stdio: ['inherit', process.stderr, 'inherit'],
-      env: { ...process.env, DONE_DONE_RUN_ID: rec.run_id, DONE_DONE_EVIDENCE_ROOT: runDir(cfg, rec.run_id), ...inst?.env },
-    }).on('error', () => done(null)).on('close', done);
-  });
+  // With a matrix block the journey runs once per required cell with that cell in env.
+  const matrix = hasMatrix(cfg.matrix) ? splitMatrix(cfg.matrix!) : null;
+  const failed: string[] = []; rec.exit = 0;
+  for (const cell of matrix?.required ?? [{}]) {
+    // The journey's own stdout goes to our stderr, never our stdout: stdout carries only done-done's
+    // result document (TOON or --json), so a noisy journey cannot break `run --json | JSON.parse`.
+    const r = await new Promise<number | null>((done) => {
+      spawn(expanded, {
+        cwd: repo, shell: true, stdio: ['inherit', process.stderr, 'inherit'],
+        env: { ...process.env, DONE_DONE_RUN_ID: rec.run_id, DONE_DONE_EVIDENCE_ROOT: runDir(cfg, rec.run_id), ...inst?.env, ...(matrix ? cellEnv(cell) : {}) },
+      }).on('error', () => done(null)).on('close', done);
+    });
+    const code = r ?? 1;
+    if (code !== 0) {
+      if (!failed.length) rec.exit = code;
+      failed.push(`${cellName(cell)} (exit ${code})`);
+    }
+  }
   reap();
-  rec.exit = r ?? 1;
-  return emitted(closeRun(repo, cfg, rec));
+  const sealed = closeRun(repo, cfg, rec);
+  if (matrix && failed.length) return emitted({ code: FAIL, result: { ...sealed.result, reason: `the run command failed for cell ${failed.join('; ')}` } });
+  return emitted(sealed);
 }
 
 type Claim = { outcome: string; files: string[]; title: string; notProven?: string };
@@ -639,6 +655,10 @@ async function runCheck(argv: string[], run?: { dir: string; judge: boolean; jud
     if (rec.dirty && !cfg.evidence.allow_dirty) findings.push({ level: 'fail', why: `${name}: captured from a tree with uncommitted changes (run ${rec.run_id})` });
     if (rec.exit !== null && rec.exit !== 0) findings.push({ level: 'fail', why: `${name}: its run command exited ${rec.exit} (run ${rec.run_id})` });
   }
+  // The capture matrix: every required cell needs a capture named with its suffix, never silently missing.
+  if (hasMatrix(cfg.matrix))
+    for (const c of matrixManifest(cfg.matrix!, files).cells.filter((c) => !c.files.length))
+      findings.push({ level: 'fail', why: `cell ${c.cell} has no capture: name one file *${c.suffix}* (journeys name captures with DONE_DONE_CELL)` });
   // Reuse: fail only when every cited file was already used for a different claim id. The ledger lives in the
   // evidence root next to the run records it guards: one per app (repo), shared by every checkout of it, never in git.
   const ledger = join(cfg.evidence.root, '.done-done', 'ledger');
@@ -1011,10 +1031,12 @@ function drivePrompt(run: Run, at: string, cfg: Config, evidence: string, scratc
   const skill = join(at, cfg.skill);
   const recipe = run.feature ? `the feature recipe ${join(skill, 'features', `${run.feature}.md`)}` : `its feature map ${join(skill, 'features', 'README.md')}, then pick the one feature the outcome is about`;
   const inst = cfg.instance ? `\n\nThe app is already running at $DONE_DONE_BASE_URL (started by done-done on its own port with its own HOME; DONE_DONE_PORT is its port). Drive that instance: do not start your own server or hard-code a port.` : '';
+  const matrix = hasMatrix(cfg.matrix) ? splitMatrix(cfg.matrix!) : null;
+  const cells = !matrix ? '' : `\n\nThe repo asks for every theme x width x form cell below: drive each cell (theme and width are the recipe's job) and save one PNG per cell whose file name holds its suffix, e.g. ${evidence}/home.<suffix>.png:\n${matrix.required.map((c) => `- ${cellName(c)}: *${cellSuffix(c)}*`).join('\n')}${matrix.skipped.length ? `\nSkipped (capture nothing for these):\n${matrix.skipped.map((s) => `- ${cellName(s.cell)} (${s.reason})`).join('\n')}` : ''}`;
   return `You drive the real ${run.app} app the way a user does, to capture proof of one outcome. Someone else judges your captures.
 
 Outcome to prove: ${run.claim}
-${inst}
+${inst}${cells}
 1. Read the verify skill ${join(skill, 'SKILL.md')} (how to launch, check, drive, capture and clean up this app) and ${recipe}.
 2. ${cfg.instance ? 'Drive that running instance' : 'Launch the app as the skill says, then drive'} that feature through the real user path, step by step as its recipe says.
    Never add steps or data to make the outcome look true: capture what that path shows, even when it contradicts the outcome.
@@ -1175,25 +1197,43 @@ async function runSteps(dir: string): Promise<void> {
           return fail(`instance: ${(e as Error).message}`);
         }
       }
-    // An async child keeps the heartbeat going while the journey runs. The journey gets its own process group, so a
-    // timeout or a dead runner can kill it and everything it started.
-    const child = spawn(rec.command!, { cwd: at, shell: true, detached: true, stdio: ['ignore', fd, fd], env: { ...process.env, DONE_DONE_RUN_ID: rec.run_id, DONE_DONE_EVIDENCE_ROOT: runDir(cfg, rec.run_id), ...instEnv } });
-    run.runner!.journey_pgid = child.pid;
-    saveRun(dir, run);
-    let timedOut = false;
-    const timer = setTimeout(() => {
-      timedOut = true;
-      killGroup(child.pid!);
-    }, limit!);
-    rec.exit = await new Promise<number>((done) => child.on('close', (code) => done(code ?? 1)));
-    clearTimeout(timer);
-    closeSync(fd);
-    if (run.runner?.instance_pgid) stopInstance(run.runner.instance_pgid);
-    const sealed = closeRun(at, cfg, rec);
-    if (!fix) run.record = join(recordsDir(cfg), `${rec.run_id}.json`);
-    set(step!, sealed.code === PASS ? 'completed' : 'failed', { exit: rec.exit, outputs: evidenceOf(run.repo, cfg, rec) });
-    if (timedOut) return fail(`journey timed out after ${timeout}`, 'inconclusive');
-    if (sealed.code !== PASS) return fail(sealed.reason);
+      // With a matrix block the journey runs once per required cell with that cell in env.
+      const matrix = hasMatrix(cfg.matrix) ? splitMatrix(cfg.matrix!).required : null;
+      const failed: string[] = []; rec.exit = 0;
+      let timedOut = false; let running: number | undefined;
+      // The timeout bounds the whole verify run's journey: it kills the cell running now and stops the loop.
+      const timer = setTimeout(() => {
+        timedOut = true;
+        if (running) killGroup(running);
+      }, limit!);
+      for (const cell of matrix ?? [{}]) {
+        // An async child keeps the heartbeat going while the journey runs. The journey gets its own process group, so a
+        // timeout or a dead runner can kill it and everything it started.
+        const child = spawn(rec.command!, { cwd: at, shell: true, detached: true, stdio: ['ignore', fd, fd], env: { ...process.env, DONE_DONE_RUN_ID: rec.run_id, DONE_DONE_EVIDENCE_ROOT: runDir(cfg, rec.run_id), ...instEnv, ...(matrix ? cellEnv(cell) : {}) } });
+        run.runner!.journey_pgid = child.pid;
+        running = child.pid;
+        saveRun(dir, run);
+        const code = await new Promise<number>((done) => child.on('close', (c) => done(c ?? 1)));
+        running = undefined;
+        if (timedOut) {
+          failed.push(`${cellName(cell)} (timed out after ${timeout})`);
+          if (!rec.exit) rec.exit = 1;
+          break;
+        }
+        if (code !== 0) {
+          if (!rec.exit) rec.exit = code;
+          failed.push(`${cellName(cell)} (exit ${code})`);
+        }
+      }
+      clearTimeout(timer);
+      closeSync(fd);
+      if (run.runner?.instance_pgid) stopInstance(run.runner.instance_pgid);
+      const sealed = closeRun(at, cfg, rec);
+      if (!fix) run.record = join(recordsDir(cfg), `${rec.run_id}.json`);
+      set(step!, failed.length || sealed.code !== PASS ? 'failed' : 'completed', { exit: rec.exit, outputs: evidenceOf(run.repo, cfg, rec) });
+      if (timedOut) return fail(`journey timed out after ${timeout}`, 'inconclusive');
+      if (matrix && failed.length) return fail(`the journey command failed for cell ${failed.join('; ')}`);
+      if (sealed.code !== PASS) return fail(sealed.reason);
     }
 
     begin('check');
@@ -1321,6 +1361,7 @@ function showRun(dir: string, cfg: Config, command: string, gone = false): numbe
   if (run.response) result.response = run.response;
   if (ev.items.length) result.evidence = ev.items;
   if (ev.omitted) result.evidence_omitted = ev.omitted;
+  if (rec?.matrix) result.matrix = rec.matrix;
   if (run.receipt) result.receipt = run.receipt;
   if (run.fix) result.fix = run.fix;
   if (run.git_status) result.git_status = run.git_status;
@@ -1834,7 +1875,7 @@ ${found.join('\n')}
 
 ## Evidence
 
-Capture ${d.observe}. Exercise the real user path, not internal setters; done-done's judge checks every screenshot in the run folder against the outcome, so save only screenshots of the resulting state there and keep any of earlier steps outside it; verify side effects alongside what is visible. Evidence goes to the run folder \`done-done run\` prints.
+Capture ${d.observe}. Exercise the real user path, not internal setters; done-done's judge checks every screenshot in the run folder against the outcome, so save only screenshots of the resulting state there and keep any of earlier steps outside it; verify side effects alongside what is visible. Evidence goes to the run folder \`done-done run\` prints. When .done-done.yaml sets a matrix block, each journey runs once per theme x width x form cell with DONE_DONE_THEME, DONE_DONE_WIDTH, DONE_DONE_FORM and DONE_DONE_CELL set: name each capture with its cell suffix, so every cell is captured or skipped with a reason, never silently missing.
 
 ## Cleanup
 

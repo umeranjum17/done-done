@@ -2037,7 +2037,7 @@ test('verify judges by default with the judge the user set: opencode judges a cl
   assert.equal(toon(sent).help[0], `Post it to the sign-off board (done-done never posts): npx -y sign-off-axi post --kind evidence --from ${toon(sent).file}`);
   assert.deepEqual(JSON.parse(readFileSync(evFile, 'utf8')), {
     contract: 1, kind: 'evidence', schema: 1, key: `dd-evidence-${o.run_id}`, filer: 'done-done', title: 'notes shots: verify pass', about: 'home and settings render', media: ['home.png', 'settings.png'],
-    run: { run_id: o.run_id, commit: t.head(), outcome: 'home and settings render', repro: 'n/a', proof: `no verify skill: done-done verify shots, run ${o.run_id}: pass`, evidence: 'home.png, settings.png' },
+    run: { run_id: o.run_id, commit: t.head(), outcome: 'home and settings render', repro: `done-done verify shots --outcome "home and settings render" at ${t.head()}`, proof: `no verify skill: done-done verify shots, run ${o.run_id}: pass`, evidence: 'home.png, settings.png' },
   });
   assert.equal(dirname(evFile), join(t.repo, '.proof', o.run_id), 'the message sits in the run folder its media resolve from');
   const v = t.dd('receipt', '--verify', t.head());
@@ -2301,6 +2301,11 @@ test('signoff refuses a value past the contract limit, a capture outside its run
   const out = t.dd('signoff', '--run', ok.run_id);
   assert.equal(out.code, 2, out.out);
   assert.match(toon(out).error, /home\.png left the run folder or changed after the run/);
+  rmSync(shot);
+  const gone = t.dd('signoff', '--run', ok.run_id);
+  assert.equal(gone.code, 2, gone.out);
+  assert.match(toon(gone).error, /home\.png is missing$/);
+  assert.equal(existsSync(join(t.repo, '.proof', ok.run_id, 'signoff-evidence.json')), false);
   const m = t.dd('signoff', '--run', 'nope');
   assert.equal(m.code, 2, m.out);
 });

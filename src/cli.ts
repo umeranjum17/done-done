@@ -112,7 +112,6 @@ const FLAGS: Record<string, string> = {
   '--action <approve|skip|fix>': 'approve: the captures do show the outcome; skip: go on without a judge pass; both end the run overridden; fix: end it fail, then fix the product or the verify skill (done-done maintain checks it against the source)',
   '--reason "<why>"': 'why (required for approve and skip); kept in the run and its receipt with who answered',
   '--limit <n>': 'how many past runs to list (default all)',
-  '--repro "<command>"': 'the repro line of the evidence message: the command that failed before the fix and passes now (default: n/a)',
   '--agent <agent>': 'the coding agent done-done starts (claude, codex, opencode, pi, gemini or acp:<target>), saved as agent in ~/.done-done/config.yaml; without it, init asks in a terminal',
   '--model <model>': 'with --agent: that agent\'s model, saved as agent_config.<agent>.model (opencode: provider/model)',
   '--judge <agent>': `the judge done-done starts (${JUDGES.join(' or ')}), saved as judge.route in ~/.done-done/config.yaml; never the agent and model that did the work; without it, init asks in a terminal`,
@@ -226,8 +225,8 @@ const COMMANDS: Record<string, { usage: [string, string][]; flags: string[]; mor
     more: [RUNS_TEXT],
   },
   signoff: {
-    usage: [['done-done signoff [--run <run-id>] [--repro "<command>"]', "write the run's sign-off message (contract v1): a gate for a run waiting at its gate, evidence for a finished run; it prints the post command and never posts"]],
-    flags: ['--run <run-id>', '--repro "<command>"'],
+    usage: [['done-done signoff [--run <run-id>]', "write the run's sign-off message (contract v1): a gate for a run waiting at its gate, evidence for a finished run; it prints the post command and never posts"]],
+    flags: ['--run <run-id>'],
     more: [RUNS_TEXT],
   },
   history: {
@@ -2121,7 +2120,7 @@ async function cmdRespond(argv: string[]): Promise<number> {
 // message writes no file. done-done never posts it: sign-off is the user's choice, so the help line names the post command.
 const GATE_LABELS = { approve: 'Approve', skip: 'Skip the judge', fix: 'Fix first' };
 function cmdSignoff(argv: string[]): number {
-  const { values } = parseArgs({ args: argv, options: { run: { type: 'string' }, repro: { type: 'string' } } });
+  const { values } = parseArgs({ args: argv, options: { run: { type: 'string' } } });
   const repo = repoRoot();
   const cfg = loadConfig(repo);
   const root = runsRoot(cfg.app);
@@ -2152,11 +2151,14 @@ function cmdSignoff(argv: string[]): number {
     file = join(root, id, 'signoff-gate.json');
   } else if (run.kind === 'verify' && run.status === 'completed' && run.record) {
     // The message sits in the run's evidence folder, so each media path is relative to it and stays inside it.
-    const rec: RunRecord = JSON.parse(readFileSync(run.record, 'utf8'));
+    const again = `Capture it again: done-done rerun --run ${id}`;
+    let rec: RunRecord;
+    try { rec = JSON.parse(readFileSync(run.record, 'utf8')); } catch { return refuse('its run record is missing or unreadable', again); }
     const folder = realpathSync(runDir(cfg, id));
     const names = rec.files.map((f) => {
-      const p = realpathSync(join(cfg.evidence.root, f.path));
-      if (!under(folder, p) || sha256(readFileSync(p)) !== f.sha256) refuse(`${f.path} left the run folder or changed after the run`, `Capture it again: done-done rerun --run ${id}`);
+      let p: string, bytes: Buffer;
+      try { p = realpathSync(join(cfg.evidence.root, f.path)); bytes = readFileSync(p); } catch { return refuse(`${f.path} is missing`, again); }
+      if (!under(folder, p) || sha256(bytes) !== f.sha256) refuse(`${f.path} left the run folder or changed after the run`, again);
       return { name: relative(folder, p), media: /\.(png|jpe?g|webp|mp4|webm)$/i.test(p) && f.bytes <= 50_000_000 };
     });
     if (!names.length) refuse('the run recorded no captures, so it has no evidence to send', `Read it: done-done status --run ${id}`);
@@ -2169,7 +2171,7 @@ function cmdSignoff(argv: string[]): number {
       ...(media.length && { media }),
       run: {
         ...runRef(rec.commit), outcome: text('outcome', run.claim!, 1000, redo),
-        repro: text('repro', values.repro ?? 'n/a', 1000, 'Pass a shorter --repro "<command>"'),
+        repro: text('repro', [`done-done verify`, run.journey ?? (run.feature && `--feature ${run.feature}`), `--outcome "${run.claim}" at ${rec.commit}`].filter(Boolean).join(' '), 1000, redo),
         proof: text('proof', `${existsSync(join(repo, cfg.skill)) ? basename(cfg.skill) : 'no verify skill'}: done-done verify ${drove}, run ${id}: ${run.result}${run.reason ? ` (${run.reason})` : ''}`, 1000),
         evidence: text('evidence', shown, 1000),
       },

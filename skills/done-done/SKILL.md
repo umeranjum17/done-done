@@ -34,6 +34,7 @@ tree: commit the done-done setup (config, capture script) before you capture. `f
 `inconclusive` is not done: fix the cause and re-run, or tell the user exactly what is still unproven.
 A run waiting at its gate (`awaiting_approval`) is the user's call: show them its findings and captures, and run
 `done-done respond` only with their answer and reason. Never approve or skip on your own; `overridden` is not done either.
+A journey that `spends` runs only after the user approves spending: `done-done run <journey>` refuses it, so ask the user and use `verify`.
 
 done-done starts a coding agent the user chose. When it says no agent is set, ask the user which agent
 (and model) to use and save their answer with the command it prints; never choose one for them.

@@ -18,7 +18,7 @@ export const SQUASHED_TEXT = `() => {
     const nodes = [...e.childNodes].filter((n) => n.nodeType === 3 && n.data.trim());
     const text = nodes.map((n) => n.data).join(' ').replace(/\\s+/g, ' ').trim();
     const box = e.getBoundingClientRect(); const s = getComputedStyle(e);
-    if (!text || !box.width || !box.height || s.visibility !== 'visible') continue;
+    if (!text || box.width <= 1 || box.height <= 1 || s.visibility !== 'visible') continue;
     ctx.font = s.fontStyle + ' ' + s.fontWeight + ' ' + s.fontSize + ' ' + s.fontFamily;
     const chars = box.width / (ctx.measureText('abcdefghijklmnopqrstuvwxyz').width / 26); const words = text.split(' ').length; const tops = new Set();
     for (const n of nodes) { const r = document.createRange(); r.selectNodeContents(n); for (const b of r.getClientRects()) if (b.width) tops.add(Math.round(b.top)); }

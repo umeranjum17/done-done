@@ -2264,15 +2264,14 @@ function detectApp(repo) {
     let text = `${scripts.dev ?? ''}\n${scripts.start ?? ''}\n${make}`;
     for (const f of sourceFiles(repo, 40))
         text += `\n${headText(f, 6000)}`;
-    const routes = [...text.matchAll(/\b(app|router|server|api|fastify|routes|r)\.(get|post|put|patch|delete|del|use)\(\s*['"`](\/[^'"`\s]*)/g)]
-        .map((m) => `${m[2].toUpperCase()} ${m[3]}`)
+    const routes = [...text.matchAll(/\b(app|router|server|api|fastify|routes|r)\.(get|post|put|patch|delete|del)\(\s*['"`](\/[^'"`\s]*)/g)]
+        .map((m) => `${m[2] === 'del' ? 'DELETE' : m[2].toUpperCase()} ${m[3]}`)
         .filter((r, i, a) => a.indexOf(r) === i);
     const commands = [...text.matchAll(/\.command\(\s*['"`]([^'"`\s\]]+)/g)]
         .map((m) => m[1])
         .filter((c, i, a) => a.indexOf(c) === i);
+    const web = has('react', 'next', 'vue', 'nuxt', 'svelte', 'solid', 'vite', 'webpack', 'playwright', '@playwright/test', 'cypress', 'puppeteer');
     const cliish = bins.length > 0 || commands.length > 0 || has('commander', 'yargs', 'oclif', 'cac');
-    // A page served as HTML is a web UI even with no framework dependency.
-    const web = has('react', 'next', 'vue', 'nuxt', 'svelte', 'solid', 'vite', 'webpack', 'playwright', '@playwright/test', 'cypress', 'puppeteer') || (!cliish && /text\/html|<html[\s>]/i.test(text));
     const api = routes.length > 0 || has('express', 'fastify', 'koa', 'hono');
     const surface = web ? 'web UI' : cliish ? 'CLI' : api ? 'API/service' : 'app (unrecognized surface)';
     const launch = scripts.dev ? `npm run dev (${scripts.dev})`

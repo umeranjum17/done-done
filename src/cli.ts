@@ -17,6 +17,7 @@ import { type Finding as MaintainFinding, maintainSteps, type MaintainResult, re
 import { cellEnv, cellName, cellSuffix, hasMatrix, matrixManifest, splitMatrix } from './matrix.js';
 import { design, KINDS } from './design.js';
 import { checkMedia } from './media.js';
+import { scanSecrets } from './secrets.js';
 
 const PASS = 0, FAIL = 1, USAGE = 2, INCONCLUSIVE = 3, WAITING = 4;
 
@@ -27,6 +28,8 @@ const journeyExample = 'journeys: { smoke: { command: "<drive the real app> > $D
 const JOURNEYS_TEXT = `journeys (.done-done.yaml): the command runs with DONE_DONE_EVIDENCE_ROOT (this run's own new folder in the evidence
   root) and DONE_DONE_RUN_ID set, and \${RUN_ID} in it is replaced; it must write its files into that folder, e.g.
   ${journeyExample}
+  spends (journeys.<name>.spends): what a run of it spends, e.g. "one live generation"; verify parks such a journey before it runs until
+    the user approves spending for that run (respond --action approve), or it starts with --approve-spend
   timeout (journeys.<name>.timeout): how long a verify run may drive the journey, e.g. 90s or 30m (default 30m); past it the journey is killed and the run is inconclusive
   matrix (.done-done.yaml): with theme, width or form axes the journey runs once per required cell with DONE_DONE_THEME, DONE_DONE_WIDTH, DONE_DONE_FORM and DONE_DONE_CELL (the capture name suffix) set; name each capture with its suffix, so every cell is captured or skipped with a reason`;
 const CHECKS_TEXT = `Checks block (--from): the newest "## Checks" heading, then these four keys, each at the start of a line:
@@ -88,6 +91,7 @@ const FLAGS: Record<string, string> = {
   '--trusted-ref <ref>': 'read .done-done.yaml from this git ref instead of the working tree (use in CI)',
   '--claim-id <id>': 'the claim the evidence proves; evidence already used for another claim id is reuse (default: the current branch, or the PR branch with --from <PR URL>; required on a detached HEAD)',
   '--judge': 'the judge the user set (judge.route, never the agent and model that did the work) says whether each PNG/JPEG capture shows the outcome (verify does this by default; check and receipt only with --judge or judge.enabled: true)',
+  '--approve-spend': 'the user approved spending for this run: a journey with spends: runs without parking for approval',
   '--no-judge': 'skip the judge, only when the user chooses to (or judge.enabled: false in .done-done.yaml)',
   '--verify <head>': 'read-only: verify the receipt recorded for <head>',
   '--outcome "<what a user can now do>"': 'the outcome the run must prove',
@@ -166,7 +170,7 @@ const COMMANDS: Record<string, { usage: [string, string][]; flags: string[]; mor
       ['done-done verify --outcome "<claim>" [--feature <name>]', 'with no journey, the author agent drives a verify skill feature and the judge (never the author) judges its captures'],
       ['done-done verify [<journey>] --outcome "<claim>" --no-wait | --wait | --foreground', 'return at once, wait until the run ends or waits at its gate (default), or run in this process (CI)'],
     ],
-    flags: ['--outcome "<what a user can now do>"', '--feature <name>', '--claim-id <id>', '--judge', '--no-judge', '--wait', '--no-wait', '--foreground'],
+    flags: ['--outcome "<what a user can now do>"', '--feature <name>', '--claim-id <id>', '--judge', '--no-judge', '--approve-spend', '--wait', '--no-wait', '--foreground'],
     more: [RUNS_TEXT],
   },
   maintain: {
@@ -200,6 +204,7 @@ const COMMANDS: Record<string, { usage: [string, string][]; flags: string[]; mor
     usage: [
       ['done-done respond [--run <run-id>] --action approve|skip --reason "<why>"', 'move a run on past its gate; it ends overridden, never pass'],
       ['done-done respond [--run <run-id>] --action fix', 'end a run waiting at its gate as fail'],
+      ['done-done respond [--run <run-id>] --action approve --reason "<why>"', 'at a spend gate: run the journey that spends; skip or fix ends the run fail, nothing spent'],
     ],
     flags: ['--run <run-id>', '--action <approve|skip|fix>', '--reason "<why>"'],
     more: [RUNS_TEXT],
@@ -921,7 +926,8 @@ type Run = {
   fix?: { branch: string; commit: string; files: string[]; attempts: number }; // a maintain run that ended changed
   inputs?: { head: string; journey: string; skill: string };
   // What respond needs to write the receipt once the caller answers the gate, and the answer.
-  gate?: { findings: GateFinding[]; cited: { path: string; sha256: string }[]; head: { commit: string; tree: string }; judge?: JudgeBlock };
+  gate?: { findings: GateFinding[]; cited: { path: string; sha256: string }[]; head: { commit: string; tree: string }; judge?: JudgeBlock; spend?: string };
+  spend?: { by: string; reason?: string; at: string }; // the user approved spending for this run (respond at the spend gate, or --approve-spend)
   response?: { action: 'approve' | 'skip' | 'fix'; by: string; reason?: string; at: string };
 };
 
@@ -1122,6 +1128,13 @@ async function runSteps(dir: string): Promise<void> {
     if (run.journey !== null && !command) throw new Error(`journey ${run.journey} is not in .done-done.yaml`);
     if (limit === null) throw new Error(`journeys.${run.journey}.timeout must be a duration such as 30m or 90s, not ${timeout}`);
     if (!reused) set(step!, 'completed');
+    // A journey that spends real money or credits never runs until the user approved spending for this run.
+    if (journey?.spends && !run.spend && !done('drive')) {
+      const what = `journey ${run.journey} spends (${journey.spends}), so it runs only once the user approves spending for this run`;
+      run.gate = { findings: [{ id: 'spend-1', severity: 'warning', what, action: 'ask-user' }], cited: [], head: head(run.repo), spend: journey.spends };
+      run.status = 'awaiting_approval';
+      return set((step = run.steps.find((s) => s.name === 'drive')!), 'awaiting_approval', { findings: run.gate.findings });
+    }
 
     // One drive, check and judge of the claim at `at`: the user's checkout, or (`fix` names the re-run) a fix worktree.
     const pass = async (at: string, fix = ''): Promise<VerifyPass> => {
@@ -1238,6 +1251,13 @@ async function runSteps(dir: string): Promise<void> {
 
     begin('check');
     const files = rec.files.map((f) => join(cfg.evidence.root, f.path));
+    // No secret may sit in the evidence or the run's logs: a hit fails the run naming the file, line and pattern, never the value.
+    const leaks = scanSecrets([...files, join(dir, 'logs'), join(dir, 'agents')], cfg.secrets).map((l): Finding => ({ level: 'fail', why: `${shown(run.repo, l.file)}:${l.line}: holds a secret (${l.pattern}); remove it, or allow a known-safe match with secrets.allow in .done-done.yaml` }));
+    if (leaks.length) {
+      log('check', { result: 'fail', findings: leaks });
+      set(step!, 'failed', { exit: FAIL, findings: leaks });
+      return { end: { result: 'fail', reason: `secrets: ${leaks[0].why}` }, asks: [] };
+    }
     // The check's own findings end the check step; the judge, when on and the check did not fail, is its own step.
     let checkFindings = 0;
     const judging = (code: number, findings: Finding[]) => {
@@ -1359,6 +1379,7 @@ function showRun(dir: string, cfg: Config, command: string, gone = false): numbe
   });
   if (status === 'awaiting_approval' && run.gate) result.findings = run.gate.findings;
   if (run.response) result.response = run.response;
+  if (run.spend) result.spend = run.spend;
   if (ev.items.length) result.evidence = ev.items;
   if (ev.omitted) result.evidence_omitted = ev.omitted;
   if (rec?.matrix) result.matrix = rec.matrix;
@@ -1373,7 +1394,12 @@ function showRun(dir: string, cfg: Config, command: string, gone = false): numbe
   result.run = shown(run.repo, dir);
   const id = run.run_id;
   result.help =
-    status === 'awaiting_approval' ? [
+    status === 'awaiting_approval' && run.gate?.spend ? [
+      `Ask the user whether to spend ${run.gate.spend} on this run; never decide it for them. Their yes runs the journey:`,
+      `done-done respond --run ${id} --action approve --reason "<who approved the spend>"`,
+      `Their no: done-done respond --run ${id} --action fix   (ends fail, nothing spent)`,
+    ]
+    : status === 'awaiting_approval' ? [
       'Read the findings and look at the captures (evidence above), then answer the gate:',
       `done-done respond --run ${id} --action approve --reason "<why they do show the outcome>"   (ends overridden, never pass)`,
       `done-done respond --run ${id} --action skip --reason "<why to go on without a judge pass>"   (ends overridden, never pass)`,
@@ -1425,7 +1451,7 @@ function refuseParked(cfg: Config, repo: string, claim: string | undefined) {
 async function cmdVerify(argv: string[]): Promise<number> {
   const { values, positionals } = parseArgs({
     args: argv,
-    options: { outcome: { type: 'string' }, feature: { type: 'string' }, 'claim-id': { type: 'string' }, judge: { type: 'boolean' }, 'no-judge': { type: 'boolean' }, wait: { type: 'boolean' }, 'no-wait': { type: 'boolean' }, foreground: { type: 'boolean' } },
+    options: { outcome: { type: 'string' }, feature: { type: 'string' }, 'claim-id': { type: 'string' }, judge: { type: 'boolean' }, 'no-judge': { type: 'boolean' }, 'approve-spend': { type: 'boolean' }, wait: { type: 'boolean' }, 'no-wait': { type: 'boolean' }, foreground: { type: 'boolean' } },
     allowPositionals: true,
   });
   if (!values.outcome?.trim()) throw new UsageError('verify needs --outcome "<what a user can now do>"');
@@ -1455,6 +1481,7 @@ async function cmdVerify(argv: string[]): Promise<number> {
   const created = now();
   const run: Run = {
     schema: 2, run_id: id, kind: 'verify', app: cfg.app, repo, journey, ...drive, claim: values.outcome, claim_id: values['claim-id'] ?? null, branch, judge: judging, status: 'pending',
+    ...(values['approve-spend'] && { spend: { by: answeredBy(repo), reason: 'verify --approve-spend', at: created } }),
     steps: STEPS.map((name) => ({ name, status: 'pending' })), created, updated: created,
     inputs: inputsOf(repo, cfg, journey, drive?.author),
   };
@@ -1658,7 +1685,7 @@ function answeredBy(repo: string): string {
 // Answer a run waiting at its gate. approve and skip write the receipt as overridden (with who and why) and end the run
 // overridden, never pass; fix ends it fail. The runner has exited, so this command finishes the run; the respond lock
 // lets only one answer (or an abort) close it.
-function cmdRespond(argv: string[]): number {
+async function cmdRespond(argv: string[]): Promise<number> {
   const { values } = parseArgs({ args: argv, options: { run: { type: 'string' }, action: { type: 'string' }, reason: { type: 'string' } } });
   const action = values.action;
   if (action !== 'approve' && action !== 'skip' && action !== 'fix') throw new UsageError('respond needs --action approve, skip or fix', 'Run: done-done respond --run <run-id> --action <approve|skip|fix> [--reason "<why>"]');
@@ -1677,6 +1704,19 @@ function cmdRespond(argv: string[]): number {
     const by = answeredBy(repo);
     run.response = { action, by, ...(reason && { reason }), at: now() };
     logEvent(dir, { step: 'gate', response: action, by, ...(reason && { reason }) });
+    // The spend gate: approve runs the journey in a new runner; skip or fix ends the run with nothing spent.
+    if (run.gate.spend) {
+      const drive = run.steps.find((s) => s.name === 'drive')!;
+      if (action !== 'approve') {
+        setStep(dir, run, drive, 'failed');
+        finishRun(dir, run, 'fail', `gate: ${by} chose ${action}: the journey was not run, so nothing was spent`);
+        return showRun(dir, cfg, 'respond');
+      }
+      Object.assign(run, { spend: { by, reason, at: run.response.at }, status: 'pending', gate: undefined, response: undefined, runner: undefined });
+      setStep(dir, run, drive, 'pending');
+      for (const lock of ['runner.lock', 'respond.lock']) rmSync(join(dir, lock));
+      return launch(dir, cfg, 'respond', {});
+    }
     if (action === 'fix') {
       setStep(dir, run, gate, 'failed');
       finishRun(dir, run, 'fail', `gate: ${by} chose fix: ${reason || run.gate.findings[0].what}`);
@@ -2699,7 +2739,7 @@ async function main(argv: string[]): Promise<number> {
     if (cmd === 'logs') return cmdLogs(rest);
     if (cmd === 'rerun') return await cmdRerun(rest);
     if (cmd === 'abort') return cmdAbort(rest);
-    if (cmd === 'respond') return cmdRespond(rest);
+    if (cmd === 'respond') return await cmdRespond(rest);
     if (cmd === 'history') return cmdHistory(rest);
     if (cmd === '__runner') {
       await runSteps(rest[0]);

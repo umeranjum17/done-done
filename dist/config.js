@@ -59,6 +59,8 @@ const KEYS = {
     'evidence.root': { scope: 'repo', type: 'string' },
     'evidence.allow_dirty': { scope: 'repo', type: 'boolean' },
     'evidence.ignore_paths': { scope: 'repo', type: 'string[]' },
+    'secrets.patterns': { scope: 'repo', type: 'regexes' },
+    'secrets.allow': { scope: 'repo', type: 'regexes' },
     'checks.not_proven': { scope: 'repo', type: 'string' },
     'checks.fix_title': { scope: 'repo', type: 'string' },
     'judge.enabled': { scope: 'repo', type: 'boolean' },
@@ -67,7 +69,7 @@ const KEYS = {
     'judge.claude_code': { scope: 'global', type: 'claude_code' },
     'judge.allow_same': { scope: 'global', type: 'boolean' },
 };
-const SECTIONS = new Set(['evidence', 'checks', 'judge']);
+const SECTIONS = new Set(['evidence', 'secrets', 'checks', 'judge']);
 const MAPS = new Set(['auto_fix', 'agent_config', 'agent_args_override', 'agent_path_override', 'judge.claude_code']);
 export const home = () => process.env.DONE_DONE_HOME || join(homedir(), '.done-done');
 // A duration such as 90s, 30m or 1h, in milliseconds; null when the text is not one or is not a delay a timer can run.
@@ -100,6 +102,14 @@ function flatten(doc, file) {
 const isBin = (v) => typeof v === 'string' && (/^[\w.-]+$/.test(v) || isAbsolute(tilde(v)));
 const tilde = (p) => p.replace(/^~(?=\/|$)/, homedir());
 const isMap = (v) => !!v && typeof v === 'object' && !Array.isArray(v);
+const isRegex = (v) => {
+    try {
+        return typeof v === 'string' && !!new RegExp(v);
+    }
+    catch {
+        return false;
+    }
+};
 function apply(target, text, file, scope) {
     if (text === undefined)
         return;
@@ -129,9 +139,10 @@ function apply(target, text, file, scope) {
                                                 : spec.type === 'duration' ? typeof value === 'string' && parseDuration(value) !== null
                                                     : spec.type === 'auto_fix' ? isMap(value) && Object.entries(value).every(([k, n]) => AUTO_FIX_STEPS.includes(k) && Number.isInteger(n) && n >= 0)
                                                         : spec.type === 'matrix' ? !checkMatrix(value)
-                                                            : isMap(value) && Object.values(value).every((j) => j && typeof j.command === 'string');
+                                                            : spec.type === 'regexes' ? (key === 'secrets.allow' ? Array.isArray(value) : isMap(value)) && Object.values(value).every(isRegex)
+                                                                : isMap(value) && Object.values(value).every((j) => j && typeof j.command === 'string' && (j.spends === undefined || (typeof j.spends === 'string' && j.spends.trim() !== '')));
         const want = {
-            journeys: 'a map of name: {command: <string>}',
+            journeys: 'a map of name: {command: <string>, spends: <what a run spends>}',
             instance: '{command: <string>, ready: {url: <http url>} or {command: <shell command>}, ready_timeout: <duration>}',
             matrix: 'a mapping with optional theme (a list of names), width (a list of CSS pixel widths) and form (a list of names), plus skip (a list of partial cells, each with a reason)',
             agent: `one of ${AGENTS.join(', ')}, or acp:<target>`,
@@ -140,6 +151,7 @@ function apply(target, text, file, scope) {
             paths: `a map of <agent>: <binary name or absolute path> for ${AGENTS.join(', ')}`,
             bin: 'a binary name on PATH or an absolute path',
             duration: 'a duration such as 90s, 30m or 1h',
+            regexes: key === 'secrets.allow' ? 'a list of valid regexes' : 'a map of <name>: <valid regex>',
             auto_fix: `a map of <step>: <attempts, 0 or more> for ${AUTO_FIX_STEPS.join(', ')}`,
             route: `claude-code (for claude), answerer:<agent> for one of ${ANSWERER_JUDGES.join(', ')}, or a key route (${Object.keys(KEY_ROUTES).join(', ')}); an acp:<target> agent cannot judge, since done-done cannot send it an image`,
             claude_code: 'a map with config_dir, a string (the claude binary is agent_path_override.claude)',
@@ -227,6 +239,7 @@ function defaultConfig(repo) {
         instance: null,
         matrix: null,
         evidence: { local_root: join(home(), 'evidence'), root: '', allow_dirty: false, ignore_paths: [] },
+        secrets: { patterns: {}, allow: [] },
         checks: { not_proven: 'inconclusive', fix_title: '^(fix|bugfix|hotfix)\\b' },
         judge: { route: '', model: '', allow_same: false, claude_code: { config_dir: join(home(), 'claude') } },
         trusted: false,

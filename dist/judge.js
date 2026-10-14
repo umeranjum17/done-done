@@ -283,7 +283,7 @@ export async function judge(cfg, choose, outcome, captures, records) {
             continue;
         }
         const a = answers.relevance;
-        const options = shape.kind === 'choice' ? shape.options : {};
+        const options = shape.options;
         const reason = a.personReason || a.rationale || options[String(a.answer)] || '';
         const verdict = a.abstained ? { ...row, verdict: 'unsure', reason: `not confident enough (${a.reason})`, cached: false }
             : { ...row, verdict: a.answer === 'correct' ? 'pass' : a.answer === 'wrong' ? 'fail' : 'unsure', reason, cached: false };

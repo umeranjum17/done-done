@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import type { Question } from '@byokit/decide';
 import type { JudgeChoice } from './agents.js';
 import { type Config, home } from './config.js';
-import { askJudge, backend, type Capture, type Judge, judgeable, prepare, readCache, VERSION, writeCache } from './judge.js';
+import { askJudge, backend, type Capture, type Judge, prepare, readCache, screen, VERSION, writeCache } from './judge.js';
 import { decodePixels } from './media.js';
 
 // The design check: one judge request per screen, alone or next to its approved mock, with one question per defect
@@ -60,7 +60,7 @@ const STRIP = { min: 0.02, tolerance: 24, contrast: 64, content: 0.005, alike: 0
 type Band = { edge: 'left' | 'right' | 'top' | 'bottom'; colour: number[]; deep: number; share: number };
 
 function bands(c: Capture): Band[] | undefined {
-  const p = c.media.status === 'ok' && judgeable(c) ? decodePixels(c.bytes, c.media.type) : undefined;
+  const p = c.media.status === 'ok' && screen(c) ? decodePixels(c.bytes, c.media.type) : undefined;
   if (!p) return undefined;
   const { w, h, rgb, clear } = p;
   // The screen's main colour: its most common colour, at 16 levels per channel.
@@ -136,7 +136,7 @@ export function blankStrips(s: Screen): { defects: Defect[]; unresolved: boolean
 // Why a file cannot be judged, or its image as sent.
 function image(c: Capture): { mime: string; bytes: Buffer } | string {
   if (c.media.status !== 'ok') return `${c.name}: ${c.media.why}`;
-  if (!judgeable(c)) return `${c.name}: only PNG and JPEG screens are judged`;
+  if (!screen(c)) return `${c.name}: only PNG and JPEG screens are judged`;
   const i = prepare(c);
   return typeof i === 'string' ? `${c.name}: ${i}` : i;
 }

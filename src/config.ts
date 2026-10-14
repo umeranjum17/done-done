@@ -133,11 +133,7 @@ const isBin = (v: unknown) => typeof v === 'string' && (/^[\w.-]+$/.test(v) || i
 const tilde = (p: string) => p.replace(/^~(?=\/|$)/, homedir());
 const isMap = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v);
 const isRegex = (v: unknown) => {
-  try {
-    return typeof v === 'string' && !!new RegExp(v);
-  } catch {
-    return false;
-  }
+  try { return typeof v === 'string' && !!new RegExp(v); } catch { return false; }
 };
 
 function apply(target: Config, text: string | undefined, file: string, scope: 'global' | 'repo') {

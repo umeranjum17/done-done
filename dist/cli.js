@@ -26,8 +26,7 @@ const journeyExample = 'journeys: { smoke: { command: "<drive the real app> > $D
 const JOURNEYS_TEXT = `journeys (.done-done.yaml): the command runs with DONE_DONE_EVIDENCE_ROOT (this run's own new folder in the evidence
   root) and DONE_DONE_RUN_ID set, and \${RUN_ID} in it is replaced; it must write its files into that folder, e.g.
   ${journeyExample}
-  spends (journeys.<name>.spends): what a run of it spends, e.g. "one live generation"; verify parks such a journey before it runs until
-    the user approves spending for that run (respond --action approve)
+  spends (journeys.<name>.spends): what a run spends, e.g. "one live generation"; verify parks the journey until the user approves that run (respond --action approve)
   timeout (journeys.<name>.timeout): how long a verify run may drive the journey, e.g. 90s or 30m (default 30m); past it the journey is killed and the run is inconclusive
   matrix (.done-done.yaml): with theme, width or form axes the journey runs once per required cell with DONE_DONE_THEME, DONE_DONE_WIDTH, DONE_DONE_FORM and DONE_DONE_CELL (the capture name suffix) set; name each capture with its suffix, so every cell is captured or skipped with a reason`;
 const CHECKS_TEXT = `Checks block (--from): the newest "## Checks" heading, then these four keys, each at the start of a line:
@@ -200,7 +199,6 @@ const COMMANDS = {
         usage: [
             ['done-done respond [--run <run-id>] --action approve|skip --reason "<why>"', 'move a run on past its gate; it ends overridden, never pass'],
             ['done-done respond [--run <run-id>] --action fix', 'end a run waiting at its gate as fail'],
-            ['done-done respond [--run <run-id>] --action approve --reason "<why>"', 'at a spend gate: run the journey that spends; skip or fix ends the run fail, nothing spent'],
         ],
         flags: ['--run <run-id>', '--action <approve|skip|fix>', '--reason "<why>"'],
         more: [RUNS_TEXT],
@@ -1590,7 +1588,7 @@ function showRun(dir, cfg, command, gone = false) {
         status === 'awaiting_approval' && run.gate?.spend ? [
             `Ask the user whether to spend ${run.gate.spend} on this run; never decide it for them. Their yes runs the journey:`,
             `done-done respond --run ${id} --action approve --reason "<who approved the spend>"`,
-            `Their no: done-done respond --run ${id} --action fix   (ends fail, nothing spent)`,
+            `Their no: done-done respond --run ${id} --action skip --reason "<why they said no>"   (ends fail, nothing spent)`,
         ]
             : status === 'awaiting_approval' ? [
                 'Read the findings and look at the captures (evidence above), then answer the gate:',
@@ -1871,8 +1869,17 @@ async function cmdAbort(argv) {
     };
     if (gated && !createOnce(join(dir, 'respond.lock')))
         return answering();
-    // Decided from a read taken under the lock: a respond that just approved has already moved the run on.
-    const current = loadRun(dir);
+    const read = () => {
+        try {
+            return loadRun(dir);
+        }
+        catch (e) {
+            if (gated)
+                rmSync(join(dir, 'respond.lock'), { force: true });
+            throw e;
+        }
+    };
+    const current = read();
     if (gated && current.status !== 'awaiting_approval') {
         rmSync(join(dir, 'respond.lock'), { force: true });
         return answering();
@@ -1893,7 +1900,7 @@ async function cmdAbort(argv) {
         }
         await waitGone(current.runner.pid);
     }
-    const after = loadRun(dir);
+    const after = read();
     if (closed(after, after.status))
         return FAIL;
     try {
@@ -1937,15 +1944,14 @@ async function cmdRespond(argv) {
     const id = pickId(root, repo, 'respond', cfg, values.run);
     const dir = join(root, id);
     const notAtGate = (r) => new UsageError(`run ${id} is not waiting at its gate (it is ${r.status === 'awaiting_approval' ? 'being answered' : shownStatus(r)})`, `Read it: done-done status --run ${id}`);
-    const respondLock = join(dir, 'respond.lock');
-    if (!createOnce(respondLock))
+    if (!createOnce(join(dir, 'respond.lock')))
         throw notAtGate(loadRun(dir));
-    const run = loadRun(dir);
-    if (run.status !== 'awaiting_approval' || !run.gate) {
-        rmSync(respondLock, { force: true });
-        throw notAtGate(run);
-    }
     try {
+        const run = loadRun(dir);
+        if (run.status !== 'awaiting_approval' || !run.gate)
+            throw notAtGate(run);
+        if (run.gate.spend && action === 'fix')
+            throw new UsageError(`run ${id} is at a spend gate, which takes --action approve or skip`, `Run: done-done respond --run ${id} --action approve|skip --reason "<why>"`);
         const gate = run.steps.find((s) => s.name === 'gate');
         const by = answeredBy(repo);
         run.response = { action, by, ...(reason && { reason }), at: now() };

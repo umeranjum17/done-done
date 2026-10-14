@@ -110,8 +110,7 @@ done-done run review
 - hashes every file in the run's folder. Every checkout of a repo shares the evidence root, so a run records only its own folder and never another run's files;
 - writes a run record to `<root>/.done-done/runs/<run-id>.json`.
 
-A non-zero command exit, or a run that wrote nothing, fails. A run that wrote nothing names its folder and the two names the command gets it under: `DONE_DONE_EVIDENCE_ROOT` and `DONE_DONE_RUN_ID` (or `${RUN_ID}` in the command). `run <journey>` refuses a journey with `spends` (exit 2, nothing runs); `verify` asks the user first, see [Journeys that spend](#journeys-that-spend).
-
+A non-zero command exit, or a run that wrote nothing, fails. A run that wrote nothing names its folder and the two names the command gets it under: `DONE_DONE_EVIDENCE_ROOT` and `DONE_DONE_RUN_ID` (or `${RUN_ID}` in the command).
 For a proof you drive by hand or through an agent:
 
 ```sh
@@ -360,7 +359,7 @@ After the drive, whether it passed or failed, and before the check, `verify` sca
 
 #### Journeys that spend
 
-A journey with `spends: "<what a run spends>"` (for example `one live generation`) never runs until the user approves spending for that run. `verify` parks it before the drive: `status: awaiting_approval` at the `drive` step, exit 4, with one `ask-user` finding `spend-1`, and help that says to ask the user. `respond --action approve --reason "<who approved the spend>"` records `spend` (who, why, when) in `run.json`, then runs the journey and the rest of the run as usual, waiting like `verify`; `--action skip` or `fix` ends the run `fail` with nothing spent. `run <journey>` refuses such a journey (exit 2, nothing runs) and prints the `verify` command that asks the user. Every new run asks again, `rerun` included, unless it reuses the source's drive. With `auto_fix.verify`, a failed spending run is not fixed or re-run, so one approval pays for one run; its reason says so. With a `matrix` block, the approval covers every required cell of that run, and the park names how many cells (it runs once per cell). A journey without `spends` is unchanged.
+A journey with `spends: "<what a run spends>"` (for example `one live generation`) never runs until the user approves spending for that run. `verify` parks it before the drive: `status: awaiting_approval` at the `drive` step, exit 4, with one `ask-user` finding `spend-1`, and help that says to ask the user. `respond --action approve --reason "<who approved the spend>"` records `spend` (who, why, when) in `run.json`, then runs the journey and the rest of the run as usual, waiting like `verify`; `--action skip` ends the run `fail` with nothing spent; the gate takes only `approve` or `skip` (exit 2 otherwise). `run <journey>` refuses such a journey (exit 2, nothing runs) and prints the `verify` command that asks the user. Every new run asks again, `rerun` included, unless it reuses the source's drive. With `auto_fix.verify`, a failed spending run is not fixed or re-run, so one approval pays for one run; its reason says so. With a `matrix` block, the approval covers every required cell of that run, and the park names how many cells (it runs once per cell). A journey without `spends` is unchanged.
 
 `rerun` starts a new run of the same journey and leaves the source run as it was. It reuses `resolve` when HEAD, the journey command and the verify skill are unchanged, and `drive` too when the source's drive record is clean and bound to that HEAD; every other step runs again, and the judge runs as in the source run, and `--no-judge` turns it off for that run; `judge.enabled` does not change a rerun. It refuses a source run that is still pending or running (exit 2), one whose journey's process group is still alive, a `maintain` run (exit 2; start a new one with `done-done maintain`), and any claim with a run waiting at its gate in the source's checkout (exit 2, as above). `--wait` (the default) waits for the new run and prints it; `--no-wait` returns at once, with exit 4 while the run is still running.
 
@@ -463,9 +462,7 @@ An `agent_config` entry merges with the defaults field by field, so `claude: { m
 | `app` | repo directory name |
 | `skill` | `.agents/skills/verify-<app>` |
 | `journeys.<name>.command` | none |
-| `journeys.<name>.spends` | none; what a run of the journey spends, so `verify` waits for the user's approval, see [Journeys that spend](#journeys-that-spend) |
-| `secrets.patterns` | `{}`; more `<name>: <regex>` secret shapes, see [Secrets in the evidence](#secrets-in-the-evidence) |
-| `secrets.allow` | `[]`; regexes a known-safe match may match |
+| `secrets.patterns`, `secrets.allow` | `{}` and `[]`; extra `<name>: <regex>` secret shapes and known-safe regexes, see [Secrets in the evidence](#secrets-in-the-evidence) |
 | `journeys.<name>.timeout` | `30m`; a positive duration such as `90s` or `30m` (up to about 24 days), used by `verify` |
 | `instance` | none; the app under test started per run, see [Run-instance harness](#run-instance-harness) |
 | `matrix` | none, so each journey runs once; `theme`, `width`, `form` and `skip` set the [capture matrix](#capture-matrix) |

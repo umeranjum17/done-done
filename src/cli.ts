@@ -1031,7 +1031,7 @@ type GuardFile = { path: string; sha256: string | null };
 function guardCandidates(at: string): string[] {
   let listed: string;
   try {
-    listed = execFileSync('git', ['ls-files', '-z', '--cached', '--others'], { cwd: at, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+    listed = execFileSync('git', ['ls-files', '-z', '--cached', '--others'], { cwd: at, encoding: 'utf8', maxBuffer: Infinity, stdio: ['ignore', 'pipe', 'pipe'] });
   } catch (e) {
     throw new Error(`input guard: cannot list the repo files: ${(e as Error).message.split('\n')[0]}`);
   }
@@ -1040,14 +1040,15 @@ function guardCandidates(at: string): string[] {
 
 function guardSnapshot(at: string, patterns: string[]): GuardFile[] {
   if (!patterns.length) return [];
-  const candidates = guardCandidates(at);
+  let candidates: string[] | undefined;
+  const listed = () => (candidates ??= guardCandidates(at));
   const paths = new Set<string>();
   for (const raw of patterns) {
     const p = inputPattern(raw);
     if (/[*?{\[]/.test(p)) {
-      for (const c of candidates) if (c === p || c.startsWith(`${p}/`) || matchesGlob(c, p)) paths.add(c);
+      for (const c of listed()) if (c === p || c.startsWith(`${p}/`) || matchesGlob(c, p)) paths.add(c);
     } else if (existsSync(join(at, p)) && statSync(join(at, p)).isDirectory()) {
-      for (const c of candidates) if (c.startsWith(`${p}/`)) paths.add(c);
+      for (const c of listed()) if (c.startsWith(`${p}/`)) paths.add(c);
     } else paths.add(p);
   }
   const root = realpathSync(at);

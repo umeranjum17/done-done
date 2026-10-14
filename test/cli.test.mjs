@@ -5288,6 +5288,14 @@ test('a rerun whose watched inputs changed drives again instead of reusing the s
   assert.match(toon(r).reason, /input guard: fixtures\/seed\.json: changed during the drive/);
 });
 
+test('a literal input still guards in a repo whose file listing exceeds 1 MiB', () => {
+  const t = guarded();
+  mkdirSync(join(t.repo, 'scratch'));
+  for (let i = 0; i < 12000; i++) writeFileSync(join(t.repo, 'scratch', `${String(i).padStart(5, '0')}-${'x'.repeat(90)}.txt`), '');
+  const s = toon(t.dd('verify', 'shots', '--outcome', 'home renders', '--foreground'));
+  assert.equal(s.result, 'pass', s.reason);
+});
+
 test('a non-ASCII untracked input is guarded by its real name', () => {
   const t = guarded(`${GUARDED}  accent:\n    command: node make-shots.mjs \${RUN_ID} && echo new > "data/café.json"\n`);
   const a = t.dd('verify', 'accent', '--outcome', 'home renders', '--foreground');

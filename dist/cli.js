@@ -1010,7 +1010,7 @@ function skillHash(repo, cfg) {
 function guardCandidates(at) {
     let listed;
     try {
-        listed = execFileSync('git', ['ls-files', '-z', '--cached', '--others'], { cwd: at, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+        listed = execFileSync('git', ['ls-files', '-z', '--cached', '--others'], { cwd: at, encoding: 'utf8', maxBuffer: Infinity, stdio: ['ignore', 'pipe', 'pipe'] });
     }
     catch (e) {
         throw new Error(`input guard: cannot list the repo files: ${e.message.split('\n')[0]}`);
@@ -1020,17 +1020,18 @@ function guardCandidates(at) {
 function guardSnapshot(at, patterns) {
     if (!patterns.length)
         return [];
-    const candidates = guardCandidates(at);
+    let candidates;
+    const listed = () => (candidates ??= guardCandidates(at));
     const paths = new Set();
     for (const raw of patterns) {
         const p = inputPattern(raw);
         if (/[*?{\[]/.test(p)) {
-            for (const c of candidates)
+            for (const c of listed())
                 if (c === p || c.startsWith(`${p}/`) || matchesGlob(c, p))
                     paths.add(c);
         }
         else if (existsSync(join(at, p)) && statSync(join(at, p)).isDirectory()) {
-            for (const c of candidates)
+            for (const c of listed())
                 if (c.startsWith(`${p}/`))
                     paths.add(c);
         }

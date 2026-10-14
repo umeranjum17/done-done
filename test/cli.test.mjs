@@ -5064,3 +5064,56 @@ test('without an inputs key the guard stays off and the run behaves as before', 
   assert.match(toon(e).reason, /tracked files have uncommitted changes/, 'an edited file still fails only at the receipt, as before');
   assert.ok(!e.out.includes('input guard'), 'the guard says nothing with no inputs key');
 });
+
+// DOM assertions: a two-cell matrix whose journey writes each cell's capture and, when given, its page-check record.
+const CLEAN = { url: 'http://127.0.0.1/home', overflow: false, overflowing: [], console_errors: [], failed_requests: [] };
+const BROKEN = { ...CLEAN, overflow: true, overflowing: ['div#wide'], console_errors: ['boom'], failed_requests: [{ url: 'http://127.0.0.1/x.js', status: 404 }] };
+const domVerify = (dom, records, capture = shot(['light', 'dark'])) => {
+  const t = matrixed(MATRIXED.replace('  width: [390, 1280]\n', '').replace('journeys:', `${dom}journeys:`), '!cell', (t) =>
+    `import { writeFileSync } from 'node:fs';\n${capture(t)}\nconst rec = ${JSON.stringify(records)}[cell];\nif (rec) writeFileSync(root + '/home.' + cell + '.dom.json', JSON.stringify(rec));`);
+  const r = t.dd('verify', 'cells', '--outcome', 'home renders in every theme', '--foreground');
+  // verify names only the first finding; the check of the same files lists them all.
+  const c = t.dd('check', '--outcome', 'home renders in every theme', ...toon(r).evidence);
+  return { r, d: toon(r), why: toon(c).findings?.map((f) => f.why) ?? [] };
+};
+
+test('a dom block passes when every capture has a clean page-check record', () => {
+  const { r, d } = domVerify('dom:\n', { light: CLEAN, dark: { ...CLEAN, failed_requests: [{ url: 'http://127.0.0.1/moved.js', status: 304 }] } });
+  assert.equal(d.result, 'pass', r.out);
+});
+
+test('a dom block fails naming the capture and each overflow, console error and failed request', () => {
+  const { r, d, why } = domVerify('dom: {}\n', { light: CLEAN, dark: BROKEN });
+  assert.equal(r.code, 1, r.out);
+  assert.equal(d.result, 'fail');
+  assert.deepEqual(why.filter((w) => w.includes('home.dark.png')).map((w) => w.replace(/^.*home\.dark\.png: /, '')), [
+    'http://127.0.0.1/home overflows the viewport horizontally (div#wide)',
+    'http://127.0.0.1/home console error: boom',
+    'http://127.0.0.1/home request failed (404): http://127.0.0.1/x.js',
+  ]);
+  assert.equal(why.length, 3, r.out);
+});
+
+test('dom allow lists and fail_on_overflow: false suppress those issues', () => {
+  const { r, d } = domVerify('dom:\n  allow_console: ["^bo+m$"]\n  allow_requests: ["x\\\\.js$"]\n  fail_on_overflow: false\n', { light: CLEAN, dark: BROKEN });
+  assert.equal(d.result, 'pass', r.out);
+});
+
+test('a dom block fails each matrix cell whose capture has no page-check record, and refuses a bad block', () => {
+  const { r, why } = domVerify('dom:\n', { light: CLEAN });
+  assert.equal(r.code, 1, r.out);
+  assert.deepEqual(why.filter((w) => /page-check/.test(w)).map((w) => w.replace(/^.*\/(home\.)/, '$1')), ['home.dark.png: no page-check record home.dark.dom.json next to it (the dom block needs one per captured screen)']);
+  const bad = setup(MATRIXED.replace('journeys:', 'dom:\n  allow_console: ["("]\njourneys:')).dd('run', 'cells');
+  assert.equal(bad.code, 2, bad.out);
+  assert.match(bad.out, /dom allow_console: \\"\(\\" is not a valid regular expression/);
+});
+
+test('a dom block asks for a page-check record of a gif capture too', () => {
+  const gif = () => `writeFileSync(root + '/home.' + cell + '.gif', Buffer.from('GIF89a;', 'latin1'));`;
+  const { r, why } = domVerify('dom:\n', {}, gif);
+  assert.equal(r.code, 1, r.out);
+  assert.deepEqual(why.filter((w) => /page-check/.test(w)).map((w) => w.replace(/^.*\/(home\.)/, '$1')).sort(), [
+    'home.dark.gif: no page-check record home.dark.dom.json next to it (the dom block needs one per captured screen)',
+    'home.light.gif: no page-check record home.light.dom.json next to it (the dom block needs one per captured screen)',
+  ]);
+});

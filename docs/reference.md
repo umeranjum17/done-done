@@ -164,6 +164,25 @@ inputs: ["data/**", "fixtures/seed.json"]
 
 `inputs` is a list of repo-relative paths or globs, in the no-mistakes style. done-done hashes every matching file before the drive (journey or agent drive) and again after; the check step fails the run when a file changed, appeared or disappeared, naming each path but never printing file contents. The before/after hash lists go into the run record. With no `inputs` key, a run behaves as before.
 
+### DOM assertions
+
+A screenshot judge misses page-level defects. With a `dom` block, a run also fails when a captured screen's page overflows the viewport horizontally, logged a console error or had a failed request:
+
+```yaml
+dom:
+  allow_console: ["favicon\\.ico"]   # console error regexes that do not fail
+  allow_requests: ["/analytics/"]     # request URL regexes that do not fail
+  fail_on_overflow: true              # default true
+```
+
+done-done never drives the browser: the recipe or journey writes one page-check record next to each capture (PNG, JPEG, WebP, GIF, MP4 or WebM), named as the capture with `.dom.json` for its extension (`home.dark.390w.png` -> `home.dark.390w.dom.json`, so a matrix cell's record carries its `DONE_DONE_CELL` suffix):
+
+```json
+{"url": "http://127.0.0.1:4100/", "overflow": true, "overflowing": ["div#wide"], "console_errors": ["boom"], "failed_requests": [{"url": "http://127.0.0.1:4100/x.js", "status": 404}]}
+```
+
+With your browser tool, for example chrome-devtools-axi: `overflow` and `overflowing` from `eval` (document `scrollWidth` beyond `clientWidth`, and the elements whose right edge passes it), `console_errors` from `console --type error`, `failed_requests` (status 400 or more, or 0 for no response) from `network`. The scaffolded verify skill and the agent drive prompt carry the same recipe. Verify's check and `done-done check` fail naming the capture and each issue not on an allow list, and fail when a capture has no record or a record is not this shape. No `dom` block keeps today's behaviour.
+
 ### Check a claim
 
 ```sh
@@ -449,6 +468,7 @@ An `agent_config` entry merges with the defaults field by field, so `claude: { m
 | `journeys.<name>.timeout` | `30m`; a positive duration such as `90s` or `30m` (up to about 24 days), used by `verify` |
 | `instance` | none; the app under test started per run, see [Run-instance harness](#run-instance-harness) |
 | `matrix` | none, so each journey runs once; `theme`, `width`, `form` and `skip` set the [capture matrix](#capture-matrix) |
+| `dom` | none; page-check records per capture, see [DOM assertions](#dom-assertions) |
 | `evidence.root` | `<local_root>/<app>`, outside the repo. A relative path is under the repo; an absolute path is used as-is |
 | `evidence.allow_dirty` | `false` |
 | `evidence.ignore_paths` | `[]` |

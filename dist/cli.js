@@ -1135,6 +1135,14 @@ async function runSteps(dir) {
         const pass = async (at, fix = '') => {
             const id = fix ? `${run.run_id}-${fix}` : run.run_id;
             const fail = (reason, fixable = [], result = 'fail') => ({ end: { result, reason: `drive: ${reason}` }, asks: [], fixable });
+            const scanRun = (files) => scanSecrets([...files, join(dir, 'logs'), join(dir, 'agents')], cfg.secrets);
+            const secretWhy = (l) => `${shown(run.repo, l.file)}:${l.line}: holds a secret (${l.pattern}); remove it, or allow a known-safe match with secrets.allow in .done-done.yaml`;
+            const evidenceFiles = () => rec.files.map((f) => join(cfg.evidence.root, f.path));
+            // Every failed drive is scanned too: a leak is named in the reason, and a leaking log excerpt never reaches the fix agent.
+            const failScanned = (reason, files, fixable = [], result = 'fail') => {
+                const leak = scanRun(files)[0];
+                return leak ? fail(`${reason}; secrets: ${secretWhy(leak)}`) : fail(reason, fixable, result);
+            };
             let rec;
             if (!fix && done('drive') && run.record) {
                 begin('drive');
@@ -1164,7 +1172,7 @@ async function runSteps(dir) {
                     }
                     catch (e) {
                         set(step, 'failed');
-                        return fail(`instance: ${e.message}`);
+                        return failScanned(`instance: ${e.message}`, []);
                     }
                 }
                 const a = await askAgent({
@@ -1192,7 +1200,7 @@ async function runSteps(dir) {
                 set(step, why ? 'failed' : 'completed', { exit: rec.exit, outputs: evidenceOf(run.repo, cfg, rec) });
                 // Only a blocker says the product stopped the drive; a lost or bad answer is the agent's own failure.
                 if (why)
-                    return fail(why, a.ok && blocker && !changed ? [{ kind: 'drive', file: `features/${run.feature || picked || 'README'}.md`, what: why }] : []);
+                    return failScanned(why, evidenceFiles(), a.ok && blocker && !changed ? [{ kind: 'drive', file: `features/${run.feature || picked || 'README'}.md`, what: why }] : []);
             }
             else {
                 begin('drive');
@@ -1212,7 +1220,7 @@ async function runSteps(dir) {
                     catch (e) {
                         closeSync(fd);
                         set(step, 'failed');
-                        return fail(`instance: ${e.message}`);
+                        return failScanned(`instance: ${e.message}`, []);
                     }
                 }
                 // With a matrix block the journey runs once per required cell with that cell in env.
@@ -1257,16 +1265,16 @@ async function runSteps(dir) {
                     run.record = join(recordsDir(cfg), `${rec.run_id}.json`);
                 set(step, failed.length || sealed.code !== PASS ? 'failed' : 'completed', { exit: rec.exit, outputs: evidenceOf(run.repo, cfg, rec) });
                 if (timedOut)
-                    return fail(`journey timed out after ${timeout}`, [], 'inconclusive');
+                    return failScanned(`journey timed out after ${timeout}`, evidenceFiles(), [], 'inconclusive');
                 if (matrix && failed.length)
-                    return fail(`the journey command failed for cell ${failed.join('; ')}`);
+                    return failScanned(`the journey command failed for cell ${failed.join('; ')}`, evidenceFiles());
                 if (sealed.code !== PASS)
-                    return fail(sealed.reason, tries && /^the run command exited/.test(sealed.reason) ? [{ kind: 'drive', file: run.journey, what: `the journey ${sealed.reason}; the end of its output:\n${readFileSync(logFile, 'utf8').slice(-2000)}` }] : []);
+                    return failScanned(sealed.reason, evidenceFiles(), tries && /^the run command exited/.test(sealed.reason) ? [{ kind: 'drive', file: run.journey, what: `the journey ${sealed.reason}; the end of its output:\n${readFileSync(logFile, 'utf8').slice(-2000)}` }] : []);
             }
             begin('check');
-            const files = rec.files.map((f) => join(cfg.evidence.root, f.path));
+            const files = evidenceFiles();
             // No secret may sit in the evidence or the run's logs: a hit fails the run naming the file, line and pattern, never the value.
-            const leaks = scanSecrets([...files, join(dir, 'logs'), join(dir, 'agents')], cfg.secrets).map((l) => ({ level: 'fail', why: `${shown(run.repo, l.file)}:${l.line}: holds a secret (${l.pattern}); remove it, or allow a known-safe match with secrets.allow in .done-done.yaml` }));
+            const leaks = scanRun(files).map((l) => ({ level: 'fail', why: secretWhy(l) }));
             if (leaks.length) {
                 log('check', { result: 'fail', findings: leaks });
                 set(step, 'failed', { exit: FAIL, findings: leaks });

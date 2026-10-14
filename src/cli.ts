@@ -17,7 +17,7 @@ import { attemptProblem, changedSince, commitFix, dirtyTracked, FIX_SCHEMA, type
 import { cellEnv, cellName, cellSuffix, hasMatrix, matrixManifest, splitMatrix } from './matrix.js';
 import { design, KINDS } from './design.js';
 import { checkMedia } from './media.js';
-import { scanSecrets } from './secrets.js';
+import { scanSecrets, type Leak } from './secrets.js';
 
 const PASS = 0, FAIL = 1, USAGE = 2, INCONCLUSIVE = 3, WAITING = 4;
 
@@ -1146,6 +1146,14 @@ async function runSteps(dir: string): Promise<void> {
     const pass = async (at: string, fix = ''): Promise<VerifyPass> => {
     const id = fix ? `${run.run_id}-${fix}` : run.run_id;
     const fail = (reason: string, fixable: Failure[] = [], result: 'fail' | 'inconclusive' = 'fail'): VerifyPass => ({ end: { result, reason: `drive: ${reason}` }, asks: [], fixable });
+    const scanRun = (files: string[]) => scanSecrets([...files, join(dir, 'logs'), join(dir, 'agents')], cfg.secrets);
+    const secretWhy = (l: Leak) => `${shown(run.repo, l.file)}:${l.line}: holds a secret (${l.pattern}); remove it, or allow a known-safe match with secrets.allow in .done-done.yaml`;
+    const evidenceFiles = () => rec.files.map((f) => join(cfg.evidence.root, f.path));
+    // Every failed drive is scanned too: a leak is named in the reason, and a leaking log excerpt never reaches the fix agent.
+    const failScanned = (reason: string, files: string[], fixable: Failure[] = [], result: 'fail' | 'inconclusive' = 'fail'): VerifyPass => {
+      const leak = scanRun(files)[0];
+      return leak ? fail(`${reason}; secrets: ${secretWhy(leak)}`) : fail(reason, fixable, result);
+    };
     let rec: RunRecord;
     if (!fix && done('drive') && run.record) {
       begin('drive');
@@ -1173,7 +1181,7 @@ async function runSteps(dir: string): Promise<void> {
           instPort = inst.env;
         } catch (e) {
           set(step!, 'failed');
-          return fail(`instance: ${(e as Error).message}`);
+          return failScanned(`instance: ${(e as Error).message}`, []);
         }
       }
       const a = await askAgent({
@@ -1197,7 +1205,7 @@ async function runSteps(dir: string): Promise<void> {
         : sealed.code !== PASS ? sealed.reason : '';
       set(step!, why ? 'failed' : 'completed', { exit: rec.exit, outputs: evidenceOf(run.repo, cfg, rec) });
       // Only a blocker says the product stopped the drive; a lost or bad answer is the agent's own failure.
-      if (why) return fail(why, a.ok && blocker && !changed ? [{ kind: 'drive', file: `features/${run.feature || picked || 'README'}.md`, what: why }] : []);
+      if (why) return failScanned(why, evidenceFiles(), a.ok && blocker && !changed ? [{ kind: 'drive', file: `features/${run.feature || picked || 'README'}.md`, what: why }] : []);
     } else {
       begin('drive');
       rec = openRun(at, cfg, run.journey!, command!.replaceAll('${RUN_ID}', id), id);
@@ -1215,7 +1223,7 @@ async function runSteps(dir: string): Promise<void> {
         } catch (e) {
           closeSync(fd);
           set(step!, 'failed');
-          return fail(`instance: ${(e as Error).message}`);
+          return failScanned(`instance: ${(e as Error).message}`, []);
         }
       }
       // With a matrix block the journey runs once per required cell with that cell in env.
@@ -1252,15 +1260,15 @@ async function runSteps(dir: string): Promise<void> {
       const sealed = closeRun(at, cfg, rec);
       if (!fix) run.record = join(recordsDir(cfg), `${rec.run_id}.json`);
       set(step!, failed.length || sealed.code !== PASS ? 'failed' : 'completed', { exit: rec.exit, outputs: evidenceOf(run.repo, cfg, rec) });
-      if (timedOut) return fail(`journey timed out after ${timeout}`, [], 'inconclusive');
-      if (matrix && failed.length) return fail(`the journey command failed for cell ${failed.join('; ')}`);
-      if (sealed.code !== PASS) return fail(sealed.reason, tries && /^the run command exited/.test(sealed.reason) ? [{ kind: 'drive', file: run.journey!, what: `the journey ${sealed.reason}; the end of its output:\n${readFileSync(logFile, 'utf8').slice(-2000)}` }] : []);
+      if (timedOut) return failScanned(`journey timed out after ${timeout}`, evidenceFiles(), [], 'inconclusive');
+      if (matrix && failed.length) return failScanned(`the journey command failed for cell ${failed.join('; ')}`, evidenceFiles());
+      if (sealed.code !== PASS) return failScanned(sealed.reason, evidenceFiles(), tries && /^the run command exited/.test(sealed.reason) ? [{ kind: 'drive', file: run.journey!, what: `the journey ${sealed.reason}; the end of its output:\n${readFileSync(logFile, 'utf8').slice(-2000)}` }] : []);
     }
 
     begin('check');
-    const files = rec.files.map((f) => join(cfg.evidence.root, f.path));
+    const files = evidenceFiles();
     // No secret may sit in the evidence or the run's logs: a hit fails the run naming the file, line and pattern, never the value.
-    const leaks = scanSecrets([...files, join(dir, 'logs'), join(dir, 'agents')], cfg.secrets).map((l): Finding => ({ level: 'fail', why: `${shown(run.repo, l.file)}:${l.line}: holds a secret (${l.pattern}); remove it, or allow a known-safe match with secrets.allow in .done-done.yaml` }));
+    const leaks = scanRun(files).map((l): Finding => ({ level: 'fail', why: secretWhy(l) }));
     if (leaks.length) {
       log('check', { result: 'fail', findings: leaks });
       set(step!, 'failed', { exit: FAIL, findings: leaks });

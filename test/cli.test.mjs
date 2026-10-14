@@ -1605,7 +1605,7 @@ test('a verify run fails when its log or text evidence holds a secret, naming wh
     const shownLog = t.dd('logs', '--step', 'check', '--run', toon(r).run_id).out;
     assert.ok(![r.out, shownLog].some((o) => o.includes(value.slice(-12))), `the ${pattern} value is never printed`);
   }
-  for (const [name, value] of [['API_KEY', 'abcdef0123456789ABCDEF!xyz'], ['DB_PASSWORD', 'Tr0ub4dor&3xtra']]) {
+  for (const [name, value] of [['API_' + 'KEY', 'abcdef0123456789' + 'ABCDEF!xyz'], ['DB_' + 'PASSWORD', 'Tr0ub4dor' + '&3xtra']]) {
     writeFileSync(leak, `starting\n${name + '=' + value}\n`);
     const r = t.dd('verify', 'logged', '--outcome', 'home and settings render');
     assert.equal(r.code, 1, r.out);
@@ -1622,6 +1622,19 @@ test('a verify run fails when its log or text evidence holds a secret, naming wh
   assert.equal(t.dd('verify', 'logged', '--outcome', 'home and settings render').code, 0, 'clean evidence passes');
   writeFileSync(join(t.repo, '.done-done.yaml'), 'app: notes\nsecrets:\n  allow: ["("]\n');
   assert.match(t.dd('status').out, /secrets\.allow must be a list of valid regexes/);
+});
+
+test('a failed verify drive whose output holds a secret names where and never prints the value', () => {
+  const t = setup(JUDGED.replace('journeys:', 'judge:\n  enabled: false\njourneys:'));
+  const token = `API_${'TOKEN'}=${'f4ke0'.repeat(6)}`;
+  writeFileSync(join(t.dir, 'leak.txt'), `starting\n${token}\n`);
+  appendFileSync(join(t.repo, '.done-done.yaml'), '  failer:\n    command: cat ../leak.txt; exit 1\n');
+  t.sh('add', '-A');
+  t.sh('commit', '-qm', 'failing journey');
+  const r = t.dd('verify', 'failer', '--outcome', 'home and settings render');
+  assert.equal(r.code, 1, r.out);
+  assert.match(toon(r).reason, /drive: .*the run command exited 1; secrets: .*\/drive\.log:2: holds a secret \(key-value\)/);
+  assert.equal(r.out.includes(token.slice(-12)), false, 'the secret value is never printed');
 });
 
 test('a journey that spends parks before it runs until the user approves; respond approve runs it', () => {

@@ -1864,26 +1864,34 @@ async function cmdAbort(argv) {
     if (closed(latest))
         return FAIL;
     // A run waiting at its gate has no runner left; the respond lock keeps abort and respond from both closing it.
-    const parked = latest.status === 'awaiting_approval';
-    if (parked && !createOnce(join(dir, 'respond.lock'))) {
+    const gated = latest.status === 'awaiting_approval';
+    const answering = () => {
         emit({ command: 'abort', run_id: id, status: latest.status, reason: `run ${id} is being answered at its gate, so it was not cancelled`, help: [`Read the run: done-done status --run ${id}`] });
         return FAIL;
+    };
+    if (gated && !createOnce(join(dir, 'respond.lock')))
+        return answering();
+    // Decided from a read taken under the lock: a respond that just approved has already moved the run on.
+    const current = loadRun(dir);
+    if (gated && current.status !== 'awaiting_approval') {
+        rmSync(join(dir, 'respond.lock'), { force: true });
+        return answering();
     }
-    if (!parked && latest.runner && !isOurRunner(latest.runner.pid, dir)) {
-        emit({ command: 'abort', run_id: id, status: latest.status, reason: `could not confirm pid ${latest.runner.pid} is this run's runner, so nothing was killed or cancelled`, help: [`Read the run: done-done status --run ${id}`] });
+    if (!gated && current.runner && !isOurRunner(current.runner.pid, dir)) {
+        emit({ command: 'abort', run_id: id, status: current.status, reason: `could not confirm pid ${current.runner.pid} is this run's runner, so nothing was killed or cancelled`, help: [`Read the run: done-done status --run ${id}`] });
         return FAIL;
     }
-    if (!parked && latest.runner) {
+    if (!gated && current.runner) {
         try {
-            process.kill(-latest.runner.pid, 'SIGKILL');
+            process.kill(-current.runner.pid, 'SIGKILL');
         }
         catch {
             try {
-                process.kill(latest.runner.pid, 'SIGKILL');
+                process.kill(current.runner.pid, 'SIGKILL');
             }
             catch { /* exited since the check */ }
         }
-        await waitGone(latest.runner.pid);
+        await waitGone(current.runner.pid);
     }
     const after = loadRun(dir);
     if (closed(after, after.status))
@@ -1896,7 +1904,8 @@ async function cmdAbort(argv) {
         saveRun(dir, after);
     }
     catch (e) {
-        rmSync(join(dir, 'respond.lock'), { force: true });
+        if (gated)
+            rmSync(join(dir, 'respond.lock'), { force: true });
         throw e;
     }
     emit({ command: 'abort', run_id: id, status: 'cancelled', reason: after.reason, help: [`Read the run: done-done status --run ${id}`, ...startAgain(after)] });
@@ -1927,9 +1936,15 @@ async function cmdRespond(argv) {
     const root = runsRoot(cfg.app);
     const id = pickId(root, repo, 'respond', cfg, values.run);
     const dir = join(root, id);
+    const notAtGate = (r) => new UsageError(`run ${id} is not waiting at its gate (it is ${r.status === 'awaiting_approval' ? 'being answered' : shownStatus(r)})`, `Read it: done-done status --run ${id}`);
+    const respondLock = join(dir, 'respond.lock');
+    if (!createOnce(respondLock))
+        throw notAtGate(loadRun(dir));
     const run = loadRun(dir);
-    if (run.status !== 'awaiting_approval' || !run.gate || !createOnce(join(dir, 'respond.lock')))
-        throw new UsageError(`run ${id} is not waiting at its gate (it is ${run.status === 'awaiting_approval' ? 'being answered' : shownStatus(run)})`, `Read it: done-done status --run ${id}`);
+    if (run.status !== 'awaiting_approval' || !run.gate) {
+        rmSync(respondLock, { force: true });
+        throw notAtGate(run);
+    }
     try {
         const gate = run.steps.find((s) => s.name === 'gate');
         const by = answeredBy(repo);

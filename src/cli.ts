@@ -2192,9 +2192,9 @@ function detectApp(repo: string): Detected {
       : 'the launch command runs with no error (exit 0, or a prompt waiting for input)';
   const harness = has('playwright', '@playwright/test', 'cypress', 'puppeteer')
     ? 'browser/CDP (Playwright)'
-    : web ? 'a browser tool (for example chrome-devtools-axi)'
     : cliish ? 'tmux/PTY'
     : api ? 'plain HTTP (curl)'
+    : web ? 'a browser tool (for example chrome-devtools-axi)'
     : 'a shell (run the launch command and read its output)';
   const observe = web
     ? 'screenshots of the resulting state the outcome is about'

@@ -1117,6 +1117,16 @@ test('init scaffolds a verify skill with real bin and commands for a CLI tool', 
   assert.ok(existsSync(join(dir, 'features', 'add.md')) && existsSync(join(dir, 'features', 'list.md')), 'subcommands become features');
 });
 
+test('init drives a CLI with a web build tool over a PTY, not a browser', () => {
+  const { repo, dd } = shapeRepo('cli', 'notes');
+  const pkg = JSON.parse(readFileSync(join(repo, 'package.json'), 'utf8'));
+  writeFileSync(join(repo, 'package.json'), JSON.stringify({ ...pkg, devDependencies: { webpack: '^5.0.0' } }));
+  const r = dd('init');
+  assert.equal(r.code, 2, r.out);
+  const body = readFileSync(join(repo, '.agents', 'skills', 'verify-notes', 'SKILL.md'), 'utf8');
+  assert.match(body, /^Harness: tmux\/PTY/m);
+});
+
 test('init never overwrites an existing verify skill', () => {
   const { repo, dd } = shapeRepo('cli', 'notes');
   const skill = join(repo, '.agents', 'skills', 'verify-notes', 'SKILL.md');

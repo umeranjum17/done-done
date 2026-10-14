@@ -1051,7 +1051,7 @@ ${inst}${cells}${dom}
 2. ${cfg.instance ? 'Drive that running instance' : 'Launch the app as the skill says, then drive'} that feature through the real user path, step by step as its recipe says.
    Never add steps or data to make the outcome look true: capture what that path shows, even when it contradicts the outcome.
 3. Save PNG screenshots of what a user sees once the path is done (the resulting state the outcome is about) into ${evidence} (also in $DONE_DONE_EVIDENCE_ROOT); when the outcome shows in text (a CLI's output, a log or JSON), save that text there as a .txt, .log or .json file instead.
-   The judge checks every screenshot there against the outcome, so a screenshot of an earlier step (such as an empty or half-filled form) fails the drive: keep those in ${scratch}. Save nothing else there, and never edit a capture.
+   The judge checks every capture there against the outcome, so a capture of an earlier step (such as an empty or half-filled form, or text from before the outcome) fails the drive: keep those in ${scratch}. Save nothing else there, and never edit a capture.
 4. Stop everything you started.
 
 Do not change any file in the repository. Do not run done-done: it refuses inside a drive, and done-done answers the run after you stop. Put logs and other scratch files in ${scratch} (also in $TMPDIR), never in /tmp.
@@ -2025,7 +2025,7 @@ ${found.join('\n')}
 
 ## Evidence
 
-Capture ${d.observe}. Exercise the real user path, not internal setters; done-done's judge checks every screenshot in the run folder against the outcome, so save only screenshots of the resulting state there and keep any of earlier steps outside it; verify side effects alongside what is visible. Evidence goes to the run folder \`done-done run\` prints. When .done-done.yaml sets a matrix block, each journey runs once per theme x width x form cell with DONE_DONE_THEME, DONE_DONE_WIDTH, DONE_DONE_FORM and DONE_DONE_CELL set: name each capture with its cell suffix, so every cell is captured or skipped with a reason, never silently missing. When .done-done.yaml sets a dom block, write next to each capture its page-check record, the capture's name with .dom.json for its extension (home.dark.390w.png -> home.dark.390w.dom.json): ${DOM_RECORD}.
+Capture ${d.observe}. Exercise the real user path, not internal setters; done-done's judge checks every capture in the run folder against the outcome, so save only captures of the resulting state there and keep any of earlier steps outside it; verify side effects alongside what is visible. Evidence goes to the run folder \`done-done run\` prints. When .done-done.yaml sets a matrix block, each journey runs once per theme x width x form cell with DONE_DONE_THEME, DONE_DONE_WIDTH, DONE_DONE_FORM and DONE_DONE_CELL set: name each capture with its cell suffix, so every cell is captured or skipped with a reason, never silently missing. When .done-done.yaml sets a dom block, write next to each capture its page-check record, the capture's name with .dom.json for its extension (home.dark.390w.png -> home.dark.390w.dom.json): ${DOM_RECORD}.
 
 ## Cleanup
 
@@ -2290,7 +2290,7 @@ async function pick(kind: Kind, cfg: Config): Promise<Choice> {
     const menu = kind === 'agent' ? [...AGENTS, ACP_TARGET] : JUDGES;
     const label = (a: string) => (a === ACP_TARGET ? `${a} (an agent your acpx bridge starts)` : a);
     const doer = cfg.agent ? `the one that did the work (${cfg.agent})` : 'the agent that does the work';
-    const head = kind === 'agent' ? 'done-done starts a coding agent you choose, and none is set. Agents:' : `done-done judges each screenshot with an agent you choose, never ${doer}, and none is set. Judges:`;
+    const head = kind === 'agent' ? 'done-done starts a coding agent you choose, and none is set. Agents:' : `done-done judges each capture with an agent you choose, never ${doer}, and none is set. Judges:`;
     process.stderr.write(`${head}\n${menu.map((a, i) => `  ${i + 1}) ${label(a)}\n`).join('')}`);
     for (;;) {
       let agent = '';

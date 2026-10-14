@@ -145,6 +145,8 @@ done-done receipt --verify "$(git rev-parse HEAD)"
 
 No journey yet? `done-done verify --outcome "<what a user can now do>"` has your coding agent drive one feature of the verify skill the way a user does (`--feature <name>` picks it). A judge that is not the author's own agent and model then checks the captures. When it says a capture is wrong or unclear, or a capture it cannot read (a video or other file) is not judged, the run waits at its gate (exit 4) until you answer with `done-done respond --action approve|skip --reason "<why>"` or `--action fix`. Until then, a new `verify` or `rerun` of the same claim in that checkout is refused, so nothing goes around the gate. Approve and skip are logged with who and why, and they end the run `overridden`, never `pass`, so `receipt --verify` still refuses it ([details](docs/reference.md#drive-by-agent)).
 
+With `auto_fix: { verify: <n> }` (0, the default, reports only), a failed verify is fixed with your own agent: your judge first sorts each wrong screen (a product bug to fix, or a question that waits at the gate for you), then your agent fixes the product in a done-done worktree with your ignored files copied in, and verify runs again there, up to n times. A pass ends `changed`, with the fix on a `done-done/verify-<run-id>` branch and your branch untouched ([details](docs/reference.md#fix-the-product)).
+
 Run `done-done` with no arguments to see the current config and the next step.
 
 ## What it checks

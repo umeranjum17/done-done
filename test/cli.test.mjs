@@ -1605,6 +1605,14 @@ test('a verify run fails when its log or text evidence holds a secret, naming wh
     const shownLog = t.dd('logs', '--step', 'check', '--run', toon(r).run_id).out;
     assert.ok(![r.out, shownLog].some((o) => o.includes(value.slice(-12))), `the ${pattern} value is never printed`);
   }
+  for (const [name, value] of [['API_KEY', 'abcdef0123456789ABCDEF!xyz'], ['DB_PASSWORD', 'Tr0ub4dor&3xtra']]) {
+    writeFileSync(leak, `starting\n${name + '=' + value}\n`);
+    const r = t.dd('verify', 'logged', '--outcome', 'home and settings render');
+    assert.equal(r.code, 1, r.out);
+    assert.match(toon(r).reason, /^secrets: .*\/drive\.log:2: holds a secret \(key-value\)/);
+    const shownLog = t.dd('logs', '--step', 'check', '--run', toon(r).run_id).out;
+    assert.ok(![r.out, shownLog].some((o) => o.includes(value)), `the ${name} value is never printed`);
+  }
   writeFileSync(leak, `token=${'gh'}p_${'F4KE0'.repeat(8)}\n`);
   const evid = t.dd('verify', 'saved', '--outcome', 'home and settings render');
   assert.equal(evid.code, 0, `an allowed known-safe match passes: ${evid.out}`);
@@ -1616,7 +1624,7 @@ test('a verify run fails when its log or text evidence holds a secret, naming wh
   assert.match(t.dd('status').out, /secrets\.allow must be a list of valid regexes/);
 });
 
-test('a journey that spends parks before it runs until the user approves; respond approve or --approve-spend runs it', () => {
+test('a journey that spends parks before it runs until the user approves; respond approve runs it', () => {
   const t = setup();
   const spent = join(t.dir, 'spent.txt');
   appendFileSync(join(t.repo, '.done-done.yaml'), '  paid:\n    command: node make-shots.mjs ${RUN_ID} && echo spent >> ../spent.txt\n    spends: one live generation\n');
@@ -1631,14 +1639,12 @@ test('a journey that spends parks before it runs until the user approves; respon
   const ok = t.dd('respond', '--run', parked.run_id, '--action', 'approve', '--reason', 'Umer approved one generation');
   assert.equal(ok.code, 0, ok.out);
   assert.deepEqual([toon(ok).result, toon(ok).spend.reason, spends()], ['pass', 'Umer approved one generation', 1]);
-  const flagged = t.dd('verify', 'paid', '--outcome', 'home and settings render', '--approve-spend');
-  assert.equal(flagged.code, 0, flagged.out);
-  assert.equal(spends(), 2);
   const no = toon(t.dd('verify', 'paid', '--outcome', 'home and settings render'));
+  assert.equal(no.status, 'awaiting_approval', 'every new run asks again');
   const fix = t.dd('respond', '--run', no.run_id, '--action', 'fix');
   assert.equal(fix.code, 1, fix.out);
   assert.match(toon(fix).reason, /chose fix: the journey was not run, so nothing was spent/);
-  assert.equal(spends(), 2);
+  assert.equal(spends(), 1);
 });
 
 test('verify --foreground fails at a broken journey and skips the rest; usage errors name the next step', () => {

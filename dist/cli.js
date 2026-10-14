@@ -26,7 +26,7 @@ const JOURNEYS_TEXT = `journeys (.done-done.yaml): the command runs with DONE_DO
   root) and DONE_DONE_RUN_ID set, and \${RUN_ID} in it is replaced; it must write its files into that folder, e.g.
   ${journeyExample}
   spends (journeys.<name>.spends): what a run of it spends, e.g. "one live generation"; verify parks such a journey before it runs until
-    the user approves spending for that run (respond --action approve), or it starts with --approve-spend
+    the user approves spending for that run (respond --action approve)
   timeout (journeys.<name>.timeout): how long a verify run may drive the journey, e.g. 90s or 30m (default 30m); past it the journey is killed and the run is inconclusive
   matrix (.done-done.yaml): with theme, width or form axes the journey runs once per required cell with DONE_DONE_THEME, DONE_DONE_WIDTH, DONE_DONE_FORM and DONE_DONE_CELL (the capture name suffix) set; name each capture with its suffix, so every cell is captured or skipped with a reason`;
 const CHECKS_TEXT = `Checks block (--from): the newest "## Checks" heading, then these four keys, each at the start of a line:
@@ -87,7 +87,6 @@ const FLAGS = {
     '--trusted-ref <ref>': 'read .done-done.yaml from this git ref instead of the working tree (use in CI)',
     '--claim-id <id>': 'the claim the evidence proves; evidence already used for another claim id is reuse (default: the current branch, or the PR branch with --from <PR URL>; required on a detached HEAD)',
     '--judge': 'the judge the user set (judge.route, never the agent and model that did the work) says whether each PNG/JPEG capture shows the outcome (verify does this by default; check and receipt only with --judge or judge.enabled: true)',
-    '--approve-spend': 'the user approved spending for this run: a journey with spends: runs without parking for approval',
     '--no-judge': 'skip the judge, only when the user chooses to (or judge.enabled: false in .done-done.yaml)',
     '--verify <head>': 'read-only: verify the receipt recorded for <head>',
     '--outcome "<what a user can now do>"': 'the outcome the run must prove',
@@ -166,7 +165,7 @@ const COMMANDS = {
             ['done-done verify --outcome "<claim>" [--feature <name>]', 'with no journey, the author agent drives a verify skill feature and the judge (never the author) judges its captures'],
             ['done-done verify [<journey>] --outcome "<claim>" --no-wait | --wait | --foreground', 'return at once, wait until the run ends or waits at its gate (default), or run in this process (CI)'],
         ],
-        flags: ['--outcome "<what a user can now do>"', '--feature <name>', '--claim-id <id>', '--judge', '--no-judge', '--approve-spend', '--wait', '--no-wait', '--foreground'],
+        flags: ['--outcome "<what a user can now do>"', '--feature <name>', '--claim-id <id>', '--judge', '--no-judge', '--wait', '--no-wait', '--foreground'],
         more: [RUNS_TEXT],
     },
     maintain: {
@@ -1477,7 +1476,7 @@ function refuseParked(cfg, repo, claim) {
 async function cmdVerify(argv) {
     const { values, positionals } = parseArgs({
         args: argv,
-        options: { outcome: { type: 'string' }, feature: { type: 'string' }, 'claim-id': { type: 'string' }, judge: { type: 'boolean' }, 'no-judge': { type: 'boolean' }, 'approve-spend': { type: 'boolean' }, wait: { type: 'boolean' }, 'no-wait': { type: 'boolean' }, foreground: { type: 'boolean' } },
+        options: { outcome: { type: 'string' }, feature: { type: 'string' }, 'claim-id': { type: 'string' }, judge: { type: 'boolean' }, 'no-judge': { type: 'boolean' }, wait: { type: 'boolean' }, 'no-wait': { type: 'boolean' }, foreground: { type: 'boolean' } },
         allowPositionals: true,
     });
     if (!values.outcome?.trim())
@@ -1517,7 +1516,6 @@ async function cmdVerify(argv) {
     const created = now();
     const run = {
         schema: 2, run_id: id, kind: 'verify', app: cfg.app, repo, journey, ...drive, claim: values.outcome, claim_id: values['claim-id'] ?? null, branch, judge: judging, status: 'pending',
-        ...(values['approve-spend'] && { spend: { by: answeredBy(repo), reason: 'verify --approve-spend', at: created } }),
         steps: STEPS.map((name) => ({ name, status: 'pending' })), created, updated: created,
         inputs: inputsOf(repo, cfg, journey, drive?.author),
     };

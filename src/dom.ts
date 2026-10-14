@@ -23,12 +23,12 @@ export const SQUASHED_TEXT = `() => {
   for (const e of document.querySelectorAll('body *')) {
     const nodes = [...e.childNodes].filter((n) => n.nodeType === 3 && n.data.trim());
     const text = nodes.map((n) => n.data).join(' ').replace(/\\s+/g, ' ').trim();
-    const box = e.getBoundingClientRect(); const s = getComputedStyle(e);
-    if (!text || box.width <= 1 || box.height <= 1 || s.visibility !== 'visible') continue;
+    const s = getComputedStyle(e); const w = e.offsetWidth; const h = e.offsetHeight;
+    if (!(e instanceof HTMLElement) || !text || w <= 1 || h <= 1 || s.visibility !== 'visible') continue;
     ctx.font = s.fontStyle + ' ' + s.fontWeight + ' ' + s.fontSize + ' ' + s.fontFamily;
-    const chars = box.width / (ctx.measureText('abcdefghijklmnopqrstuvwxyz').width / 26); const words = text.split(' ').length; const tops = new Set();
+    const chars = w / (ctx.measureText('abcdefghijklmnopqrstuvwxyz').width / 26); const words = text.split(' ').length; const tops = new Set();
     for (const n of nodes) { const r = document.createRange(); r.selectNodeContents(n); for (const b of r.getClientRects()) if (b.width) tops.add(Math.round(b.top)); }
-    if ((chars < 8 && ctx.measureText(text).width > box.width + 1) || tops.size > words)
+    if ((chars < 8 && ctx.measureText(text).width > w + 1) || tops.size > words)
       out.push({ element: e.tagName.toLowerCase() + (e.id ? '#' + e.id : e.classList[0] ? '.' + e.classList[0] : ''), text: text.slice(0, 40), chars: Math.round(chars * 10) / 10, lines: tops.size, words });
   }
   return out;

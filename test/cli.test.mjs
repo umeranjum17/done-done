@@ -1645,6 +1645,10 @@ test('a journey that spends parks before it runs until the user approves; respon
   assert.equal(fix.code, 1, fix.out);
   assert.match(toon(fix).reason, /chose fix: the journey was not run, so nothing was spent/);
   assert.equal(spends(), 1);
+  const plain = t.dd('run', 'paid');
+  const withCommand = t.dd('run', 'paid', '--', 'sh', '-c', 'echo spent >> ../spent.txt');
+  assert.deepEqual([plain.code, withCommand.code, spends()], [2, 2, 1], 'run refuses a spends journey, with or without a command');
+  assert.match(plain.out, /done-done verify paid --outcome/, plain.out);
 });
 
 test('verify --foreground fails at a broken journey and skips the rest; usage errors name the next step', () => {

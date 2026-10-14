@@ -5205,6 +5205,7 @@ test('squashed text: the measurement flags a title wrapped one letter per line, 
   const narrow = measure(card(370));
   assert.deepEqual(narrow.map((q) => [q.element, q.text, q.lines > 1, q.words, q.chars < 8]), [['h3.title', 'Approved', true, 1, true]]);
   assert.deepEqual(measure(card(120)), []);
+  assert.deepEqual(measure(card(390)).map((q) => [q.element, q.text, q.chars]), [['h3.title', 'Approved', 0]]);
   // Under 8 characters wide with text wider than the box fails, as does a line count over the word count; a short
   // label in a narrow box, a normal paragraph and a visually hidden label do not.
   const limits = measure('<p>A normal paragraph of plain words wraps over a few lines at this width and is never squashed.</p><div style="width:4ch"><b>OK</b></div>'

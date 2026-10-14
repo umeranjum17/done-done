@@ -1582,6 +1582,65 @@ test('verify waits until the run ends by default', () => {
   assert.equal(toon(r).result, 'pass');
 });
 
+test('a verify run fails when its log or text evidence holds a secret, naming where but never the value', () => {
+  const t = setup(JUDGED.replace('journeys:', 'judge:\n  enabled: false\nsecrets:\n  patterns:\n    house-key: "HOUSE-\\\\d{4}"\n  allow: ["F4KE"]\njourneys:'));
+  const leak = join(t.dir, 'leak.txt');
+  appendFileSync(join(t.repo, '.done-done.yaml'), '  logged:\n    command: node make-shots.mjs ${RUN_ID} && cat ../leak.txt\n  saved:\n    command: node make-shots.mjs ${RUN_ID} && cp ../leak.txt "$DONE_DONE_EVIDENCE_ROOT/session.log"\n');
+  t.sh('add', '-A');
+  t.sh('commit', '-qm', 'journeys');
+  // Fake values, split so this file holds no secret shape itself.
+  const fakes = {
+    'private-key': `-----BEGIN RSA ${'PRIVATE'} KEY-----`,
+    'github-token': `gh${'p_'}${'fake0'.repeat(8)}`,
+    'api-key': `s${'k-'}${'fake0'.repeat(5)}`,
+    bearer: `Authorization: Bear${'er'} ${'fake0'.repeat(5)}`,
+    'key-value': `API_TOKEN=${'f4ke0'.repeat(6)}`,
+    'house-key': 'door HOUSE-1234',
+  };
+  for (const [pattern, value] of Object.entries(fakes)) {
+    writeFileSync(leak, `starting\n${value}\n`);
+    const r = t.dd('verify', 'logged', '--outcome', 'home and settings render');
+    assert.equal(r.code, 1, r.out);
+    assert.match(toon(r).reason, new RegExp(`^secrets: .*/drive\\.log:2: holds a secret \\(${pattern}\\)`));
+    const shownLog = t.dd('logs', '--step', 'check', '--run', toon(r).run_id).out;
+    assert.ok(![r.out, shownLog].some((o) => o.includes(value.slice(-12))), `the ${pattern} value is never printed`);
+  }
+  writeFileSync(leak, `token=${'gh'}p_${'F4KE0'.repeat(8)}\n`);
+  const evid = t.dd('verify', 'saved', '--outcome', 'home and settings render');
+  assert.equal(evid.code, 0, `an allowed known-safe match passes: ${evid.out}`);
+  writeFileSync(leak, `session ${'sk'}-${'fake0'.repeat(5)}\n`);
+  assert.match(toon(t.dd('verify', 'saved', '--outcome', 'home and settings render')).reason, /^secrets: \.proof\/.*\/session\.log:1: holds a secret \(api-key\)/);
+  writeFileSync(leak, 'saved 3 notes\n');
+  assert.equal(t.dd('verify', 'logged', '--outcome', 'home and settings render').code, 0, 'clean evidence passes');
+  writeFileSync(join(t.repo, '.done-done.yaml'), 'app: notes\nsecrets:\n  allow: ["("]\n');
+  assert.match(t.dd('status').out, /secrets\.allow must be a list of valid regexes/);
+});
+
+test('a journey that spends parks before it runs until the user approves; respond approve or --approve-spend runs it', () => {
+  const t = setup();
+  const spent = join(t.dir, 'spent.txt');
+  appendFileSync(join(t.repo, '.done-done.yaml'), '  paid:\n    command: node make-shots.mjs ${RUN_ID} && echo spent >> ../spent.txt\n    spends: one live generation\n');
+  t.sh('add', '-A');
+  t.sh('commit', '-qm', 'paid journey');
+  const spends = () => (existsSync(spent) ? readFileSync(spent, 'utf8').split('\n').filter(Boolean).length : 0);
+  const parked = toon(t.dd('verify', 'paid', '--outcome', 'home and settings render'));
+  assert.deepEqual([parked.status, parked.step, spends()], ['awaiting_approval', 'drive', 0], 'nothing runs before approval');
+  assert.match(parked.findings[0].what, /journey paid spends \(one live generation\)/);
+  assert.ok(parked.help.includes(`done-done respond --run ${parked.run_id} --action approve --reason "<who approved the spend>"`), parked.help);
+  assert.equal(t.dd('verify', 'paid', '--outcome', 'x').code, 2, 'a parked spend blocks a new run around it');
+  const ok = t.dd('respond', '--run', parked.run_id, '--action', 'approve', '--reason', 'Umer approved one generation');
+  assert.equal(ok.code, 0, ok.out);
+  assert.deepEqual([toon(ok).result, toon(ok).spend.reason, spends()], ['pass', 'Umer approved one generation', 1]);
+  const flagged = t.dd('verify', 'paid', '--outcome', 'home and settings render', '--approve-spend');
+  assert.equal(flagged.code, 0, flagged.out);
+  assert.equal(spends(), 2);
+  const no = toon(t.dd('verify', 'paid', '--outcome', 'home and settings render'));
+  const fix = t.dd('respond', '--run', no.run_id, '--action', 'fix');
+  assert.equal(fix.code, 1, fix.out);
+  assert.match(toon(fix).reason, /chose fix: the journey was not run, so nothing was spent/);
+  assert.equal(spends(), 2);
+});
+
 test('verify --foreground fails at a broken journey and skips the rest; usage errors name the next step', () => {
   const { dd } = slowRepo();
   assert.equal(toon(dd('status')).help[0], 'Start one: done-done verify <journey> --outcome "<what a user can now do>"');

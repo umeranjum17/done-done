@@ -5136,6 +5136,162 @@ test('one verify run captures every matrix cell, and status shows the manifest',
   assert.equal(rec.matrix.cells.length, 4, 'the run record keeps the manifest');
 });
 
+const GUARDED = `app: notes
+judge:
+  enabled: false
+evidence:
+  root: .proof
+  ignore_paths: ["docs/**"]
+inputs: ["data/**"]
+journeys:
+  shots:
+    command: node make-shots.mjs \${RUN_ID}
+  edit:
+    command: node make-shots.mjs \${RUN_ID} && echo tampered >> data/seed.json
+  add:
+    command: node make-shots.mjs \${RUN_ID} && echo new > data/extra.json
+  remove:
+    command: node make-shots.mjs \${RUN_ID} && rm data/seed.json
+  dot:
+    command: node make-shots.mjs \${RUN_ID} && echo new > data/.cache.json
+  accent:
+    command: node make-shots.mjs \${RUN_ID} && echo new > "data/café.json"
+`;
+// A repo with a committed data file watched by the input guard.
+const guarded = (yaml = GUARDED) => {
+  const t = setup(yaml);
+  mkdirSync(join(t.repo, 'data'), { recursive: true });
+  writeFileSync(join(t.repo, 'data', 'seed.json'), '{"token":"secret-value-xyz"}\n');
+  t.sh('add', '-A'); t.sh('commit', '-qm', 'data file');
+  return t;
+};
+const guardedWith = (inputs, extra = '') => guarded(GUARDED.replace('inputs: ["data/**"]', `inputs: [${inputs}]`) + extra);
+const guardRun = (t, journey) => join(t.env.DONE_DONE_HOME, 'runs', 'notes', journey, 'run.json');
+
+test('an honest drive leaves the watched inputs alone and passes, keeping the hash lists', () => {
+  const t = guarded();
+  const s = toon(t.dd('verify', 'shots', '--outcome', 'home renders', '--foreground'));
+  assert.equal(s.result, 'pass');
+  const run = JSON.parse(readFileSync(guardRun(t, s.run_id), 'utf8'));
+  const want = createHash('sha256').update(readFileSync(join(t.repo, 'data', 'seed.json'))).digest('hex');
+  assert.deepEqual(run.guarded.before, [{ path: 'data/seed.json', sha256: want }]);
+  assert.deepEqual(run.guarded.after, run.guarded.before, 'the run record keeps the before/after hash lists');
+});
+
+test('a drive that edits, adds or removes a watched input, dotfiles and non-ASCII names too, fails naming the path', () => {
+  for (const [journey, change] of [['edit', 'data/seed.json: changed'], ['add', 'data/extra.json: appeared'], ['remove', 'data/seed.json: disappeared'], ['dot', 'data/.cache.json: appeared'], ['accent', 'data/café.json: appeared']]) {
+    const t = guarded();
+    const r = t.dd('verify', journey, '--outcome', 'home renders', '--foreground');
+    assert.equal(r.code, 1, r.out);
+    assert.match(toon(r).reason, new RegExp(`input guard: ${change} during the drive`));
+    assert.ok(!r.out.includes('secret-value-xyz'), 'file contents are never printed');
+  }
+});
+
+test('without an inputs key the guard stays off and the run behaves as before', () => {
+  const t = guarded(GUARDED.replace('inputs: ["data/**"]\n', ''));
+  const a = t.dd('verify', 'add', '--outcome', 'home renders', '--foreground');
+  assert.equal(a.code, 0, a.out, 'an added file with no inputs key still passes');
+  assert.equal(JSON.parse(readFileSync(guardRun(t, toon(a).run_id), 'utf8')).guarded, undefined);
+  const e = t.dd('verify', 'edit', '--outcome', 'home renders', '--foreground');
+  assert.equal(e.code, 1, e.out);
+  assert.match(toon(e).reason, /tracked files have uncommitted changes/, 'an edited file still fails only at the receipt, as before');
+  assert.ok(!e.out.includes('input guard'), 'the guard says nothing with no inputs key');
+});
+
+test('a directory pattern with a trailing slash or a leading ./ still guards its files, and a path that leaves the repo or names its root is refused', () => {
+  for (const pattern of ['./data/', 'data/']) {
+    const t = guardedWith(`"${pattern}"`);
+    const e = t.dd('verify', 'edit', '--outcome', 'home renders', '--foreground');
+    assert.equal(e.code, 1, e.out);
+    assert.match(toon(e).reason, /input guard: data\/seed\.json: changed during the drive/, pattern);
+  }
+  for (const pattern of ['../outside.txt', './']) {
+    const t = guardedWith(`"${pattern}"`);
+    const r = t.dd('verify', 'shots', '--outcome', 'home renders', '--foreground');
+    assert.notEqual(r.code, 0, r.out);
+    assert.match(r.out, /inputs must be a list of repo-relative paths or globs/, pattern);
+  }
+});
+
+test('a watched input the repo git-ignores is still guarded by its name', () => {
+  const t = setup(GUARDED);
+  mkdirSync(join(t.repo, 'data'), { recursive: true }); writeFileSync(join(t.repo, 'data', 'seed.json'), '{"token":"secret-value-xyz"}\n');
+  writeFileSync(join(t.repo, '.gitignore'), 'data/\n');
+  t.sh('add', '-A'); t.sh('commit', '-qm', 'ignored data');
+  const e = t.dd('verify', 'edit', '--outcome', 'home renders', '--foreground');
+  assert.equal(e.code, 1, e.out);
+  assert.match(toon(e).reason, /input guard: data\/seed\.json: changed during the drive/);
+});
+
+test('a watched link that leaves the repo, or a folder link a glob cannot see through, fails naming it', () => {
+  const cases = [
+    ['"data/**"', (t) => { writeFileSync(join(dirname(t.repo), 'outside.json'), '{}\n'); symlinkSync(join(dirname(t.repo), 'outside.json'), join(t.repo, 'data', 'escape.json')); }, /input guard: data\/escape\.json links outside the repo/],
+    ['"linkdir/seed.json"', (t) => { mkdirSync(join(dirname(t.repo), 'outdir')); writeFileSync(join(dirname(t.repo), 'outdir', 'seed.json'), '{}\n'); symlinkSync(join(dirname(t.repo), 'outdir'), join(t.repo, 'linkdir')); }, /input guard: linkdir\/seed\.json links outside the repo/],
+    ['"linkdir"', (t) => symlinkSync(join(t.repo, 'data'), join(t.repo, 'linkdir')), /input guard: linkdir reaches linkdir, a symlink to a folder/],
+  ];
+  for (const [inputs, link, why] of cases) {
+    const t = guardedWith(inputs);
+    link(t);
+    t.sh('add', '-A'); t.sh('commit', '-qm', 'link');
+    const r = t.dd('verify', 'shots', '--outcome', 'home renders', '--foreground');
+    assert.notEqual(r.code, 0, r.out);
+    assert.match(r.out, why, inputs);
+  }
+});
+
+test('a watched input that cannot be read fails the run naming it, never passes',{ skip: process.getuid?.() === 0 }, () => {
+  const t = guarded();
+  chmodSync(join(t.repo, 'data', 'seed.json'), 0o000);
+  const r = t.dd('verify', 'shots', '--outcome', 'home renders', '--foreground');
+  assert.notEqual(r.code, 0, r.out);
+  assert.match(r.out, /input guard: cannot read data\/seed\.json/);
+});
+
+test('an input-guard failure is never handed to the fixer', () => {
+  const t = guarded(GUARDED.replace('inputs: ["data/**"]', 'inputs: ["data/**"]\nauto_fix:\n  verify: 1'));
+  mkdirSync(t.env.DONE_DONE_HOME, { recursive: true });
+  writeFileSync(join(t.env.DONE_DONE_HOME, 'config.yaml'), 'agent: opencode\n');
+  const e = pathEnv(t.env, []);
+  const calls = join(e.PATH, 'calls');
+  symlinkSync(process.execPath, join(e.PATH, 'node'));
+  writeFileSync(join(e.PATH, 'opencode'), `#!${process.execPath}\nrequire('node:fs').appendFileSync(${JSON.stringify(calls)}, 'fixer\\n');\nprocess.exit(1);\n`, { mode: 0o755 });
+  const s = spawnSync(process.execPath, [CLI, 'verify', 'edit', '--outcome', 'home renders', '--foreground'], { cwd: t.repo, env: e, encoding: 'utf8' });
+  const r = { code: s.status, out: s.stdout + s.stderr };
+  assert.equal(toon(r).result, 'fail', r.out);
+  assert.match(toon(r).reason, /check: input guard: data\/seed\.json: changed during the drive/);
+  assert.equal(existsSync(calls), false, 'the fixer is never started for a guard failure');
+});
+
+test('a rerun whose watched inputs changed drives again instead of reusing the source guard', () => {
+  const t = guarded(`${GUARDED}  tamper:\n    command: node make-shots.mjs \${RUN_ID} && echo tampered >> fixtures/seed.json\n`);
+  mkdirSync(join(t.repo, 'fixtures')); writeFileSync(join(t.repo, 'fixtures', 'seed.json'), 'seed\n');
+  t.sh('update-index', '--skip-worktree', '.done-done.yaml');
+  const a = t.dd('verify', 'tamper', '--outcome', 'home renders', '--foreground');
+  assert.equal(toon(a).result, 'pass', a.out);
+  writeFileSync(join(t.repo, '.done-done.yaml'), `${GUARDED.replace('inputs: ["data/**"]', 'inputs: ["data/**", "fixtures/seed.json"]')}  tamper:\n    command: node make-shots.mjs \${RUN_ID} && echo tampered >> fixtures/seed.json\n`);
+  const r = t.dd('rerun', '--run', toon(a).run_id);
+  assert.equal(r.code, 1, r.out);
+  assert.match(toon(r).reason, /input guard: fixtures\/seed\.json: changed during the drive/);
+});
+
+test('a glob input still guards in a repo whose file listing exceeds 1 MiB', () => {
+  const t = guarded();
+  mkdirSync(join(t.repo, 'scratch')); for (let i = 0; i < 12000; i++) writeFileSync(join(t.repo, 'scratch', `${String(i).padStart(5, '0')}-${'x'.repeat(90)}.txt`), '');
+  const s = toon(t.dd('verify', 'shots', '--outcome', 'home renders', '--foreground'));
+  assert.equal(s.result, 'pass', s.reason);
+  assert.deepEqual(JSON.parse(readFileSync(guardRun(t, s.run_id), 'utf8')).guarded.before.map((f) => f.path), ['data/seed.json']);
+});
+
+test('a rerun that reuses the drive keeps guarding it, so a guarded change still fails', () => {
+  const t = guarded();
+  const a = t.dd('verify', 'add', '--outcome', 'home renders', '--foreground');
+  assert.equal(a.code, 1, a.out);
+  const r = t.dd('rerun', '--run', toon(a).run_id);
+  assert.equal(r.code, 1, r.out);
+  assert.match(toon(r).reason, /input guard: data\/extra\.json: appeared during the drive/);
+});
+
 // DOM assertions: a two-cell matrix whose journey writes each cell's capture and, when given, its page-check record.
 const CLEAN = { url: 'http://127.0.0.1/home', overflow: false, overflowing: [], console_errors: [], failed_requests: [] };
 const BROKEN = { ...CLEAN, overflow: true, overflowing: ['div#wide'], console_errors: ['boom'], failed_requests: [{ url: 'http://127.0.0.1/x.js', status: 404 }] };

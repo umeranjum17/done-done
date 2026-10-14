@@ -25,6 +25,8 @@ export type Config = {
   app: string;
   skill: string;
   journeys: Record<string, { command: string; timeout?: string; spends?: string }>;
+  // Primitive 17 (input guard): repo-relative paths or globs the drive must leave alone. Empty: today's behaviour.
+  inputs: string[];
   // Primitive 1 (run-instance harness): start the app under test on its own port per run. Null when unset: today's behaviour.
   instance: Instance | null;
   // Primitive 2 (capture matrix): optional theme x width x form axes with skip entries; null: today's behaviour.
@@ -76,7 +78,7 @@ export const EFFORT_FLAGS: Record<string, (level: string) => string[]> = {
 const AGENT_TIMEOUT = '30m';
 
 // Where each key may be set. Global-only keys describe the machine; repo-only keys describe the project; `any` may be in either.
-const KEYS: Record<string, { scope: 'global' | 'repo' | 'any'; type: 'string' | 'boolean' | 'string[]' | 'journeys' | 'instance' | 'matrix' | 'dom' | 'agent' | 'agent_config' | 'route' | 'claude_code' | 'args' | 'paths' | 'bin' | 'duration' | 'auto_fix' | 'regexes' }> = {
+const KEYS: Record<string, { scope: 'global' | 'repo' | 'any'; type: 'string' | 'boolean' | 'string[]' | 'inputs' | 'journeys' | 'instance' | 'matrix' | 'dom' | 'agent' | 'agent_config' | 'route' | 'claude_code' | 'args' | 'paths' | 'bin' | 'duration' | 'auto_fix' | 'regexes' }> = {
   agent: { scope: 'any', type: 'agent' },
   auto_fix: { scope: 'any', type: 'auto_fix' },
   agent_config: { scope: 'global', type: 'agent_config' },
@@ -88,6 +90,7 @@ const KEYS: Record<string, { scope: 'global' | 'repo' | 'any'; type: 'string' | 
   app: { scope: 'repo', type: 'string' },
   skill: { scope: 'repo', type: 'string' },
   journeys: { scope: 'repo', type: 'journeys' },
+  inputs: { scope: 'repo', type: 'inputs' },
   instance: { scope: 'repo', type: 'instance' },
   matrix: { scope: 'repo', type: 'matrix' },
   dom: { scope: 'repo', type: 'dom' },
@@ -131,6 +134,11 @@ function flatten(doc: unknown, file: string): Map<string, unknown> {
   return out;
 }
 
+// An input pattern in its canonical repo-relative form: no leading ./, no trailing /, and '' for the repo root.
+export function inputPattern(p: string): string {
+  return p.split('/').filter((s) => s !== '' && s !== '.').join('/');
+}
+
 // A binary: a bare name looked up on PATH, or an absolute path (~ is the home folder).
 const isBin = (v: unknown) => typeof v === 'string' && (/^[\w.-]+$/.test(v) || isAbsolute(tilde(v)));
 const tilde = (p: string) => p.replace(/^~(?=\/|$)/, homedir());
@@ -155,6 +163,7 @@ function apply(target: Config, text: string | undefined, file: string, scope: 'g
       spec.type === 'string' ? typeof value === 'string'
       : spec.type === 'boolean' ? typeof value === 'boolean'
       : spec.type === 'string[]' ? Array.isArray(value) && value.every((v) => typeof v === 'string')
+      : spec.type === 'inputs' ? Array.isArray(value) && value.every((v) => typeof v === 'string' && inputPattern(v) !== '' && !isAbsolute(v) && !v.split('/').includes('..'))
       : spec.type === 'agent' ? isAgent(value)
       : spec.type === 'route' ? typeof value === 'string' && (value === 'claude-code' || Object.hasOwn(KEY_ROUTES, value) || ANSWERER_JUDGES.some((a) => value === `answerer:${a}`))
       : spec.type === 'claude_code' ? isMap(value) && Object.entries(value).every(([k, v]) => k === 'config_dir' && typeof v === 'string')
@@ -181,6 +190,7 @@ function apply(target: Config, text: string | undefined, file: string, scope: 'g
       auto_fix: `a map of <step>: <attempts, 0 or more> for ${AUTO_FIX_STEPS.join(', ')}`,
       route: `claude-code (for claude), answerer:<agent> for one of ${ANSWERER_JUDGES.join(', ')}, or a key route (${Object.keys(KEY_ROUTES).join(', ')}); an acp:<target> agent cannot judge, since done-done cannot send it an image`,
       claude_code: 'a map with config_dir, a string (the claude binary is agent_path_override.claude)',
+      inputs: 'a list of repo-relative paths or globs, not absolute and with no .. segment',
     } as Record<string, string>;
     if (key === 'judge.route' && (value === 'auto' || value === '')) throw new UsageError(`${file}: judge.route ${value === '' ? 'must not be empty; to leave it unset, remove the key' : 'auto is gone: done-done never picks the judge, the user sets it'}`, `Delete the judge.route line in ${file}, then run: done-done init --judge <agent> --judge-model <model>`);
     if (key === 'agent' && value === '') throw new UsageError(`${file}: agent must not be empty; to leave it unset, remove the key`);
@@ -254,6 +264,7 @@ function defaultConfig(repo: string): Config {
     app: basename(repo),
     skill: '',
     journeys: {},
+    inputs: [],
     instance: null,
     matrix: null,
     dom: null,

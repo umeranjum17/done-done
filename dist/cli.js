@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import { createHash, randomBytes } from 'node:crypto';
-import { accessSync, appendFileSync, closeSync, constants, cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { accessSync, appendFileSync, closeSync, constants, cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir, userInfo } from 'node:os';
 import { dirname, isAbsolute, join, matchesGlob, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -10,7 +10,7 @@ import { parseArgs } from 'node:util';
 import { encode } from '@toon-format/toon';
 import { Document, parseDocument } from 'yaml';
 import { ACPX_INSTALL, agentChoices, agentPath, agentRun, askAgent, editOnlyReason, findBin, JUDGES, modelFor, noAgent, noJudge, notStartable, routeOf, selectAgent, selectJudge } from './agents.js';
-import { AGENTS, CHEAP, globalConfigText, home, isAgent, loadConfig, parseDuration, UsageError } from './config.js';
+import { AGENTS, CHEAP, globalConfigText, home, inputPattern, isAgent, loadConfig, parseDuration, UsageError } from './config.js';
 import { backend, judge, judgeable, onPath, quote, screen } from './judge.js';
 import { startInstance, stopInstance } from './instance.js';
 import { attemptProblem, changedSince, commitFix, dirtyTracked, FIX_SCHEMA, inWorktree, maintainSteps, named, refuseSameSession, repoState, triage } from './maintain.js';
@@ -41,6 +41,9 @@ const RUNS_TEXT = `runs: each verify or maintain run lives in $DONE_DONE_HOME/ru
   drive: the journey when there is one; else the author agent (agent: in config) drives one feature of the verify skill the way a user
   does and saves captures into the run's evidence folder; it may run commands and edit files only in the repo and that folder where
   its CLI can limit it (pi cannot), and a drive that changes a tracked file fails
+  inputs (.done-done.yaml): repo-relative paths or globs the drive must leave alone (fixtures, data files);
+  hashed before and after the drive; the check step fails naming each changed, appeared or
+  disappeared path (never file contents), and the before/after hash lists go into the run record; no key: unchanged
   gate: a judge fail or unsure (or an agent drive with no judged capture) parks the run as awaiting_approval (exit 4); answer it with
   respond: approve or skip (each needs --reason) ends the run overridden, never pass, and its receipt says who and why, so
   receipt --verify refuses it; fix ends the run fail`;
@@ -1003,6 +1006,106 @@ function skillHash(repo, cfg) {
         return '';
     }
 }
+// Every file the guard can see: tracked files plus untracked ones, git-ignored ones included.
+function guardCandidates(at) {
+    let listed;
+    try {
+        listed = execFileSync('git', ['ls-files', '-z', '--cached', '--others'], { cwd: at, encoding: 'utf8', maxBuffer: Infinity, stdio: ['ignore', 'pipe', 'pipe'] });
+    }
+    catch (e) {
+        throw new Error(`input guard: cannot list the repo files: ${e.message.split('\n')[0]}`);
+    }
+    return [...new Set(listed.split('\0').filter(Boolean))].sort();
+}
+// Node's matchesGlob skips dotfiles, so a watched glob matches them itself: '**' spans folders, '*' and '?' stay in one.
+const GLOB_TOKEN = /(\*\*\/|\*\*|\*|\?|\{[^}]*\}|\[[^\]]*\])/;
+const globEscape = (s) => s.replace(/[.+^$()|\\]/g, '\\$&');
+function guardGlob(p) {
+    const part = (t, i) => {
+        if (i % 2 === 0)
+            return globEscape(t);
+        if (t === '**/')
+            return '(?:.*/)?';
+        if (t === '**')
+            return '.*';
+        if (t === '*')
+            return '[^/]*';
+        if (t === '?')
+            return '[^/]';
+        return t[0] === '{' ? `(?:${t.slice(1, -1).split(',').map(globEscape).join('|')})` : t;
+    };
+    return new RegExp(`^${p.split(GLOB_TOKEN).map(part).join('')}$`);
+}
+function guardSnapshot(at, patterns) {
+    if (!patterns.length)
+        return [];
+    let candidates;
+    const listed = () => (candidates ??= guardCandidates(at));
+    let links;
+    const folderLinks = () => (links ??= listed().filter((c) => lstatSync(join(at, c), { throwIfNoEntry: false })?.isSymbolicLink() && statSync(join(at, c), { throwIfNoEntry: false })?.isDirectory()));
+    const paths = new Set();
+    for (const raw of patterns) {
+        const p = inputPattern(raw);
+        const glob = /[*?{\[]/.test(p);
+        const folder = !glob && existsSync(join(at, p)) && statSync(join(at, p)).isDirectory();
+        if (glob || folder) {
+            const base = glob ? p.slice(0, p.search(/[*?{\[]/)).replace(/\/[^/]*$/, '') : p;
+            const link = folderLinks().find((s) => base === '' || s === base || s.startsWith(`${base}/`) || base.startsWith(`${s}/`));
+            if (link)
+                throw new Error(`input guard: ${p} reaches ${link}, a symlink to a folder`);
+        }
+        if (glob) {
+            const re = guardGlob(p);
+            for (const c of listed())
+                if (c === p || c.startsWith(`${p}/`) || re.test(c))
+                    paths.add(c);
+        }
+        else if (folder) {
+            for (const c of listed())
+                if (c.startsWith(`${p}/`))
+                    paths.add(c);
+        }
+        else
+            paths.add(p);
+    }
+    const root = realpathSync(at);
+    return [...paths].sort().map((path) => {
+        const full = join(at, path);
+        const st = statSync(full, { throwIfNoEntry: false });
+        if (!st)
+            return { path, sha256: null };
+        if (!st.isFile())
+            throw new Error(`input guard: ${path} is not a plain file`);
+        if (!realpathSync(full).startsWith(`${root}${sep}`))
+            throw new Error(`input guard: ${path} links outside the repo`);
+        try {
+            return { path, sha256: sha256(readFileSync(full)) };
+        }
+        catch (e) {
+            throw new Error(`input guard: cannot read ${path}: ${e.message.split('\n')[0]}`);
+        }
+    });
+}
+// Each difference names only its path, never file contents.
+function guardDiff(before, after) {
+    const a = new Map(after.map((f) => [f.path, f.sha256]));
+    const b = new Map(before.map((f) => [f.path, f.sha256]));
+    const out = [];
+    const push = (path, verb) => out.push({ path, why: `${path}: ${verb} during the drive` });
+    for (const [path, h] of b) {
+        const g = a.get(path);
+        if (h === null && g !== null && g !== undefined)
+            push(path, 'appeared');
+        else if (h !== null && g !== null && g !== undefined && g !== h)
+            push(path, 'changed');
+        else if (h !== null && (g === null || g === undefined))
+            push(path, 'disappeared');
+    }
+    for (const [path, g] of a)
+        if (g !== null && !b.has(path))
+            push(path, 'appeared');
+    return out.sort((x, y) => (x.why < y.why ? -1 : 1));
+}
 // The drive's input is the journey command, or for an agent drive the author agent and model that drove it.
 function inputsOf(repo, cfg, journey, author) {
     const h = head(repo);
@@ -1191,6 +1294,9 @@ async function runSteps(dir) {
         const pass = async (at, fix = '') => {
             const id = fix ? `${run.run_id}-${fix}` : run.run_id;
             const fail = (reason, fixable = [], result = 'fail') => ({ end: { result, reason: `drive: ${reason}` }, asks: [], fixable });
+            const reusing = !fix && done('drive') && !!run.record;
+            begin('drive');
+            const guardBefore = reusing ? [] : guardSnapshot(at, cfg.inputs);
             const scanRun = (files) => scanSecrets([...files, join(dir, 'logs'), join(dir, 'agents')], cfg.secrets);
             const secretWhy = (l) => `${shown(run.repo, l.file)}:${l.line}: holds a secret (${l.pattern}); remove it, or allow a known-safe match with secrets.allow in .done-done.yaml`;
             const evidenceFiles = () => rec.files.map((f) => join(cfg.evidence.root, f.path));
@@ -1200,15 +1306,13 @@ async function runSteps(dir) {
                 return leak ? fail(`secrets: ${secretWhy(leak)}`) : fail(reason, fixable, result);
             };
             let rec;
-            if (!fix && done('drive') && run.record) {
-                begin('drive');
+            if (reusing) {
                 rec = JSON.parse(readFileSync(run.record, 'utf8'));
                 set(step, 'completed');
             }
             else if (run.journey === null) {
                 // The author agent drives the feature in its own process group, so a timeout, an abort or a dead runner stops it
                 // and the app it launched; a drive that changed tracked files would prove code that is not committed.
-                begin('drive');
                 const author = run.author;
                 rec = { ...openRun(at, cfg, null, null, id), author };
                 const evidence = runDir(cfg, rec.run_id);
@@ -1267,7 +1371,6 @@ async function runSteps(dir) {
                     return failScanned(why, evidenceFiles(), a.ok && blocker && !changed ? [{ kind: 'drive', file: `features/${run.feature || picked || 'README'}.md`, what: why }] : []);
             }
             else {
-                begin('drive');
                 rec = openRun(at, cfg, run.journey, command.replaceAll('${RUN_ID}', id), id);
                 const logFile = join(dir, 'logs', `${fix}drive.log`);
                 const fd = openSync(logFile, 'a');
@@ -1348,6 +1451,8 @@ async function runSteps(dir) {
                 if (sealed.code !== PASS)
                     return failScanned(sealed.reason, evidenceFiles(), tries && /^the run command exited/.test(sealed.reason) ? [{ kind: 'drive', file: run.journey, what: `the journey ${sealed.reason}; the end of its output:\n${readFileSync(logFile, 'utf8').slice(-2000)}` }] : []);
             }
+            if (!reusing && cfg.inputs.length)
+                run.guarded = { patterns: cfg.inputs, before: guardBefore, after: guardSnapshot(at, cfg.inputs) };
             begin('check');
             const files = evidenceFiles();
             // No secret may sit in the evidence or the run's logs: a hit fails the run naming the file, line and pattern, never the value.
@@ -1356,6 +1461,17 @@ async function runSteps(dir) {
                 log('check', { result: 'fail', findings: leaks });
                 set(step, 'failed', { exit: FAIL, findings: leaks });
                 return { end: { result: 'fail', reason: `secrets: ${leaks[0].why}` }, asks: [], fixable: [] };
+            }
+            // The input guard: the drive must leave the watched inputs alone. A difference fails the check step,
+            // naming each path but never file contents; the before/after hash lists stay in the run record.
+            if (run.guarded) {
+                const diffs = guardDiff(run.guarded.before, run.guarded.after);
+                if (diffs.length) {
+                    const findings = diffs.map((d) => ({ level: 'fail', why: d.why }));
+                    set(step, 'failed', { exit: 1, findings });
+                    log('check', { result: 'fail', findings });
+                    return { end: { result: 'fail', reason: `check: input guard: ${diffs.map((d) => d.why).join('; ')}` }, asks: [], fixable: [] };
+                }
             }
             // The check's own findings end the check step; the judge, when on and the check did not fail, is its own step.
             let checkFindings = 0;
@@ -1881,9 +1997,11 @@ async function cmdRerun(argv) {
     // A source run with no journey is driven again by the author agent config names now; schema 2 runs before PR 4 always had a journey.
     const journey = src.journey ?? null;
     const drive = journey === null ? await agentDrive(src.repo, cfg, src.feature) : undefined;
-    const inputs = inputsOf(src.repo, loadConfig(src.repo), journey, drive?.author);
+    const srcCfg = loadConfig(src.repo);
+    const inputs = inputsOf(src.repo, srcCfg, journey, drive?.author);
     const same = !!src.inputs && ['head', 'journey', 'skill'].every((k) => src.inputs[k] === inputs[k]);
-    const driveReuse = same && drivesClean(src.record, src.inputs?.head);
+    // A reused drive keeps the guard it ran under, so it is only reused when the watched inputs are the same ones.
+    const driveReuse = same && drivesClean(src.record, src.inputs?.head) && JSON.stringify(src.guarded?.patterns ?? []) === JSON.stringify(srcCfg.inputs);
     const reused = (name) => (name === 'resolve' && same) || (name === 'drive' && driveReuse);
     // A rerun judges as its source did; --no-judge turns it off for this run. A missing or forbidden judge is a usage
     // error here too.
@@ -1897,7 +2015,7 @@ async function cmdRerun(argv) {
         return s && reused(name) && s.status === 'completed' ? { ...s } : { name, status: 'pending' };
     });
     const created = now();
-    const run = { schema: 2, run_id: id, kind: src.kind, app: cfg.app, repo: src.repo, journey, ...drive, claim: src.claim, claim_id: src.claim_id, branch: src.branch, judge: judging, status: 'pending', inputs, steps, created, updated: created, ...(driveReuse && src.record && { record: src.record }) };
+    const run = { schema: 2, run_id: id, kind: src.kind, app: cfg.app, repo: src.repo, journey, ...drive, claim: src.claim, claim_id: src.claim_id, branch: src.branch, judge: judging, status: 'pending', inputs, steps, created, updated: created, ...(driveReuse && src.record && { record: src.record }), ...(driveReuse && src.guarded && { guarded: src.guarded }) };
     saveRun(dir, run);
     for (const s of steps) {
         const f = join(root, srcId, 'logs', `${s.name}.log`);

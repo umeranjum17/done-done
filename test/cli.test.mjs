@@ -1034,7 +1034,7 @@ test('init --hook gemini and --hook pi give the model the bare state at the star
   }
 });
 
-// Fixture repos of two shapes for init's verify-skill scaffold: a web app and a CLI tool.
+// Fixture repos of three shapes for init's verify-skill scaffold: a web app, a CLI tool and a repo with nothing to detect.
 function shapeRepo(kind, name) {
   const dir = mkdtempSync(join(tmpdir(), 'done-done-shape-'));
   after(() => rmSync(dir, { recursive: true, force: true }));
@@ -1047,7 +1047,8 @@ function shapeRepo(kind, name) {
     writeFileSync(join(repo, 'src', 'App.jsx'), 'export const App = () => <h1>shop</h1>;\n');
     writeFileSync(join(repo, 'server.js'), "app.get('/cart', show);\napp.post('/checkout', pay);\n");
     writeFileSync(join(repo, 'README.md'), '# shop\n');
-  } else {
+  } else if (kind === 'bare') writeFileSync(join(repo, 'README.md'), `# ${name}\n`);
+  else {
     writeFileSync(join(repo, 'package.json'), JSON.stringify({ name, bin: { [name]: 'bin/cli.js' }, dependencies: { commander: '^12.0.0' } }));
     mkdirSync(join(repo, 'bin'));
     writeFileSync(join(repo, 'bin', 'cli.js'), `#!/usr/bin/env node\nprogram.command('add').command('list');\n`);
@@ -1087,6 +1088,23 @@ test('init scaffolds a verify skill with real launch and features for a web app'
   assert.equal(toon(dd('init')).verify_skill, 'unchanged');
   assert.equal(readFileSync(join(dir, 'SKILL.md'), 'utf8'), before, 're-run is idempotent');
 });
+
+for (const kind of ['web', 'bare'])
+  test(`init scaffolds a ${kind} repo's verify skill with a step on every line that passes maintain hygiene`, () => {
+    const { repo, env, dd } = shapeRepo(kind, 'shop');
+    assert.equal(dd('init').code, 2);
+    const dir = join(repo, '.agents', 'skills', 'verify-shop');
+    for (const f of readdirSync(dir, { recursive: true }).filter((f) => f.endsWith('.md'))) assert.doesNotMatch(readFileSync(join(dir, f), 'utf8'), /TODO/, f);
+    const feats = featureFiles(dir).filter((f) => f !== 'README.md');
+    assert.ok(feats.length > 0, 'a repo with nothing detected still gets a feature to drive');
+    for (const f of feats) assert.match(readFileSync(join(dir, 'features', f), 'utf8'), /^2\. \S.+\n3\. Capture: .+\$DONE_DONE_EVIDENCE_ROOT\/\S+\.(png|txt)/m, `${f} has drive and capture steps`);
+    execFileSync('git', ['add', '-A'], { cwd: repo, env });
+    execFileSync('git', ['commit', '-qm', 'skill'], { cwd: repo, env });
+    writeFileSync(join(env.DONE_DONE_HOME, 'config.yaml'), 'agent: claude\n');
+    const s = stubAgents(env, JSON.stringify({ drift: [], recipe: 'open it', recipes: [], missing: [] }));
+    const r = doctorIn(repo, s.env, 'maintain', '--foreground');
+    assert.deepEqual([r.code, toon(r).result, toon(r).findings?.length ?? 0], [0, 'clean', 0], r.out);
+  });
 
 test('init scaffolds a verify skill with real bin and commands for a CLI tool', () => {
   const { repo, dd } = shapeRepo('cli', 'notes');

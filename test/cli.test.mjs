@@ -1145,7 +1145,7 @@ test('init names one driver for a react and express app: the harness, the route 
   const [feat] = featureFiles(dir).filter((f) => f !== 'README.md');
   const body = readFileSync(join(dir, 'features', feat), 'utf8');
   assert.match(body, /^## Driving it with plain HTTP \(curl\)$/m, 'the feature names the harness driver');
-  assert.match(body, /^2\. Send it with `curl -sS -i -X GET BASE\/api\/items`/m, 'the route is driven with curl, not a browser');
+  assert.match(body, /^2\. Send it with `curl -sS -i -X GET "BASE\/api\/items"`/m, 'the route is driven with curl, not a browser');
   assert.match(body, /^3\. Capture: save the output and exit status to \$DONE_DONE_EVIDENCE_ROOT\/\S+\.txt/m, 'the capture is text');
 });
 
@@ -1186,13 +1186,21 @@ test('init never overwrites an existing verify skill', () => {
 test('init maps the app, not its dependencies, and lists each feature slug once', () => {
   const { repo, dd } = apiShape('notes');
   mkdirSync(join(repo, 'node_modules', 'lib'), { recursive: true });
-  writeFileSync(join(repo, 'node_modules', 'lib', 'index.js'), "router.get('/vendored/route');\nprogram.command('vendored');\n");
+  writeFileSync(join(repo, 'node_modules', 'lib', 'index.js'), "router.get('/vendored/route');\n");
   writeFileSync(join(repo, 'routes.js'), "app.get('/a/b');\napp.get('/a-b');\n");
   const r = dd('init');
   assert.equal(r.code, 2, r.out);
   const dir = join(repo, '.agents', 'skills', 'verify-notes');
   assert.deepEqual(featureFiles(dir), ['README.md', 'get-a-b-2.md', 'get-a-b.md'], 'node_modules is skipped and each distinct route keeps its own file');
   assert.match(readFileSync(join(dir, 'features', 'get-a-b-2.md'), 'utf8'), /^# GET \/a-b$/m);
+});
+
+test('init skips a dependency command when it maps a CLI', () => {
+  const { repo, dd } = shapeRepo('cli', 'notes');
+  mkdirSync(join(repo, 'node_modules', 'lib'), { recursive: true });
+  writeFileSync(join(repo, 'node_modules', 'lib', 'index.js'), "program.command('vendored');\n");
+  assert.equal(dd('init').code, 2);
+  assert.deepEqual(featureFiles(join(repo, '.agents', 'skills', 'verify-notes')), ['README.md', 'add.md', 'list.md'], 'node_modules commands are not features');
 });
 
 test('init keeps distinct routes whose slugs collide after truncation', () => {

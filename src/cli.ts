@@ -2175,7 +2175,8 @@ function detectApp(repo: string): Detected {
   const commands = [...text.matchAll(/\.command\(\s*['"`]([^'"`\s\]]+)/g)]
     .map((m) => m[1])
     .filter((c, i, a) => a.indexOf(c) === i);
-  const web = has('react', 'next', 'vue', 'nuxt', 'svelte', 'solid', 'vite', 'webpack', 'playwright', '@playwright/test', 'cypress', 'puppeteer');
+  const browserTests = has('playwright', '@playwright/test', 'cypress', 'puppeteer');
+  const web = browserTests || has('react', 'next', 'vue', 'nuxt', 'svelte', 'solid', 'vite', 'webpack');
   const cliish = bins.length > 0 || commands.length > 0 || has('commander', 'yargs', 'oclif', 'cac');
   const api = routes.length > 0 || has('express', 'fastify', 'koa', 'hono');
   const surface = web ? 'web UI' : cliish ? 'CLI' : api ? 'API/service' : 'app (unrecognized surface)';
@@ -2191,7 +2192,6 @@ function detectApp(repo: string): Detected {
     : web || api
       ? `the launch output prints the app URL and \`curl -sS -o /dev/null <that URL>\` exits 0. BASE below is that URL; ${RECORD}`
       : 'the launch command runs with no error (exit 0, or a prompt waiting for input)';
-  const browserTests = has('playwright', '@playwright/test', 'cypress', 'puppeteer');
   const driver = browserTests ? 'browser' : cliish ? 'tty' : api ? 'curl' : web ? 'browser' : 'shell';
   const harness = browserTests ? 'browser/CDP (Playwright)'
     : driver === 'tty' ? 'tmux/PTY'
@@ -2214,12 +2214,13 @@ function detectApp(repo: string): Detected {
   const shot = (s: string) => `screenshot the resulting page to $DONE_DONE_EVIDENCE_ROOT/${s}.png`;
   const saved = (s: string) => `save the output and exit status to $DONE_DONE_EVIDENCE_ROOT/${s}.txt`;
   const open = 'open BASE in the browser, take a snapshot and act on the page by its visible labels';
+  const params = 'replace each :param or ${...} in the path with a real value from the handler or seed data';
   const found: { base: string; title: string; reach: string; drive: string }[] = [
     ...(driver === 'browser' || driver === 'curl' ? routes : []).map((r) => {
       const [method, path] = r.split(' ');
-      const drive = driver === 'curl' ? `send it with \`curl -sS -i -X ${method} BASE${path}\`, with the body its handler reads (search the source for "${path}")`
-        : method === 'GET' ? open.replace('BASE', `BASE${path}`)
-        : `find the form or button that sends ${r} (search the source for "${path}"), then fill and submit it as a user does`;
+      const drive = driver === 'curl' ? `send it with \`curl -sS -i -X ${method} "BASE${path}"\`, with the body its handler reads; ${params} (search the source for "${path}")`
+        : method === 'GET' ? `${open.replace('BASE', `BASE${path}`)}; ${params}`
+        : `find the form or button that sends ${r} (search the source for "${path}"), ${params}, then fill and submit it as a user does`;
       return { base: slug(r), title: r, reach: `the ${r} route`, drive };
     }),
     ...(driver === 'tty' ? commands : []).map((c) => ({ base: slug(c), title: `\`${c}\` command`, reach: `the CLI run with \`${c}\``, drive: `run ${runCli(`${c} --help`)} to learn its arguments, then ${runCli(`${c} <arguments>`)} as a user does` })),

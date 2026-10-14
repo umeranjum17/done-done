@@ -4036,6 +4036,56 @@ test('opencode read calls get a deny-all permission and no read allowance', asyn
   assert.deepEqual(JSON.parse(s.calls()[0].permission), { '*': 'deny' });
 });
 
+test('the opencode author drive allows every external directory except the user home, while a tool-less call stays deny-all', async () => {
+  const { repo, env } = setup();
+  const s = stubAgents(env);
+  const { askAgent } = await import(pathToFileURL(join(dirname(fileURLToPath(import.meta.url)), '..', 'dist', 'agents.js')).href);
+  const call = { agent: 'opencode', model: 'm', path: join(s.env.PATH, 'opencode'), prompt: 'p', schema: { type: 'object', properties: { ok: { type: 'boolean' } }, required: ['ok'] }, cwd: repo, timeoutMs: 60_000, record: join(s.env.PATH, 'rec.json') };
+  const old = process.env.PATH, oldHome = process.env.HOME, oldXdg = process.env.XDG_DATA_HOME;
+  const home = join(env.DONE_DONE_HOME, 'home'), xdg = join(env.DONE_DONE_HOME, 'xdg-data'), data = join(xdg, 'opencode');
+  const evidence = join(env.DONE_DONE_HOME, 'evidence'), scratch = join(env.DONE_DONE_HOME, 'tmp');
+  process.env.PATH = s.env.PATH;
+  process.env.HOME = home;
+  process.env.XDG_DATA_HOME = xdg;
+  try {
+    await askAgent({ ...call, tools: 'edit', dirs: [evidence, scratch] });
+    await askAgent({ ...call, tools: 'none' });
+  } finally {
+    process.env.PATH = old;
+    if (oldHome === undefined) delete process.env.HOME; else process.env.HOME = oldHome;
+    if (oldXdg === undefined) delete process.env.XDG_DATA_HOME; else process.env.XDG_DATA_HOME = oldXdg;
+  }
+  const [drive, judge] = s.calls();
+  // A headless run cannot answer a permission ask, so the drive allows every external path except the home folder,
+  // where the run's own folders are allowed again, and opencode's data folder (its login) stays denied.
+  const scope = JSON.parse(drive.permission).external_directory;
+  assert.deepEqual(Object.keys(scope).slice(0, 5), ['*', home, `${home}/*`, data, `${data}/*`], 'the home and data folder denies come before the run folders');
+  assert.deepEqual([scope['*'], scope[home], scope[`${home}/*`], scope[data], scope[`${data}/*`]], ['allow', 'deny', 'deny', 'deny', 'deny'], 'the drive allows external folders, denies the home folder and opencode\'s data folder');
+  assert.deepEqual([scope[evidence], scope[`${evidence}/*`], scope[scratch], scope[`${scratch}/*`]], ['allow', 'allow', 'allow', 'allow'], 'the run\'s evidence and scratch folders are allowed after the denies');
+  assert.ok(Object.keys(scope).indexOf(`${home}/*`) < Object.keys(scope).indexOf(evidence), 'the run folder allows come after the home deny, which opencode takes as the last match');
+  assert.deepEqual(JSON.parse(judge.permission), { '*': 'deny' }, 'a tool-less call keeps the deny-all scope');
+});
+
+test('an opencode auto-reject names the refused permission instead of "no JSON object"', async () => {
+  const { repo, env } = setup();
+  const s = pathEnv(env, []);
+  writeFileSync(join(s.PATH, 'opencode'), `#!${process.execPath}
+process.stderr.write('! permission requested: external_directory (/usr/bin/*); auto-rejecting\\n');
+`, { mode: 0o755 });
+  const { askAgent } = await import(pathToFileURL(join(dirname(fileURLToPath(import.meta.url)), '..', 'dist', 'agents.js')).href);
+  const old = process.env.PATH;
+  process.env.PATH = s.PATH;
+  let out;
+  try {
+    out = await askAgent({ agent: 'opencode', model: 'm', path: join(s.PATH, 'opencode'), prompt: 'p', schema: { type: 'object', properties: { ok: { type: 'boolean' } }, required: ['ok'] }, cwd: repo, timeoutMs: 60_000, tools: 'edit', record: join(s.PATH, 'rec.json') });
+  } finally {
+    process.env.PATH = old;
+  }
+  assert.equal(out.ok, false);
+  assert.match(out.error, /permission to external_directory \(\/usr\/bin\/\*\)/, out.error);
+  assert.doesNotMatch(out.error, /no JSON object in the answer/, 'the refused permission is the reason, not a bad answer');
+});
+
 test('braces in the prose before the JSON in the final answer do not break it', () => {
   const { repo, env } = setup();
   const s = stubPiGemini(env);

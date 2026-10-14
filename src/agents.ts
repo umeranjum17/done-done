@@ -1,6 +1,6 @@
 import { spawn, spawnSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { dirname, isAbsolute, join } from 'node:path';
 import { stripVTControlCharacters } from 'node:util';
 import { AGENTS, ANSWERER_JUDGES, CHEAP, type Config, EFFORT_FLAGS, KEY_ROUTES, parseDuration, UsageError } from './config.js';
@@ -44,6 +44,10 @@ function errorLine(text: string): string {
   const line = (top.findLast((l) => ERROR_WORD.test(l)) ?? top.at(-1) ?? lines.at(-1) ?? '').trim();
   return line.length > 200 ? `${line.slice(0, 199)}…` : line;
 }
+// opencode prints this on stderr and auto-rejects the ask when a headless run reaches a permission a non-interactive
+// call can never answer. The drive then ends with no answer, so name the permission and paths it refused instead of
+// the bare "no JSON object in the answer" its empty output would give.
+const PERMISSION_REJECT = /permission requested:\s*(\S+)\s*\(([^)]*)\);\s*auto-rejecting/;
 class ProviderError extends Error {
   readonly detail: string;
   constructor(text: string, prefix = '', suffix = '') {
@@ -54,7 +58,7 @@ class ProviderError extends Error {
 // files: name -> text the call needs in its scratch folder (gemini's deny-all policy).
 // editOnly: the agent cannot run a tool-less call, so only an edit step may start it; the reason is what the caller shows.
 // editNote: what an edit step's prompt adds about how this agent's own shell runs commands.
-type Adapter = { argv: (c: AgentCall, dir: string) => string[]; answer: (stdout: string, c: AgentCall) => unknown; file?: boolean; hint?: string; editOnly?: string; editNote?: string; env?: (c: AgentCall) => Record<string, string>; files?: (c: AgentCall) => Record<string, string> };
+type Adapter = { argv: (c: AgentCall, dir: string) => string[]; answer: (stdout: string, c: AgentCall) => unknown; file?: boolean; hint?: string; editOnly?: string; editNote?: string; env?: (c: AgentCall) => Record<string, string>; files?: (c: AgentCall) => Record<string, string>; reject?: (stderr: string) => string };
 
 // The answer object in an agent's free text: the first top-level '{'..'}' span that parses to an object with every
 // required key, skipping braces and quotes in narration. With no such span, the last span that parsed is returned, so
@@ -138,9 +142,25 @@ const ADAPTERS: Record<string, Adapter> = {
       }
       return extractJsonObject(text, c.schema.required);
     },
-    // An edit step keeps the user's own permissions, where a folder outside cwd asks and so is refused in `run`; only the
-    // run's own folders are allowed.
-    env: (c): Record<string, string> => ({ OPENCODE_PERMISSION: JSON.stringify(c.tools === 'edit' ? { external_directory: Object.fromEntries((c.dirs ?? []).flatMap((d) => [[d, 'allow'], [`${d}/*`, 'allow']])) } : { '*': 'deny' }) }),
+    // A headless `run` cannot answer a permission ask, so any ask auto-rejects and the drive ends with no answer.
+    // Driving the app runs commands that read or execute paths outside the repo (a browser, a system binary), so an
+    // edit step allows every external directory except the user's home folder, where only the run's own folders are
+    // allowed again; opencode's data folder (its login and database) is denied even when it is outside the home folder.
+    // opencode takes the last rule that matches, so the run folders come after the denies. Tool-less calls deny all.
+    env: (c): Record<string, string> => {
+      if (c.tools !== 'edit') return { OPENCODE_PERMISSION: JSON.stringify({ '*': 'deny' }) };
+      const home = homedir();
+      const data = join(process.env.XDG_DATA_HOME || join(home, '.local', 'share'), 'opencode');
+      return { OPENCODE_PERMISSION: JSON.stringify({ external_directory: {
+        '*': 'allow', [home]: 'deny', [`${home}/*`]: 'deny', [data]: 'deny', [`${data}/*`]: 'deny',
+        ...Object.fromEntries((c.dirs ?? []).flatMap((d) => [[d, 'allow'], [`${d}/*`, 'allow']])),
+      } }) };
+    },
+    // A permission the run refused: the drive could not continue, so this is the reason, not a missing answer.
+    reject: (stderr) => {
+      const m = PERMISSION_REJECT.exec(stripVTControlCharacters(stderr));
+      return m ? `it asked for permission to ${m[1]} (${m[2]}), which a headless run cannot answer and auto-rejects` : '';
+    },
   },
   // pi -p reads the prompt on stdin (probed 12 Oct: with no positional message, stdin becomes the user
   // message); --mode json streams JSONL events whose assistant message_end holds the answer text,
@@ -400,6 +420,9 @@ export async function askAgent(c: AgentCall): Promise<AgentAnswer> {
       if (adapter.file) writeFileSync(join(dir, 'prompt.md'), promptText, { mode: 0o600 });
       res = await start(bin, argv(dir), c, cwd, adapter.file ? '' : promptText, { ...process.env, ...c.env, ...adapter.env?.(c) });
       if (res.error) throw res.error;
+      // A permission the run refused explains a call with no answer; name it rather than the exit code text.
+      const refused = adapter.reject?.(String(res.stderr ?? '')) ?? '';
+      if (res.status !== 0 && refused) throw new ProviderError(refused, `${c.agent} exited ${res.status}: `);
       if (res.status !== 0) {
         // An agent that exits non-zero may still say why in its own output (claude: a usage limit, a bad model).
         let text = String(res.stderr || res.stdout).trim().slice(-500);
@@ -420,6 +443,8 @@ export async function askAgent(c: AgentCall): Promise<AgentAnswer> {
         break;
       } catch (e) {
         if (e instanceof ProviderError) throw e;
+        // A refused permission is why there is no usable answer, not a bad answer: name it instead of "no JSON object".
+        if (refused) throw new ProviderError(refused, `${c.agent} did not finish: `);
         // Only a tool-less call is asked again: an edit or read step may already have changed the repo or read it.
         lastError = (e as Error).message;
         if (c.tools !== 'none' || attempts >= (c.attempts ?? ASK_ATTEMPTS)) throw new Error(`the agent did not answer with valid JSON after ${attempts} ${attempts === 1 ? 'try' : 'tries'}: ${lastError}`);

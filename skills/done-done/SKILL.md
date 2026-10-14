@@ -40,7 +40,7 @@ done-done starts a coding agent the user chose. When it says no agent is set, as
 (and model) to use and save their answer with the command it prints; never choose one for them.
 
 done-done runs its own agent: `done-done verify` drives the journey, then a judge the user chose, never
-the agent that did the work (never you), looks at each screenshot. That is on by default; skip it with
+the agent that did the work (never you), looks at each capture. That is on by default; skip it with
 `--no-judge` only when the user chooses to. When it says no judge is set, ask the user which judge (and
 model) to use and save their answer with the command it prints; never choose one for them.
 

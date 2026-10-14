@@ -34,11 +34,12 @@ What ships now:
 - **Capture matrix.** One verify run captures every theme x width x form cell the repo asks for; each cell is captured or skipped with a reason.
 - **DOM assertions.** With a `dom` block, each captured screen's page-check record must be clean: no horizontal overflow, console error or failed request that an allow list does not name.
 - **Base-ref before.** With `base_ref`, `verify` drives the base ref too and judges each head capture together with its base capture.
+- **Text evidence.** The judge reads text captures (logs, JSON, CLI output) as well as screens; see the [reference](docs/reference.md).
 
 What comes next:
 
 - `auto_fix` for each `verify` step, like no-mistakes.
-- More project-agnostic primitives, such as a text-evidence judge and an `init` base for new projects.
+- More project-agnostic primitives, such as an `init` base for new projects.
 - Help to write the proof steps for your app.
 
 Custom behaviour from a project becomes a new primitive in done-done.

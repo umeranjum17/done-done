@@ -11,7 +11,7 @@ import { encode } from '@toon-format/toon';
 import { Document, parseDocument } from 'yaml';
 import { ACPX_INSTALL, agentChoices, agentPath, agentRun, askAgent, editOnlyReason, findBin, JUDGES, modelFor, noAgent, noJudge, notStartable, routeOf, selectAgent, selectJudge } from './agents.js';
 import { AGENTS, CHEAP, globalConfigText, home, isAgent, loadConfig, parseDuration, UsageError } from './config.js';
-import { backend, judge, judgeable, onPath, quote } from './judge.js';
+import { backend, judge, judgeable, onPath, quote, screen } from './judge.js';
 import { startInstance, stopInstance } from './instance.js';
 import { attemptProblem, changedSince, commitFix, dirtyTracked, FIX_SCHEMA, inWorktree, maintainSteps, named, refuseSameSession, repoState, triage } from './maintain.js';
 import { cellEnv, cellName, cellSuffix, hasMatrix, matrixManifest, splitMatrix } from './matrix.js';
@@ -39,7 +39,7 @@ const RUNS_TEXT = `runs: each verify or maintain run lives in $DONE_DONE_HOME/ru
   verify steps: resolve, drive, check, judge (skipped with --no-judge), gate, receipt, report;
   maintain steps: locate, hygiene, source-wave, reconcile, triage and fix (only with auto_fix.maintain above 0), report
   drive: the journey when there is one; else the author agent (agent: in config) drives one feature of the verify skill the way a user
-  does and saves screenshots into the run's evidence folder; it may run commands and edit files only in the repo and that folder where
+  does and saves captures into the run's evidence folder; it may run commands and edit files only in the repo and that folder where
   its CLI can limit it (pi cannot), and a drive that changes a tracked file fails
   gate: a judge fail or unsure (or an agent drive with no judged capture) parks the run as awaiting_approval (exit 4); answer it with
   respond: approve or skip (each needs --reason) ends the run overridden, never pass, and its receipt says who and why, so
@@ -161,7 +161,7 @@ const COMMANDS = {
     },
     verify: {
         usage: [
-            ['done-done verify [<journey>] --outcome "<what a user can now do>" [--claim-id <id>] [--no-judge]', 'drive the journey in a run that outlives this command, check its evidence, judge each screenshot and record a receipt'],
+            ['done-done verify [<journey>] --outcome "<what a user can now do>" [--claim-id <id>] [--no-judge]', 'drive the journey in a run that outlives this command, check its evidence, judge each capture and record a receipt'],
             ['done-done verify --outcome "<claim>" [--feature <name>]', 'with no journey, the author agent drives a verify skill feature and the judge (never the author) judges its captures'],
             ['done-done verify [<journey>] --outcome "<claim>" --no-wait | --wait | --foreground', 'return at once, wait until the run ends or waits at its gate (default), or run in this process (CI)'],
         ],
@@ -720,8 +720,9 @@ async function runCheck(argv, run) {
                 judgeLevel = 'fail';
             else if (!findings.length && j.judged.some((r) => r.verdict === 'unsure'))
                 judgeLevel = 'inconclusive';
+            const shots = new Set(captures.filter(screen).map((c) => c.name));
             for (const r of j.judged.filter((r) => r.verdict !== 'pass'))
-                findings.push({ level: r.verdict === 'fail' ? 'fail' : 'inconclusive', why: `${r.path}: judge says ${r.verdict === 'fail' ? 'wrong screen' : 'unsure'}: ${r.reason}`, file: r.path });
+                findings.push({ level: r.verdict === 'fail' ? 'fail' : 'inconclusive', why: `${r.path}: judge says ${r.verdict !== 'fail' ? 'unsure' : shots.has(r.path) ? 'wrong screen' : 'wrong output'}: ${r.reason}`, file: r.path });
             const rows = cap(j.judged);
             const { choice } = j;
             judged = { ...(choice && { route: choice.route, model: choice.model, independence: choice.independence, author: `${choice.author.agent} (model ${choice.author.model || 'none'})` }), judged: rows.items.map(({ sha256, ...r }) => r) };
@@ -733,7 +734,7 @@ async function runCheck(argv, run) {
                 judged.judged_omitted = rows.omitted;
             if (j.notJudged.length)
                 judged.not_judged = j.notJudged;
-            judged.note = 'only PNG and JPEG captures are judged; text, log and video evidence are not';
+            judged.note = 'PNG and JPEG screens and text captures (logs, JSON, CLI output) are judged; video and other files are not';
         }
     }
     const rep = report(findings, files, { cfg, repo, claim: claim?.outcome, source: values.from, judge: judged, judgeLevel });
@@ -1059,8 +1060,8 @@ ${inst}${cells}${dom}${before}
 1. Read the verify skill ${join(skill, 'SKILL.md')} (how to launch, check, drive, capture and clean up this app) and ${recipe}.
 2. ${cfg.instance ? 'Drive that running instance' : 'Launch the app as the skill says, then drive'} that feature through the real user path, step by step as its recipe says.
    Never add steps or data to make the outcome look true: capture what that path shows, even when it contradicts the outcome.
-3. Save PNG screenshots of what a user sees once the path is done (the resulting state the outcome is about) into ${evidence} (also in $DONE_DONE_EVIDENCE_ROOT).
-   The judge checks every screenshot there against the outcome, so a screenshot of an earlier step (such as an empty or half-filled form) fails the drive: keep those in ${scratch}. Save nothing else there, and never edit a capture.
+3. Save PNG screenshots of what a user sees once the path is done (the resulting state the outcome is about) into ${evidence} (also in $DONE_DONE_EVIDENCE_ROOT); when the outcome shows in text (a CLI's output, a log or JSON), save that text there as a .txt, .log or .json file instead.
+   The judge checks every capture there against the outcome, so a capture of an earlier step (such as an empty or half-filled form, or text from before the outcome) fails the drive: keep those in ${scratch}. Save nothing else there, and never edit a capture.
 4. Stop everything you started.
 
 Do not change any file in the repository. Do not run done-done: it refuses inside a drive, and done-done answers the run after you stop. Put logs and other scratch files in ${scratch} (also in $TMPDIR), never in /tmp.
@@ -1383,7 +1384,7 @@ async function runSteps(dir) {
             const notJudged = judgeRan && run.journey === null ? (checked.judge?.not_judged ?? []) : [];
             const asks = !clean ? [] : judgeRan ? [...judgeFindings, ...notJudged.map((name) => ({ level: 'inconclusive', why: `${name}: the judge did not read this capture, and an agent drive passes only with a judge pass on every capture` }))]
                 : run.journey !== null ? []
-                    : run.judge ? [{ level: 'inconclusive', why: 'the judge judged no capture (only PNG and JPEG captures are judged), and an agent drive passes only with a judge pass' }]
+                    : run.judge ? [{ level: 'inconclusive', why: 'the judge judged no capture (only PNG, JPEG and text captures are judged), and an agent drive passes only with a judge pass' }]
                         : [{ level: 'inconclusive', why: 'the judge is off (--no-judge), and an agent drive passes only with a judge pass' }];
             // With auto_fix.verify, screens the judge calls wrong (and nothing it was unsure of) are a product failure to fix.
             if (tries && asks.length && asks.every((f) => f.level === 'fail'))
@@ -2226,7 +2227,7 @@ ${found.join('\n')}
 
 ## Evidence
 
-Capture ${d.observe}. Exercise the real user path, not internal setters; done-done's judge checks every screenshot in the run folder against the outcome, so save only screenshots of the resulting state there and keep any of earlier steps outside it; verify side effects alongside what is visible. Evidence goes to the run folder \`done-done run\` prints. When .done-done.yaml sets a matrix block, each journey runs once per theme x width x form cell with DONE_DONE_THEME, DONE_DONE_WIDTH, DONE_DONE_FORM and DONE_DONE_CELL set: name each capture with its cell suffix, so every cell is captured or skipped with a reason, never silently missing. When .done-done.yaml sets a dom block, write next to each capture its page-check record, the capture's name with .dom.json for its extension (home.dark.390w.png -> home.dark.390w.dom.json): ${DOM_RECORD}.
+Capture ${d.observe}. Exercise the real user path, not internal setters; done-done's judge checks every capture in the run folder against the outcome, so save only captures of the resulting state there and keep any of earlier steps outside it; verify side effects alongside what is visible. Evidence goes to the run folder \`done-done run\` prints. When .done-done.yaml sets a matrix block, each journey runs once per theme x width x form cell with DONE_DONE_THEME, DONE_DONE_WIDTH, DONE_DONE_FORM and DONE_DONE_CELL set: name each capture with its cell suffix, so every cell is captured or skipped with a reason, never silently missing. When .done-done.yaml sets a dom block, write next to each capture its page-check record, the capture's name with .dom.json for its extension (home.dark.390w.png -> home.dark.390w.dom.json): ${DOM_RECORD}.
 
 ## Cleanup
 
@@ -2497,7 +2498,7 @@ async function pick(kind, cfg) {
         const menu = kind === 'agent' ? [...AGENTS, ACP_TARGET] : JUDGES;
         const label = (a) => (a === ACP_TARGET ? `${a} (an agent your acpx bridge starts)` : a);
         const doer = cfg.agent ? `the one that did the work (${cfg.agent})` : 'the agent that does the work';
-        const head = kind === 'agent' ? 'done-done starts a coding agent you choose, and none is set. Agents:' : `done-done judges each screenshot with an agent you choose, never ${doer}, and none is set. Judges:`;
+        const head = kind === 'agent' ? 'done-done starts a coding agent you choose, and none is set. Agents:' : `done-done judges each capture with an agent you choose, never ${doer}, and none is set. Judges:`;
         process.stderr.write(`${head}\n${menu.map((a, i) => `  ${i + 1}) ${label(a)}\n`).join('')}`);
         for (;;) {
             let agent = '';

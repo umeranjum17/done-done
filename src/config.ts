@@ -30,6 +30,8 @@ export type Config = {
   matrix: Matrix | null;
   // Primitive 14 (DOM assertions): page-check records per capture, allow lists; null when unset: today's behaviour.
   dom: Dom | null;
+  // Primitive 4 (base-ref-before): verify drives this ref too and pairs its captures with the head's; '' (the default) is off.
+  base_ref: string;
   evidence: { local_root: string; root: string; allow_dirty: boolean; ignore_paths: string[] };
   checks: { not_proven: 'inconclusive' | 'allow'; fix_title: string };
   // enabled: verify judges unless false (--judge turns it on for a run); check and receipt judge with --judge or true; rerun repeats its source run.
@@ -86,6 +88,7 @@ const KEYS: Record<string, { scope: 'global' | 'repo' | 'any'; type: 'string' | 
   instance: { scope: 'repo', type: 'instance' },
   matrix: { scope: 'repo', type: 'matrix' },
   dom: { scope: 'repo', type: 'dom' },
+  base_ref: { scope: 'repo', type: 'string' },
   'evidence.root': { scope: 'repo', type: 'string' },
   'evidence.allow_dirty': { scope: 'repo', type: 'boolean' },
   'evidence.ignore_paths': { scope: 'repo', type: 'string[]' },
@@ -244,6 +247,7 @@ function defaultConfig(repo: string): Config {
     instance: null,
     matrix: null,
     dom: null,
+    base_ref: '',
     evidence: { local_root: join(home(), 'evidence'), root: '', allow_dirty: false, ignore_paths: [] },
     checks: { not_proven: 'inconclusive', fix_title: '^(fix|bugfix|hotfix)\\b' },
     judge: { route: '', model: '', allow_same: false, claude_code: { config_dir: join(home(), 'claude') } },

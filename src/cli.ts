@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import { createHash, randomBytes } from 'node:crypto';
-import { accessSync, appendFileSync, closeSync, constants, existsSync, lstatSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { accessSync, appendFileSync, closeSync, constants, cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir, userInfo } from 'node:os';
 import { delimiter, dirname, isAbsolute, join, matchesGlob, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -293,6 +293,7 @@ type RunRecord = {
   files: { path: string; sha256: string; bytes: number }[];
   author?: { agent: string; model: string }; // the agent that drove the run, when no journey did
   matrix?: ReturnType<typeof matrixManifest>; // the capture-matrix manifest, when a matrix block is set
+  base?: { ref: string; commit: string; error?: string }; // the base_ref drive, whose captures are in the run folder's before/
 };
 
 // A path as the user should see it: repo-relative inside the repo, else with the home directory as ~.
@@ -611,6 +612,13 @@ async function runCheck(argv: string[], run?: { dir: string; judge: boolean; jud
   const hashes: string[] = [];
   const cited: { path: string; sha256: string }[] = [];
   const captures: Capture[] = [];
+  // base_ref: a capture in <run id>/before/ of a run that drove its base ref pairs with <run id>/<the same name>.
+  const pairOf = (inRoot: string | null) => {
+    const [id, dir, ...rest] = inRoot?.split(sep) ?? [];
+    return dir === BEFORE && rest.length && records.some((r) => r.run_id === id && r.base) ? join(id, ...rest) : null;
+  };
+  const befores = new Map<string, Capture>();
+  const heads: [Capture, string | null, RunRecord][] = [];
   for (const name of files) {
     const path = resolve(name);
     let bytes: Buffer;
@@ -628,11 +636,13 @@ async function runCheck(argv: string[], run?: { dir: string; judge: boolean; jud
     cited.push({ path: receiptPath(repo, cfg, path), sha256: hash });
     // A page-check record is a capture's companion: two clean cells of one page write the same bytes, and the judge never reads one.
     const record = !!cfg.dom && isDomRecord(name);
-    if (cfg.dom && ['png', 'jpeg', 'webp', 'gif', 'mp4', 'webm'].includes(v.type)) for (const why of domIssues(cfg.dom, path)) findings.push({ level: 'fail', why: `${name}: ${why}` });
-    if (seen.has(hash) && !record) findings.push({ level: 'fail', why: `${name}: byte-identical to ${seen.get(hash)}` });
-    seen.set(hash, name);
-    // A file in the evidence root is claimed by the record that lists its path; a copy elsewhere, by its bytes.
     const inRoot = under(cfg.evidence.root, path);
+    const pair = pairOf(inRoot);
+    if (cfg.dom && !pair && ['png', 'jpeg', 'webp', 'gif', 'mp4', 'webm'].includes(v.type)) for (const why of domIssues(cfg.dom, path)) findings.push({ level: 'fail', why: `${name}: ${why}` });
+    // A base capture may equal its head capture byte for byte: the pair's judge, not this check, says the screen did not change.
+    if (seen.has(hash) && !record && !pair) findings.push({ level: 'fail', why: `${name}: byte-identical to ${seen.get(hash)}` });
+    if (!pair) seen.set(hash, name);
+    // A file in the evidence root is claimed by the record that lists its path; a copy elsewhere, by its bytes.
     const claims = records.filter((r) => r.files.some((f) => f.sha256 === hash && (inRoot === null || f.path === inRoot)));
     if (!claims.length && inRoot !== null) {
       const edited = records.filter((r) => r.files.some((f) => f.path === inRoot));
@@ -653,15 +663,24 @@ async function runCheck(argv: string[], run?: { dir: string; judge: boolean; jud
     }
     const rec = claims[0];
     // Only a capture tied to a run record can reach the judge, so a stray cited file is never sent.
-    if (v.status === 'ok' && !record) captures.push({ name, bytes, sha256: hash, media: v });
+    const c: Capture = { name, bytes, sha256: hash, media: v };
+    if (v.status === 'ok' && !record && pair) befores.set(pair, c);
+    else if (v.status === 'ok' && !record) {
+      captures.push(c);
+      if (rec.base) heads.push([c, inRoot, rec]);
+    }
     const stale = staleness(repo, cfg, rec.commit, now.commit);
     if (stale) findings.push({ level: 'fail', why: `${name}: ${stale} (run ${rec.run_id})` });
     if (rec.dirty && !cfg.evidence.allow_dirty) findings.push({ level: 'fail', why: `${name}: captured from a tree with uncommitted changes (run ${rec.run_id})` });
     if (rec.exit !== null && rec.exit !== 0) findings.push({ level: 'fail', why: `${name}: its run command exited ${rec.exit} (run ${rec.run_id})` });
   }
+  // A head capture of a base_ref run with no base capture of its name is reported, then judged alone.
+  for (const [c, inRoot, rec] of heads)
+    if (!(c.before = befores.get(inRoot ?? '')))
+      findings.push({ level: 'inconclusive', why: `${c.name}: no base capture to compare with: the drive at base_ref ${rec.base!.ref} saved no ${join(BEFORE, inRoot ? relative(rec.run_id, inRoot) : c.name)}${rec.base!.error ? ` (${rec.base!.error})` : ''}`, file: c.name });
   // The capture matrix: every required cell needs a capture named with its suffix, never silently missing.
   if (hasMatrix(cfg.matrix))
-    for (const c of matrixManifest(cfg.matrix!, files.filter((f) => !cfg.dom || !isDomRecord(f))).cells.filter((c) => !c.files.length))
+    for (const c of matrixManifest(cfg.matrix!, files.filter((f) => (!cfg.dom || !isDomRecord(f)) && !pairOf(under(cfg.evidence.root, resolve(f))))).cells.filter((c) => !c.files.length))
       findings.push({ level: 'fail', why: `cell ${c.cell} has no capture: name one file *${c.suffix}* (journeys name captures with DONE_DONE_CELL)` });
   // Reuse: fail only when every cited file was already used for a different claim id. The ledger lives in the
   // evidence root next to the run records it guards: one per app (repo), shared by every checkout of it, never in git.
@@ -1036,17 +1055,18 @@ const driveHint = (repo: string, cfg: Config) => existsSync(join(repo, cfg.skill
 const DOM_RECORD = '{"url": "<page url>", "overflow": <true when content is wider than the viewport>, "overflowing": ["<element>", ...], "console_errors": ["<message>", ...], "failed_requests": [{"url": "<url>", "status": <HTTP status, 0 when none>}]}'
   + "; with your browser tool (for example chrome-devtools-axi): overflow from eval \"() => { const w = document.documentElement.clientWidth; return { overflow: document.documentElement.scrollWidth > w, overflowing: [...document.querySelectorAll('body *')].filter((e) => e.getBoundingClientRect().right > w + 1).slice(0, 10).map((e) => e.tagName.toLowerCase() + (e.id ? '#' + e.id : '')) } }\", console errors from console --type error, failed requests (status 400 or more, or no response) from network";
 
-function drivePrompt(run: Run, at: string, cfg: Config, evidence: string, scratch: string): string {
+function drivePrompt(run: Run, at: string, cfg: Config, evidence: string, scratch: string, base = ''): string {
   const skill = join(at, cfg.skill);
   const recipe = run.feature ? `the feature recipe ${join(skill, 'features', `${run.feature}.md`)}` : `its feature map ${join(skill, 'features', 'README.md')}, then pick the one feature the outcome is about`;
   const inst = cfg.instance ? `\n\nThe app is already running at $DONE_DONE_BASE_URL (started by done-done on its own port with its own HOME; DONE_DONE_PORT is its port). Drive that instance: do not start your own server or hard-code a port.` : '';
   const matrix = hasMatrix(cfg.matrix) ? splitMatrix(cfg.matrix!) : null;
   const cells = !matrix ? '' : `\n\nThe repo asks for every theme x width x form cell below: drive each cell (theme and width are the recipe's job) and save one PNG per cell whose file name holds its suffix, e.g. ${evidence}/home.<suffix>.png:\n${matrix.required.map((c) => `- ${cellName(c)}: *${cellSuffix(c)}*`).join('\n')}${matrix.skipped.length ? `\nSkipped (capture nothing for these):\n${matrix.skipped.map((s) => `- ${cellName(s.cell)} (${s.reason})`).join('\n')}` : ''}`;
   const dom = cfg.dom ? `\n\nThe repo checks each page: next to every capture write its page-check record, the capture's name with .dom.json for its extension (e.g. home.dom.json for home.png), as the verify skill's Evidence section says: ${DOM_RECORD}. Record what the page shows; never fix the page.` : '';
+  const before = base ? `\n\nYour working directory is the base ref ${base}, before the change, so the outcome is not expected to hold here and that is no blocker: drive the same path and save the same screens under the same file names, showing them as they are before the change.` : '';
   return `You drive the real ${run.app} app the way a user does, to capture proof of one outcome. Someone else judges your captures.
 
 Outcome to prove: ${run.claim}
-${inst}${cells}${dom}
+${inst}${cells}${dom}${before}
 1. Read the verify skill ${join(skill, 'SKILL.md')} (how to launch, check, drive, capture and clean up this app) and ${recipe}.
 2. ${cfg.instance ? 'Drive that running instance' : 'Launch the app as the skill says, then drive'} that feature through the real user path, step by step as its recipe says.
    Never add steps or data to make the outcome look true: capture what that path shows, even when it contradicts the outcome.
@@ -1059,6 +1079,29 @@ Keep working until all four steps are done: your next message without a tool cal
 If you cannot launch the app or reach the feature, say why in blocker and save no capture.
 Answer with feature (the feature file you drove, such as features/<name>.md), captures (the file names you saved) and blocker ("" when you drove it),
 for example {"feature":"features/<name>.md","captures":["<name>.png"],"blocker":""}.`;
+}
+
+// base_ref: the same drive at the base ref, in a done-done worktree removed after, with the same run id, instance and matrix env;
+// its captures go to the run folder's before/. A failed base drive is recorded, not the run's failure: the check reports each
+// head capture it left without a pair.
+const BEFORE = 'before';
+async function driveBase(run: Run, cfg: Config, dir: string, rec: RunRecord, fix: string, drive: (at: string, evidence: string, env: Record<string, string>) => Promise<string>) {
+  const base = (rec.base = { ref: cfg.base_ref, commit: '' });
+  const evidence = join(runDir(cfg, rec.run_id), BEFORE);
+  const wt = join(dir, `${fix}base`);
+  try {
+    base.commit = git(run.repo, 'rev-parse', '--verify', '--end-of-options', `${cfg.base_ref}^{commit}`);
+    mkdirSync(evidence, { recursive: true });
+    const error = await inWorktree(run.repo, wt, async () => {
+      if (!cfg.instance) return drive(wt, evidence, {});
+      const inst = await startInstance(wt, cfg.instance, rec.run_id, join(dir, `${fix}base-tmp`), process.env, join(dir, 'logs', `${fix}base-instance.log`));
+      run.runner!.instance_pgid = inst.pgid;
+      return drive(wt, evidence, inst.env).finally(() => stopInstance(inst.pgid));
+    }, base.commit);
+    if (error) Object.assign(base, { error });
+  } catch (e) {
+    Object.assign(base, { error: base.commit ? errorText(e) : `base_ref ${cfg.base_ref} names no commit in this repo` });
+  }
 }
 
 function saveRun(dir: string, run: Run) {
@@ -1171,16 +1214,24 @@ async function runSteps(dir: string): Promise<void> {
           return fail(`instance: ${(e as Error).message}`);
         }
       }
-      const a = await askAgent({
-        ...agentRun(cfg, author.agent, author.model), prompt: drivePrompt(run, at, cfg, evidence, scratch), schema: DRIVE_SCHEMA, cwd: at, tools: 'edit',
-        record: join(dir, 'agents', `${fix}drive.json`), dirs: [evidence, scratch], env: { DONE_DONE_RUN_ID: rec.run_id, DONE_DONE_DRIVE: rec.run_id, DONE_DONE_EVIDENCE_ROOT: evidence, TMPDIR: scratch, ...instPort },
+      const drive = (where: string, evidence: string, env: Record<string, string>, base = '') => askAgent({
+        ...agentRun(cfg, author.agent, author.model), prompt: drivePrompt(run, where, cfg, evidence, scratch, base), schema: DRIVE_SCHEMA, cwd: where, tools: 'edit',
+        record: join(dir, 'agents', `${fix}${base ? 'base-' : ''}drive.json`), dirs: [evidence, scratch], env: { DONE_DONE_RUN_ID: rec.run_id, DONE_DONE_DRIVE: rec.run_id, DONE_DONE_EVIDENCE_ROOT: evidence, TMPDIR: scratch, ...env },
         onSpawn: spawned,
       });
+      const a = await drive(at, evidence, instPort);
       if (run.runner?.instance_pgid) stopInstance(run.runner.instance_pgid);
       const answer = a.answer as { feature?: unknown; captures?: unknown; blocker?: unknown } | undefined;
       const blocker = String(answer?.blocker ?? '').trim();
       rec.exit = a.ok && !blocker ? 0 : 1;
       const changed = tracked() !== before;
+      if (cfg.base_ref && !rec.exit && !changed)
+        await driveBase(run, cfg, dir, rec, fix, async (where, evidence, env) => {
+          // The same drive: the head's verify skill, copied into the base worktree, where the agent may read it.
+          cpSync(join(at, cfg.skill), join(where, cfg.skill), { recursive: true, force: true });
+          const b = await drive(where, evidence, env, cfg.base_ref);
+          return b.ok ? String((b.answer as { blocker?: unknown })?.blocker ?? '').trim() : `${author.agent} did not finish the drive: ${b.error}`;
+        });
       const sealed = closeRun(at, cfg, rec);
       if (!fix) run.record = join(recordsDir(cfg), `${rec.run_id}.json`);
       const picked = typeof answer?.feature === 'string' ? answer.feature.replace(/^.*features\//, '').replace(/\.md$/, '') : '';
@@ -1242,8 +1293,20 @@ async function runSteps(dir: string): Promise<void> {
         }
       }
       clearTimeout(timer);
-      closeSync(fd);
       if (run.runner?.instance_pgid) stopInstance(run.runner.instance_pgid);
+      if (cfg.base_ref && !failed.length)
+        await driveBase(run, cfg, dir, rec, fix, async (where, evidence, env) => {
+          for (const cell of matrix ?? [{}]) {
+            const child = spawn(rec.command!, { cwd: where, shell: true, detached: true, stdio: ['ignore', fd, fd], env: { ...process.env, DONE_DONE_RUN_ID: rec.run_id, DONE_DONE_EVIDENCE_ROOT: evidence, ...env, ...(matrix ? cellEnv(cell) : {}) } });
+            spawned(child.pid!);
+            const timer = setTimeout(() => killGroup(child.pid!), limit!);
+            const code = await new Promise<number>((done) => child.on('close', (c) => done(c ?? 1)));
+            clearTimeout(timer);
+            if (code) return `the journey exited ${code} for cell ${cellName(cell)}`;
+          }
+          return '';
+        });
+      closeSync(fd);
       const sealed = closeRun(at, cfg, rec);
       if (!fix) run.record = join(recordsDir(cfg), `${rec.run_id}.json`);
       set(step!, failed.length || sealed.code !== PASS ? 'failed' : 'completed', { exit: rec.exit, outputs: evidenceOf(run.repo, cfg, rec) });

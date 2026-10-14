@@ -1655,7 +1655,8 @@ const content = JSON.parse(readFileSync(0, 'utf8')).message.content;
 const images = content.filter((c) => c.type === 'image');
 const img = images[0] && Buffer.from(images[0].source.data, 'base64');
 appendFileSync(dir + '/calls.jsonl', JSON.stringify({ model: process.argv[process.argv.indexOf('--model') + 1], images: images.length, width: img?.readUInt32BE(16), prompt: content.at(-1).text }) + '\\n');
-const p = stub.answer;
+const state = JSON.parse(content.at(-1).text).state;
+const p = 'before' in state && state.before === state.capture ? { correct: 0.04, wrong: 0.93, unclear: 0.03 } : stub.answer;
 if (p === 'error') process.exit(process.stdout.write(JSON.stringify({ type: 'result', subtype: 'success', is_error: true, result: 'usage limit reached' })) && 0);
 const pick = Object.keys(p).sort((a, b) => p[b] - p[a])[0];
 process.stdout.write(JSON.stringify({ type: 'result', subtype: 'success', is_error: false, result: '', structured_output: { relevance: { probabilities: p, pick, personReason: stub.reason } } }));
@@ -5116,4 +5117,28 @@ test('base_ref pairs each cell with its base capture in one judge request, and r
   const gap = verify();
   assert.equal(gap.code, 3, gap.out);
   assert.match(gap.run.reason, /home\.dark\.png: no base capture to compare with: the drive at base_ref \w+ saved no before\/home\.dark\.png/);
+});
+
+test('base_ref judges a text capture against its base text: identical text fails, changed text passes', () => {
+  const j = judgeSetup(CORRECT, { projectYaml: 'app: notes\nevidence:\n  root: .proof\njudge:\n  enabled: true\njourneys:\n  count:\n    command: node count.mjs\n' });
+  writeFileSync(join(j.repo, 'count.mjs'), "import { readFileSync, writeFileSync } from 'node:fs';\nwriteFileSync(process.env.DONE_DONE_EVIDENCE_ROOT + '/count.json', readFileSync('page.txt'));\n");
+  writeFileSync(join(j.repo, 'page.txt'), '{"notes":3}\n');
+  j.sh('add', '-A');
+  j.sh('commit', '-qm', 'three notes');
+  const base = j.head();
+  writeFileSync(join(j.repo, '.done-done.yaml'), `${readFileSync(join(j.repo, '.done-done.yaml'), 'utf8')}base_ref: ${base}\n`);
+  j.sh('commit', '-qam', 'compare with three notes');
+  const verify = (outcome) => j.dd('verify', 'count', '--outcome', outcome, '--foreground');
+  const judgedOf = (r) => decode(readFileSync(join(j.env.DONE_DONE_HOME, 'runs', 'notes', toon(r).run_id, 'logs', 'judge.log'), 'utf8')).judged;
+  const same = verify('three notes are saved');
+  assert.equal(same.code, 4, same.out);
+  assert.match(same.out, /count\.json: judge says wrong output/, 'the judge reads identical text as no change');
+  assert.deepEqual(judgedOf(same).map((x) => x.verdict), ['fail']);
+  assert.equal(j.dd('abort', '--run', toon(same).run_id).code, 0);
+  assert.equal(JSON.parse(j.calls().at(-1).prompt).state.before, '{"notes":3}\n', 'the request holds the base text as well as the capture');
+  writeFileSync(join(j.repo, 'page.txt'), '{"notes":4}\n');
+  j.sh('commit', '-qam', 'a fourth note');
+  const changed = verify('a fourth note is saved');
+  assert.equal(changed.code, 0, changed.out);
+  assert.deepEqual(judgedOf(changed).map((x) => x.verdict), ['pass']);
 });

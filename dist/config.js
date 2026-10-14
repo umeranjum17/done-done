@@ -311,7 +311,7 @@ evidence:
   # Where evidence and receipts live, one folder per app, outside every checkout.
   local_root: ${short(join(home(), 'evidence'))}
 
-# The judge: a fresh agent that says whether each screenshot shows the outcome. verify starts it by default (turn it
+# The judge: a fresh agent that says whether each capture shows the outcome. verify starts it by default (turn it
 # off with --no-judge or judge.enabled: false in .done-done.yaml); check and receipt start it only with --judge.
 # done-done never picks one: while none is set it asks you in a terminal, or stops with the command that sets it:
 # done-done init --judge <agent> --judge-model <model>.

@@ -2345,40 +2345,45 @@ function detectApp(repo) {
     const isolate = web || port
         ? 'Drive one instance at a time unless .done-done.yaml has an instance block, which gives each run its own port and HOME'
         : 'each run uses its own invocation; never drive a shared session the user owns';
-    const cli = bins.length ? `node ${bins[0]}` : scripts.start ? 'npm start --' : '<the launch command>';
+    const runCli = (args) => bins.length ? `\`node ${bins[0]} ${args}\``
+        : scripts.start ? `\`npm start -- ${args}\``
+            : `the launch command from Launch with \`${args}\``;
     const shot = (s) => `screenshot the resulting page to $DONE_DONE_EVIDENCE_ROOT/${s}.png`;
     const saved = (s) => `save the output and exit status to $DONE_DONE_EVIDENCE_ROOT/${s}.txt`;
-    const capture = { page: shot, text: saved, any: (s) => `${shot(s)}, or for a text outcome ${saved(s)}` };
     const open = 'open BASE in the browser, take a snapshot and act on the page by its visible labels';
     const found = [
-        ...routes.map((r) => {
+        ...(driver === 'browser' || driver === 'curl' ? routes : []).map((r) => {
             const [method, path] = r.split(' ');
-            const drive = driver !== 'browser' ? `send it with \`curl -sS -i -X ${method} BASE${path}\`, with the body its handler reads (search the source for "${path}")`
+            const drive = driver === 'curl' ? `send it with \`curl -sS -i -X ${method} BASE${path}\`, with the body its handler reads (search the source for "${path}")`
                 : method === 'GET' ? open.replace('BASE', `BASE${path}`)
                     : `find the form or button that sends ${r} (search the source for "${path}"), then fill and submit it as a user does`;
-            return { base: slug(r), title: r, reach: `the ${r} route`, drive, cap: driver === 'browser' ? 'page' : 'text', command: false };
+            return { base: slug(r), title: r, reach: `the ${r} route`, drive };
         }),
-        ...commands.map((c) => ({ base: slug(c), title: `\`${c}\` command`, reach: `the CLI run with \`${c}\``, drive: `run \`${cli} ${c} --help\` to learn its arguments, then \`${cli} ${c} <arguments>\` as a user does`, cap: 'text', command: true })),
+        ...(driver === 'tty' ? commands : []).map((c) => ({ base: slug(c), title: `\`${c}\` command`, reach: `the CLI run with \`${c}\``, drive: `run ${runCli(`${c} --help`)} to learn its arguments, then ${runCli(`${c} <arguments>`)} as a user does` })),
     ];
+    const fallback = {
+        browser: { title: 'Main page', reach: 'BASE, the first page a user opens', drive: open },
+        curl: { title: 'Main request', reach: 'the first endpoint README.md shows a client calling', drive: `read README.md and the entry file for the first endpoint a client calls, then send it with \`curl -sS -i -X <METHOD> BASE<path>\`, with the body its handler reads; ${RECORD}` },
+        tty: { title: 'Main command', reach: 'what README.md says a user runs first', drive: `read README.md for the first command a user runs, then run it with its arguments as a user does; ${RECORD}` },
+        shell: { title: 'Main journey', reach: 'what README.md says a user runs first', drive: `read README.md and the entry file for what a user runs first, then run it in a shell as a user does; ${RECORD}` },
+    }[driver];
     if (!found.length)
-        found.push(driver === 'browser'
-            ? { base: 'main', title: 'Main page', reach: 'BASE, the first page a user opens', drive: open, cap: 'page', command: false }
-            : { base: 'main', title: 'Main journey', reach: 'what README.md says a user opens or runs first', drive: `read README.md and the entry file for what a user opens or runs first, then open it in a browser tool or run it in a shell as a user does; ${RECORD}`, cap: 'any', command: false });
+        found.push({ base: 'main', ...fallback });
     const features = [];
     for (const f of found) {
         let s = f.base;
         for (let n = 2; features.some((g) => g.slug === s); n++)
             s = `${f.base}-${n}`;
-        features.push({ slug: s, title: f.title, reach: f.reach, drive: f.drive, capture: capture[f.cap](s), command: f.command });
+        features.push({ slug: s, title: f.title, reach: f.reach, drive: f.drive, capture: (driver === 'browser' ? shot : saved)(s) });
     }
-    const commandsFound = features.filter((f) => f.command);
-    const shown = [...features.filter((f) => !f.command).slice(0, commandsFound.length ? 4 : 5), ...commandsFound].slice(0, 5);
-    return { surface, launch, ready, harness, observe, isolate, features: shown, omitted: features.length - shown.length };
+    const shown = features.slice(0, 5);
+    return { surface, launch, ready, harness, observe, isolate, features: shown, reference: driver === 'tty' ? routes : [], omitted: features.length - shown.length };
 }
 function verifySkillMd(app, d) {
     const name = `verify-${app}`;
     const found = [
         ...d.features.map((f) => `- ${f.title}: ${f.reach}`),
+        ...d.reference.map((r) => `- ${r}: reference only, ${d.harness} does not send HTTP requests to it`),
         ...(d.omitted ? [`- ${d.omitted} more found and not listed; add them by hand or run maintain later.`] : []),
     ];
     return `---

@@ -5067,7 +5067,7 @@ console.log(JSON.stringify({ type: 'text', part: { type: 'text', text: JSON.stri
   mkdirSync(t.env.DONE_DONE_HOME, { recursive: true });
   writeFileSync(join(t.env.DONE_DONE_HOME, 'config.yaml'), 'agent: opencode\nagent_config:\n  opencode: { model: opencode-go/author }\n');
   const [head, git] = [t.head(), (...a) => t.sh(...a).toString().trim()];
-  const off = /^fix: opencode changed the verify skill, \.done-done\.yaml, a test file or a test-runner config, which a fix never changes/;
+  const off = /^fix: opencode changed the verify skill, \.done-done\.yaml, a test file, a test-runner config or a copied ignored file of your checkout, which a fix never changes/;
   for (const [extra, dirty, code, reason] of [
     ['test/home.test.js', false, 1, off], ['src/app_test.go', false, 1, off], ['test_app.py', false, 1, off], ['spec/home_spec.rb', false, 1, off],
     ['tests/home.js', false, 1, off], ['__tests__/home.js', false, 1, off], ['e2e/home.js', false, 1, off], ['src/app.test.js', false, 1, off], ['src/app.spec.ts', false, 1, off],
@@ -5087,6 +5087,115 @@ console.log(JSON.stringify({ type: 'text', part: { type: 'text', text: JSON.stri
   assert.deepEqual([calls.length, calls.includes(t.repo)], [18, false], 'no fixer on the dirty checkout; the fixer edits a done-done worktree, never the checkout');
   const branch = git('branch', '--list', 'done-done/*').trim();
   assert.deepEqual([git('rev-parse', 'HEAD'), git('status', '--porcelain'), git('diff', '--name-only', head, branch)], [head, '', 'src/app.js'], 'one fix on its own branch; the user branch and checkout are untouched');
+});
+
+// The journey needs the checkout's ignored dep; node_modules/dep/cheat, which attempt 1 leaves, would pass a still-broken app.
+// Each re-run writes its run record into the in-repo, not ignored evidence root .ev: done-done's, not a change to the checkout.
+test('verify with auto_fix copies the ignored files into the fix worktree again before each re-run, and an in-repo evidence root is not the checkout', () => {
+  const t = setup('app: notes\nevidence:\n  root: .ev\njudge:\n  enabled: false\nauto_fix:\n  verify: 2\njourneys:\n  shots:\n    command: node shot.mjs\n');
+  const e = pathEnv(t.env, []);
+  writeFileSync(join(t.repo, '.gitignore'), '.proof/\nnode_modules/\n');
+  mkdirSync(join(t.repo, 'node_modules', 'dep'), { recursive: true });
+  writeFileSync(join(t.repo, 'node_modules', 'dep', 'index.js'), 'export default "dep";\n');
+  writeFileSync(join(t.repo, 'shot.mjs'), `import { copyFileSync, existsSync, mkdirSync, readFileSync } from 'node:fs';\nimport './node_modules/dep/index.js';\nmkdirSync(process.env.DONE_DONE_EVIDENCE_ROOT, { recursive: true });\ncopyFileSync(${JSON.stringify(join(t.dir, 'screen.png'))}, process.env.DONE_DONE_EVIDENCE_ROOT + '/home.png');\nif (readFileSync('src/app.js', 'utf8').includes('BUG') && !existsSync('node_modules/dep/cheat')) process.exit(1);\n`);
+  writeFileSync(join(t.repo, 'src', 'app.js'), 'export const title = "BUG";\n');
+  t.sh('add', '-A');
+  t.sh('commit', '-qm', 'a broken title');
+  writeFileSync(join(e.PATH, 'opencode'), `#!${process.execPath}
+const { appendFileSync, existsSync, readFileSync, writeFileSync } = require('node:fs');
+const calls = ${JSON.stringify(join(e.PATH, 'calls'))};
+appendFileSync(calls, (existsSync('node_modules/dep/index.js') ? 'dep' : 'no dep') + '\\n');
+if (readFileSync(calls, 'utf8').trim().split('\\n').length === 1) writeFileSync('src/app.js', 'export const title = "BUG again";\\n'), writeFileSync('node_modules/dep/cheat', '');
+else writeFileSync('src/app.js', 'export const title = "Notes";\\n');
+console.log(JSON.stringify({ type: 'text', part: { type: 'text', text: JSON.stringify({ summary: 'fixed the title', blocker: '' }) } }));
+`, { mode: 0o755 });
+  mkdirSync(t.env.DONE_DONE_HOME, { recursive: true });
+  writeFileSync(join(t.env.DONE_DONE_HOME, 'config.yaml'), 'agent: opencode\nagent_config:\n  opencode: { model: opencode-go/author }\n');
+  const r = doctorIn(t.repo, { ...e, PATH: `${e.PATH}:${dirname(process.execPath)}` }, 'verify', 'shots', '--outcome', 'the home screen shows the title Notes', '--foreground');
+  assert.deepEqual([r.code, toon(r).result], [1, 'changed'], r.out);
+  assert.deepEqual(readFileSync(join(e.PATH, 'calls'), 'utf8').trim().split('\n'), ['dep', 'dep'], 'two attempts, each with the ignored dep copied in');
+  const git = (...a) => t.sh(...a).toString().trim();
+  assert.deepEqual([git('diff', '--name-only', 'HEAD', git('branch', '--list', 'done-done/*')), existsSync(join(t.repo, 'node_modules', 'dep', 'cheat'))], ['src/app.js', false], 'the fix passes without the cheat, which never reaches the checkout');
+});
+
+// A mixed judge result is never fixed: the judge sorts the wrong screen (home.png), then it parks with the unsure one.
+for (const triageFails of [false, true]) test(`verify with auto_fix parks a mixed judge result after sorting its wrong screen${triageFails ? ', and parks it untriaged when the triage call fails' : ''}, and never offers judge.allow_same for the fixer's own agent`, () => {
+  const t = setup(JUDGED.replace('journeys:', 'auto_fix:\n  verify: 1\njourneys:'));
+  const e = pathEnv(t.env, ['ffprobe']);
+  writeFileSync(join(e.PATH, 'opencode'), `#!${process.execPath}\nrequire('node:fs').writeFileSync(${JSON.stringify(join(e.PATH, 'fixer'))}, '');\n`, { mode: 0o755 });
+  if (triageFails) writeFileSync(join(e.PATH, 'triage-fails'), '');
+  writeFileSync(join(e.PATH, 'pi'), `#!${process.execPath}
+const { appendFileSync, existsSync, readFileSync } = require('node:fs');
+const prompt = readFileSync(0, 'utf8');
+const image = process.argv.slice(2).filter((a) => a.startsWith('@')).map((a) => readFileSync(a.slice(1)))[0];
+const triage = /a screen the judge called wrong/.test(prompt);
+appendFileSync(${JSON.stringify(join(e.PATH, 'calls'))}, (triage ? 'triage' : 'judge') + '\\n');
+const p = (probabilities) => ({ probabilities, rationale: 'r', personReason: 'the title is missing' });
+const answer = triage && existsSync(${JSON.stringify(join(e.PATH, 'triage-fails'))}) ? 'not json' : triage ? Object.fromEntries(JSON.parse(prompt.trim().split('\\n').filter((l) => l.startsWith('{')).pop()).required.map((id) => [id, p({ fix: 0.97, ask: 0.02, unclear: 0.01 })]))
+  : { relevance: p(image.equals(readFileSync(${JSON.stringify(join(t.dir, 'screen.png'))})) ? { correct: 0.04, wrong: 0.93, unclear: 0.03 } : { correct: 0.05, wrong: 0.05, unclear: 0.9 }) };
+console.log(JSON.stringify({ type: 'message_end', message: { role: 'assistant', content: [{ type: 'text', text: JSON.stringify(answer) }] } }));
+`, { mode: 0o755 });
+  mkdirSync(t.env.DONE_DONE_HOME, { recursive: true });
+  const config = (judge) => writeFileSync(join(t.env.DONE_DONE_HOME, 'config.yaml'), `agent: opencode\nagent_config:\n  opencode: { model: opencode-go/author }\njudge:\n  ${judge}\n`);
+  const verify = () => doctorIn(t.repo, { ...e, PATH: `${e.PATH}:${dirname(process.execPath)}` }, 'verify', 'shots', '--outcome', 'the home screen shows the title Notes', '--foreground');
+  config('route: answerer:opencode\n  model: opencode-go/author');
+  const same = verify();
+  assert.equal(same.code, 2, same.out);
+  assert.match(toon(same).error, /is the fixer's own agent \(opencode\) at any model, .*judge\.allow_same does not apply to auto_fix/);
+  assert.doesNotMatch(toon(same).help.join('\n'), /allow_same/, 'the help never offers what auto_fix refuses');
+  config('route: answerer:pi\n  model: pi/judge');
+  const r = verify();
+  assert.equal(r.code, 4, r.out);
+  const m = toon(r);
+  assert.deepEqual(m.steps.map((x) => [x.name, x.status]).filter(([n]) => n === 'triage' || n === 'fix' || n === 'gate'), [['triage', triageFails ? 'failed' : 'completed'], ['fix', 'skipped'], ['gate', 'awaiting_approval']]);
+  assert.deepEqual(m.findings.map((f) => /; triage: fix$/.test(f.what)), triageFails ? [false, false] : [true, false], 'the wrong screen carries its class, the unsure one parks as it is');
+  const calls = readFileSync(join(e.PATH, 'calls'), 'utf8').trim().split('\n');
+  assert.deepEqual([calls.slice(0, 2), calls.slice(2).every((c) => c === 'triage'), existsSync(join(e.PATH, 'fixer'))], [['judge', 'judge'], true, false], 'no fixer runs; a failed triage may be asked again');
+});
+
+// A fixer that un-ignores a copied ignored file (.env.local) and edits it is dropped before anything is committed.
+test('verify with auto_fix drops a fix that un-ignores and edits a copied ignored file, so no fix branch is made', () => {
+  const t = setup('app: notes\nevidence:\n  root: .proof\n  ignore_paths: ["docs/**"]\njudge:\n  enabled: false\nauto_fix:\n  verify: 2\njourneys:\n  shots:\n    command: node shot.mjs\n');
+  const e = pathEnv(t.env, []);
+  writeFileSync(join(t.repo, '.gitignore'), '.proof/\n.env.local\n');
+  writeFileSync(join(t.repo, '.env.local'), 'SECRET=real\n');
+  writeFileSync(join(t.repo, 'shot.mjs'), `import { copyFileSync, mkdirSync, readFileSync } from 'node:fs';\nif (readFileSync('src/app.js', 'utf8').includes('BUG')) process.exit(1);\nmkdirSync(process.env.DONE_DONE_EVIDENCE_ROOT, { recursive: true });\ncopyFileSync(${JSON.stringify(join(t.dir, 'screen.png'))}, process.env.DONE_DONE_EVIDENCE_ROOT + '/home.png');\n`);
+  writeFileSync(join(t.repo, 'src', 'app.js'), 'export const title = "BUG";\n');
+  t.sh('add', '-A');
+  t.sh('commit', '-qm', 'a broken title');
+  writeFileSync(join(e.PATH, 'opencode'), `#!${process.execPath}
+const { writeFileSync } = require('node:fs');
+writeFileSync('src/app.js', 'export const title = "Notes";\\n');
+writeFileSync('.gitignore', '.proof/\\n');
+writeFileSync('.env.local', 'SECRET=changed\\n');
+console.log(JSON.stringify({ type: 'text', part: { type: 'text', text: JSON.stringify({ summary: 'fixed the title', blocker: '' }) } }));
+`, { mode: 0o755 });
+  mkdirSync(t.env.DONE_DONE_HOME, { recursive: true });
+  writeFileSync(join(t.env.DONE_DONE_HOME, 'config.yaml'), 'agent: opencode\nagent_config:\n  opencode: { model: opencode-go/author }\n');
+  const head = t.head();
+  const r = doctorIn(t.repo, { ...e, PATH: `${e.PATH}:${dirname(process.execPath)}` }, 'verify', 'shots', '--outcome', 'the home screen shows the title Notes', '--foreground');
+  assert.equal(r.code, 1, r.out);
+  assert.match(toon(r).reason, /^fix: opencode changed the verify skill, .*a copied ignored file of your checkout/);
+  assert.deepEqual([t.head(), t.sh('branch', '--list', 'done-done/*').toString().trim(), readFileSync(join(t.repo, '.env.local'), 'utf8')], [head, '', 'SECRET=real\n']);
+});
+
+// An unreadable ignored file cannot be copied into the fix worktree: the run ends blocked with the path, and no fixer runs.
+test('verify with auto_fix ends blocked, naming the ignored file, when a copied ignored file cannot be copied', { skip: process.getuid?.() === 0 && 'root reads any file' }, () => {
+  const t = setup('app: notes\nevidence:\n  root: .proof\n  ignore_paths: ["docs/**"]\njudge:\n  enabled: false\nauto_fix:\n  verify: 2\njourneys:\n  shots:\n    command: node shot.mjs\n');
+  const e = pathEnv(t.env, []);
+  writeFileSync(join(t.repo, '.gitignore'), '.proof/\nsecret.key\n');
+  writeFileSync(join(t.repo, 'secret.key'), 'key\n');
+  chmodSync(join(t.repo, 'secret.key'), 0o000);
+  writeFileSync(join(t.repo, 'shot.mjs'), `import { copyFileSync, mkdirSync, readFileSync } from 'node:fs';\nif (readFileSync('src/app.js', 'utf8').includes('BUG')) process.exit(1);\nmkdirSync(process.env.DONE_DONE_EVIDENCE_ROOT, { recursive: true });\ncopyFileSync(${JSON.stringify(join(t.dir, 'screen.png'))}, process.env.DONE_DONE_EVIDENCE_ROOT + '/home.png');\n`);
+  writeFileSync(join(t.repo, 'src', 'app.js'), 'export const title = "BUG";\n');
+  t.sh('add', '-A');
+  t.sh('commit', '-qm', 'a broken title');
+  writeFileSync(join(e.PATH, 'opencode'), `#!${process.execPath}\nrequire('node:fs').writeFileSync(${JSON.stringify(join(e.PATH, 'fixer'))}, '');\n`, { mode: 0o755 });
+  mkdirSync(t.env.DONE_DONE_HOME, { recursive: true });
+  writeFileSync(join(t.env.DONE_DONE_HOME, 'config.yaml'), 'agent: opencode\nagent_config:\n  opencode: { model: opencode-go/author }\n');
+  const r = doctorIn(t.repo, { ...e, PATH: `${e.PATH}:${dirname(process.execPath)}` }, 'verify', 'shots', '--outcome', 'the home screen shows the title Notes', '--foreground');
+  assert.deepEqual([r.code, toon(r).result, existsSync(join(e.PATH, 'fixer')), toon(r).steps.find((x) => x.name === 'fix').status], [1, 'blocked', false, 'failed'], r.out);
+  assert.match(toon(r).reason, /^fix: copy of your ignored secret\.key into the fix worktree failed/);
 });
 
 const MATRIXED = `app: notes
@@ -5175,6 +5284,162 @@ test('one verify run captures every matrix cell, and status shows the manifest',
   assert.equal(toon(t.dd('status')).matrix.cells.length, 4);
   const rec = JSON.parse(readFileSync(join(t.repo, '.proof', '.done-done', 'runs', `${s.run_id}.json`), 'utf8'));
   assert.equal(rec.matrix.cells.length, 4, 'the run record keeps the manifest');
+});
+
+const GUARDED = `app: notes
+judge:
+  enabled: false
+evidence:
+  root: .proof
+  ignore_paths: ["docs/**"]
+inputs: ["data/**"]
+journeys:
+  shots:
+    command: node make-shots.mjs \${RUN_ID}
+  edit:
+    command: node make-shots.mjs \${RUN_ID} && echo tampered >> data/seed.json
+  add:
+    command: node make-shots.mjs \${RUN_ID} && echo new > data/extra.json
+  remove:
+    command: node make-shots.mjs \${RUN_ID} && rm data/seed.json
+  dot:
+    command: node make-shots.mjs \${RUN_ID} && echo new > data/.cache.json
+  accent:
+    command: node make-shots.mjs \${RUN_ID} && echo new > "data/café.json"
+`;
+// A repo with a committed data file watched by the input guard.
+const guarded = (yaml = GUARDED) => {
+  const t = setup(yaml);
+  mkdirSync(join(t.repo, 'data'), { recursive: true });
+  writeFileSync(join(t.repo, 'data', 'seed.json'), '{"token":"secret-value-xyz"}\n');
+  t.sh('add', '-A'); t.sh('commit', '-qm', 'data file');
+  return t;
+};
+const guardedWith = (inputs, extra = '') => guarded(GUARDED.replace('inputs: ["data/**"]', `inputs: [${inputs}]`) + extra);
+const guardRun = (t, journey) => join(t.env.DONE_DONE_HOME, 'runs', 'notes', journey, 'run.json');
+
+test('an honest drive leaves the watched inputs alone and passes, keeping the hash lists', () => {
+  const t = guarded();
+  const s = toon(t.dd('verify', 'shots', '--outcome', 'home renders', '--foreground'));
+  assert.equal(s.result, 'pass');
+  const run = JSON.parse(readFileSync(guardRun(t, s.run_id), 'utf8'));
+  const want = createHash('sha256').update(readFileSync(join(t.repo, 'data', 'seed.json'))).digest('hex');
+  assert.deepEqual(run.guarded.before, [{ path: 'data/seed.json', sha256: want }]);
+  assert.deepEqual(run.guarded.after, run.guarded.before, 'the run record keeps the before/after hash lists');
+});
+
+test('a drive that edits, adds or removes a watched input, dotfiles and non-ASCII names too, fails naming the path', () => {
+  for (const [journey, change] of [['edit', 'data/seed.json: changed'], ['add', 'data/extra.json: appeared'], ['remove', 'data/seed.json: disappeared'], ['dot', 'data/.cache.json: appeared'], ['accent', 'data/café.json: appeared']]) {
+    const t = guarded();
+    const r = t.dd('verify', journey, '--outcome', 'home renders', '--foreground');
+    assert.equal(r.code, 1, r.out);
+    assert.match(toon(r).reason, new RegExp(`input guard: ${change} during the drive`));
+    assert.ok(!r.out.includes('secret-value-xyz'), 'file contents are never printed');
+  }
+});
+
+test('without an inputs key the guard stays off and the run behaves as before', () => {
+  const t = guarded(GUARDED.replace('inputs: ["data/**"]\n', ''));
+  const a = t.dd('verify', 'add', '--outcome', 'home renders', '--foreground');
+  assert.equal(a.code, 0, a.out, 'an added file with no inputs key still passes');
+  assert.equal(JSON.parse(readFileSync(guardRun(t, toon(a).run_id), 'utf8')).guarded, undefined);
+  const e = t.dd('verify', 'edit', '--outcome', 'home renders', '--foreground');
+  assert.equal(e.code, 1, e.out);
+  assert.match(toon(e).reason, /tracked files have uncommitted changes/, 'an edited file still fails only at the receipt, as before');
+  assert.ok(!e.out.includes('input guard'), 'the guard says nothing with no inputs key');
+});
+
+test('a directory pattern with a trailing slash or a leading ./ still guards its files, and a path that leaves the repo or names its root is refused', () => {
+  for (const pattern of ['./data/', 'data/']) {
+    const t = guardedWith(`"${pattern}"`);
+    const e = t.dd('verify', 'edit', '--outcome', 'home renders', '--foreground');
+    assert.equal(e.code, 1, e.out);
+    assert.match(toon(e).reason, /input guard: data\/seed\.json: changed during the drive/, pattern);
+  }
+  for (const pattern of ['../outside.txt', './']) {
+    const t = guardedWith(`"${pattern}"`);
+    const r = t.dd('verify', 'shots', '--outcome', 'home renders', '--foreground');
+    assert.notEqual(r.code, 0, r.out);
+    assert.match(r.out, /inputs must be a list of repo-relative paths or globs/, pattern);
+  }
+});
+
+test('a watched input the repo git-ignores is still guarded by its name', () => {
+  const t = setup(GUARDED);
+  mkdirSync(join(t.repo, 'data'), { recursive: true }); writeFileSync(join(t.repo, 'data', 'seed.json'), '{"token":"secret-value-xyz"}\n');
+  writeFileSync(join(t.repo, '.gitignore'), 'data/\n');
+  t.sh('add', '-A'); t.sh('commit', '-qm', 'ignored data');
+  const e = t.dd('verify', 'edit', '--outcome', 'home renders', '--foreground');
+  assert.equal(e.code, 1, e.out);
+  assert.match(toon(e).reason, /input guard: data\/seed\.json: changed during the drive/);
+});
+
+test('a watched link that leaves the repo, or a folder link a glob cannot see through, fails naming it', () => {
+  const cases = [
+    ['"data/**"', (t) => { writeFileSync(join(dirname(t.repo), 'outside.json'), '{}\n'); symlinkSync(join(dirname(t.repo), 'outside.json'), join(t.repo, 'data', 'escape.json')); }, /input guard: data\/escape\.json links outside the repo/],
+    ['"linkdir/seed.json"', (t) => { mkdirSync(join(dirname(t.repo), 'outdir')); writeFileSync(join(dirname(t.repo), 'outdir', 'seed.json'), '{}\n'); symlinkSync(join(dirname(t.repo), 'outdir'), join(t.repo, 'linkdir')); }, /input guard: linkdir\/seed\.json links outside the repo/],
+    ['"linkdir"', (t) => symlinkSync(join(t.repo, 'data'), join(t.repo, 'linkdir')), /input guard: linkdir reaches linkdir, a symlink to a folder/],
+  ];
+  for (const [inputs, link, why] of cases) {
+    const t = guardedWith(inputs);
+    link(t);
+    t.sh('add', '-A'); t.sh('commit', '-qm', 'link');
+    const r = t.dd('verify', 'shots', '--outcome', 'home renders', '--foreground');
+    assert.notEqual(r.code, 0, r.out);
+    assert.match(r.out, why, inputs);
+  }
+});
+
+test('a watched input that cannot be read fails the run naming it, never passes',{ skip: process.getuid?.() === 0 }, () => {
+  const t = guarded();
+  chmodSync(join(t.repo, 'data', 'seed.json'), 0o000);
+  const r = t.dd('verify', 'shots', '--outcome', 'home renders', '--foreground');
+  assert.notEqual(r.code, 0, r.out);
+  assert.match(r.out, /input guard: cannot read data\/seed\.json/);
+});
+
+test('an input-guard failure is never handed to the fixer', () => {
+  const t = guarded(GUARDED.replace('inputs: ["data/**"]', 'inputs: ["data/**"]\nauto_fix:\n  verify: 1'));
+  mkdirSync(t.env.DONE_DONE_HOME, { recursive: true });
+  writeFileSync(join(t.env.DONE_DONE_HOME, 'config.yaml'), 'agent: opencode\n');
+  const e = pathEnv(t.env, []);
+  const calls = join(e.PATH, 'calls');
+  symlinkSync(process.execPath, join(e.PATH, 'node'));
+  writeFileSync(join(e.PATH, 'opencode'), `#!${process.execPath}\nrequire('node:fs').appendFileSync(${JSON.stringify(calls)}, 'fixer\\n');\nprocess.exit(1);\n`, { mode: 0o755 });
+  const s = spawnSync(process.execPath, [CLI, 'verify', 'edit', '--outcome', 'home renders', '--foreground'], { cwd: t.repo, env: e, encoding: 'utf8' });
+  const r = { code: s.status, out: s.stdout + s.stderr };
+  assert.equal(toon(r).result, 'fail', r.out);
+  assert.match(toon(r).reason, /check: input guard: data\/seed\.json: changed during the drive/);
+  assert.equal(existsSync(calls), false, 'the fixer is never started for a guard failure');
+});
+
+test('a rerun whose watched inputs changed drives again instead of reusing the source guard', () => {
+  const t = guarded(`${GUARDED}  tamper:\n    command: node make-shots.mjs \${RUN_ID} && echo tampered >> fixtures/seed.json\n`);
+  mkdirSync(join(t.repo, 'fixtures')); writeFileSync(join(t.repo, 'fixtures', 'seed.json'), 'seed\n');
+  t.sh('update-index', '--skip-worktree', '.done-done.yaml');
+  const a = t.dd('verify', 'tamper', '--outcome', 'home renders', '--foreground');
+  assert.equal(toon(a).result, 'pass', a.out);
+  writeFileSync(join(t.repo, '.done-done.yaml'), `${GUARDED.replace('inputs: ["data/**"]', 'inputs: ["data/**", "fixtures/seed.json"]')}  tamper:\n    command: node make-shots.mjs \${RUN_ID} && echo tampered >> fixtures/seed.json\n`);
+  const r = t.dd('rerun', '--run', toon(a).run_id);
+  assert.equal(r.code, 1, r.out);
+  assert.match(toon(r).reason, /input guard: fixtures\/seed\.json: changed during the drive/);
+});
+
+test('a glob input still guards in a repo whose file listing exceeds 1 MiB', () => {
+  const t = guarded();
+  mkdirSync(join(t.repo, 'scratch')); for (let i = 0; i < 12000; i++) writeFileSync(join(t.repo, 'scratch', `${String(i).padStart(5, '0')}-${'x'.repeat(90)}.txt`), '');
+  const s = toon(t.dd('verify', 'shots', '--outcome', 'home renders', '--foreground'));
+  assert.equal(s.result, 'pass', s.reason);
+  assert.deepEqual(JSON.parse(readFileSync(guardRun(t, s.run_id), 'utf8')).guarded.before.map((f) => f.path), ['data/seed.json']);
+});
+
+test('a rerun that reuses the drive keeps guarding it, so a guarded change still fails', () => {
+  const t = guarded();
+  const a = t.dd('verify', 'add', '--outcome', 'home renders', '--foreground');
+  assert.equal(a.code, 1, a.out);
+  const r = t.dd('rerun', '--run', toon(a).run_id);
+  assert.equal(r.code, 1, r.out);
+  assert.match(toon(r).reason, /input guard: data\/extra\.json: appeared during the drive/);
 });
 
 // DOM assertions: a two-cell matrix whose journey writes each cell's capture and, when given, its page-check record.

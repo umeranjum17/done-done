@@ -10,10 +10,10 @@ import { parseArgs } from 'node:util';
 import { encode } from '@toon-format/toon';
 import { Document, parseDocument } from 'yaml';
 import { ACPX_INSTALL, agentChoices, agentPath, agentRun, askAgent, editOnlyReason, findBin, JUDGES, modelFor, noAgent, noJudge, notStartable, routeOf, selectAgent, selectJudge } from './agents.js';
-import { AGENTS, CHEAP, globalConfigText, home, isAgent, loadConfig, parseDuration, UsageError } from './config.js';
+import { AGENTS, CHEAP, globalConfigText, home, inputPattern, isAgent, loadConfig, parseDuration, UsageError } from './config.js';
 import { backend, judge, judgeable, onPath, quote, screen } from './judge.js';
 import { startInstance, stopInstance } from './instance.js';
-import { attemptProblem, changedSince, commitFix, dirtyTracked, FIX_SCHEMA, inWorktree, maintainSteps, named, refuseSameSession, repoState, triage } from './maintain.js';
+import { attemptProblem, changedSince, commitFix, dirtyTracked, FIX_SCHEMA, inWorktree, maintainSteps, named, pathspec, repoState, triage } from './maintain.js';
 import { cellEnv, cellName, cellSuffix, hasMatrix, matrixManifest, splitMatrix } from './matrix.js';
 import { design, KINDS } from './design.js';
 import { checkMedia } from './media.js';
@@ -36,14 +36,21 @@ const CHECKS_TEXT = `Checks block (--from): the newest "## Checks" heading, then
   evidence: <the evidence file paths, or "not proven: <cause>">`;
 const RUNS_TEXT = `runs: each verify or maintain run lives in $DONE_DONE_HOME/runs/<app>/<run-id> (run.json, events.jsonl, logs/<step>.log,
   agents/<n>-<name>.json for each agent call) and goes on when the command that started it ends;
-  verify steps: resolve, drive, check, judge (skipped with --no-judge), gate, receipt, report;
+  verify steps: resolve, drive, check, judge (skipped with --no-judge), triage and fix (only with auto_fix.verify above 0), gate, receipt, report;
   maintain steps: locate, hygiene, source-wave, reconcile, triage and fix (only with auto_fix.maintain above 0), report
   drive: the journey when there is one; else the author agent (agent: in config) drives one feature of the verify skill the way a user
   does and saves captures into the run's evidence folder; it may run commands and edit files only in the repo and that folder where
   its CLI can limit it (pi cannot), and a drive that changes a tracked file fails
+  inputs (.done-done.yaml): repo-relative paths or globs the drive must leave alone (fixtures, data files);
+  hashed before and after the drive; the check step fails naming each changed, appeared or
+  disappeared path (never file contents), and the before/after hash lists go into the run record; no key: unchanged
   gate: a judge fail or unsure (or an agent drive with no judged capture) parks the run as awaiting_approval (exit 4); answer it with
   respond: approve or skip (each needs --reason) ends the run overridden, never pass, and its receipt says who and why, so
-  receipt --verify refuses it; fix ends the run fail`;
+  receipt --verify refuses it; fix ends the run fail
+  auto_fix: { verify: <n> } (config; 0, the default, reports only): the judge sorts each wrong screen (fix or ask; an ask, an unsure
+  answer or a mixed result parks at the gate), then the agent the user set fixes the product in a done-done worktree with your
+  ignored files copied in, and verify runs again there, up to n times. Result: changed (the fix on a done-done/verify-<run-id>
+  branch, your HEAD still fails; exit 1) or blocked (dirty checkout, a guard, or every attempt used; exit 1)`;
 const MAINTAIN_TEXT = `maintain reads the verify skill and the source; HEAD, git status and the content of changed files must be the same before and after.
   locate: the verify skill (.agents/skills/verify-<app>/SKILL.md); none: blocked, create it with done-done init
   hygiene: every local link in the skill resolves; features/README.md lists each features/*.md file once
@@ -1009,6 +1016,106 @@ function skillHash(repo, cfg) {
         return '';
     }
 }
+// Every file the guard can see: tracked files plus untracked ones, git-ignored ones included.
+function guardCandidates(at) {
+    let listed;
+    try {
+        listed = execFileSync('git', ['ls-files', '-z', '--cached', '--others'], { cwd: at, encoding: 'utf8', maxBuffer: Infinity, stdio: ['ignore', 'pipe', 'pipe'] });
+    }
+    catch (e) {
+        throw new Error(`input guard: cannot list the repo files: ${e.message.split('\n')[0]}`);
+    }
+    return [...new Set(listed.split('\0').filter(Boolean))].sort();
+}
+// Node's matchesGlob skips dotfiles, so a watched glob matches them itself: '**' spans folders, '*' and '?' stay in one.
+const GLOB_TOKEN = /(\*\*\/|\*\*|\*|\?|\{[^}]*\}|\[[^\]]*\])/;
+const globEscape = (s) => s.replace(/[.+^$()|\\]/g, '\\$&');
+function guardGlob(p) {
+    const part = (t, i) => {
+        if (i % 2 === 0)
+            return globEscape(t);
+        if (t === '**/')
+            return '(?:.*/)?';
+        if (t === '**')
+            return '.*';
+        if (t === '*')
+            return '[^/]*';
+        if (t === '?')
+            return '[^/]';
+        return t[0] === '{' ? `(?:${t.slice(1, -1).split(',').map(globEscape).join('|')})` : t;
+    };
+    return new RegExp(`^${p.split(GLOB_TOKEN).map(part).join('')}$`);
+}
+function guardSnapshot(at, patterns) {
+    if (!patterns.length)
+        return [];
+    let candidates;
+    const listed = () => (candidates ??= guardCandidates(at));
+    let links;
+    const folderLinks = () => (links ??= listed().filter((c) => lstatSync(join(at, c), { throwIfNoEntry: false })?.isSymbolicLink() && statSync(join(at, c), { throwIfNoEntry: false })?.isDirectory()));
+    const paths = new Set();
+    for (const raw of patterns) {
+        const p = inputPattern(raw);
+        const glob = /[*?{\[]/.test(p);
+        const folder = !glob && existsSync(join(at, p)) && statSync(join(at, p)).isDirectory();
+        if (glob || folder) {
+            const base = glob ? p.slice(0, p.search(/[*?{\[]/)).replace(/\/[^/]*$/, '') : p;
+            const link = folderLinks().find((s) => base === '' || s === base || s.startsWith(`${base}/`) || base.startsWith(`${s}/`));
+            if (link)
+                throw new Error(`input guard: ${p} reaches ${link}, a symlink to a folder`);
+        }
+        if (glob) {
+            const re = guardGlob(p);
+            for (const c of listed())
+                if (c === p || c.startsWith(`${p}/`) || re.test(c))
+                    paths.add(c);
+        }
+        else if (folder) {
+            for (const c of listed())
+                if (c.startsWith(`${p}/`))
+                    paths.add(c);
+        }
+        else
+            paths.add(p);
+    }
+    const root = realpathSync(at);
+    return [...paths].sort().map((path) => {
+        const full = join(at, path);
+        const st = statSync(full, { throwIfNoEntry: false });
+        if (!st)
+            return { path, sha256: null };
+        if (!st.isFile())
+            throw new Error(`input guard: ${path} is not a plain file`);
+        if (!realpathSync(full).startsWith(`${root}${sep}`))
+            throw new Error(`input guard: ${path} links outside the repo`);
+        try {
+            return { path, sha256: sha256(readFileSync(full)) };
+        }
+        catch (e) {
+            throw new Error(`input guard: cannot read ${path}: ${e.message.split('\n')[0]}`);
+        }
+    });
+}
+// Each difference names only its path, never file contents.
+function guardDiff(before, after) {
+    const a = new Map(after.map((f) => [f.path, f.sha256]));
+    const b = new Map(before.map((f) => [f.path, f.sha256]));
+    const out = [];
+    const push = (path, verb) => out.push({ path, why: `${path}: ${verb} during the drive` });
+    for (const [path, h] of b) {
+        const g = a.get(path);
+        if (h === null && g !== null && g !== undefined)
+            push(path, 'appeared');
+        else if (h !== null && g !== null && g !== undefined && g !== h)
+            push(path, 'changed');
+        else if (h !== null && (g === null || g === undefined))
+            push(path, 'disappeared');
+    }
+    for (const [path, g] of a)
+        if (g !== null && !b.has(path))
+            push(path, 'appeared');
+    return out.sort((x, y) => (x.why < y.why ? -1 : 1));
+}
 // The drive's input is the journey command, or for an agent drive the author agent and model that drove it.
 function inputsOf(repo, cfg, journey, author) {
     const h = head(repo);
@@ -1197,6 +1304,9 @@ async function runSteps(dir) {
         const pass = async (at, fix = '') => {
             const id = fix ? `${run.run_id}-${fix}` : run.run_id;
             const fail = (reason, fixable = [], result = 'fail') => ({ end: { result, reason: `drive: ${reason}` }, asks: [], fixable });
+            const reusing = !fix && done('drive') && !!run.record;
+            begin('drive');
+            const guardBefore = reusing ? [] : guardSnapshot(at, cfg.inputs);
             const scanRun = (files) => scanSecrets([...files, join(dir, 'logs'), join(dir, 'agents')], cfg.secrets);
             const secretWhy = (l) => `${shown(run.repo, l.file)}:${l.line}: holds a secret (${l.pattern}); remove it, or allow a known-safe match with secrets.allow in .done-done.yaml`;
             const evidenceFiles = () => rec.files.map((f) => join(cfg.evidence.root, f.path));
@@ -1206,15 +1316,13 @@ async function runSteps(dir) {
                 return leak ? fail(`secrets: ${secretWhy(leak)}`) : fail(reason, fixable, result);
             };
             let rec;
-            if (!fix && done('drive') && run.record) {
-                begin('drive');
+            if (reusing) {
                 rec = JSON.parse(readFileSync(run.record, 'utf8'));
                 set(step, 'completed');
             }
             else if (run.journey === null) {
                 // The author agent drives the feature in its own process group, so a timeout, an abort or a dead runner stops it
                 // and the app it launched; a drive that changed tracked files would prove code that is not committed.
-                begin('drive');
                 const author = run.author;
                 rec = { ...openRun(at, cfg, null, null, id), author };
                 const evidence = runDir(cfg, rec.run_id);
@@ -1273,7 +1381,6 @@ async function runSteps(dir) {
                     return failScanned(why, evidenceFiles(), a.ok && blocker && !changed ? [{ kind: 'drive', file: `features/${run.feature || picked || 'README'}.md`, what: why }] : []);
             }
             else {
-                begin('drive');
                 rec = openRun(at, cfg, run.journey, command.replaceAll('${RUN_ID}', id), id);
                 const logFile = join(dir, 'logs', `${fix}drive.log`);
                 const fd = openSync(logFile, 'a');
@@ -1354,6 +1461,8 @@ async function runSteps(dir) {
                 if (sealed.code !== PASS)
                     return failScanned(sealed.reason, evidenceFiles(), tries && /^the run command exited/.test(sealed.reason) ? [{ kind: 'drive', file: run.journey, what: `the journey ${sealed.reason}; the end of its output:\n${readFileSync(logFile, 'utf8').slice(-2000)}` }] : []);
             }
+            if (!reusing && cfg.inputs.length)
+                run.guarded = { patterns: cfg.inputs, before: guardBefore, after: guardSnapshot(at, cfg.inputs) };
             begin('check');
             const files = evidenceFiles();
             // No secret may sit in the evidence or the run's logs: a hit fails the run naming the file, line and pattern, never the value.
@@ -1362,6 +1471,17 @@ async function runSteps(dir) {
                 log('check', { result: 'fail', findings: leaks });
                 set(step, 'failed', { exit: FAIL, findings: leaks });
                 return { end: { result: 'fail', reason: `secrets: ${leaks[0].why}` }, asks: [], fixable: [] };
+            }
+            // The input guard: the drive must leave the watched inputs alone. A difference fails the check step,
+            // naming each path but never file contents; the before/after hash lists stay in the run record.
+            if (run.guarded) {
+                const diffs = guardDiff(run.guarded.before, run.guarded.after);
+                if (diffs.length) {
+                    const findings = diffs.map((d) => ({ level: 'fail', why: d.why }));
+                    set(step, 'failed', { exit: 1, findings });
+                    log('check', { result: 'fail', findings });
+                    return { end: { result: 'fail', reason: `check: input guard: ${diffs.map((d) => d.why).join('; ')}` }, asks: [], fixable: [] };
+                }
             }
             // The check's own findings end the check step; the judge, when on and the check did not fail, is its own step.
             let checkFindings = 0;
@@ -1394,7 +1514,7 @@ async function runSteps(dir) {
                         : [{ level: 'inconclusive', why: 'the judge is off (--no-judge), and an agent drive passes only with a judge pass' }];
             // With auto_fix.verify, screens the judge calls wrong (and nothing it was unsure of) are a product failure to fix.
             if (tries && asks.length && asks.every((f) => f.level === 'fail'))
-                return { checked, end: { result: 'fail', reason: `judge: ${asks[0].why}` }, asks: [], fixable: asks.map((f) => ({ kind: 'judge', file: f.file ?? '', what: f.why })) };
+                return { checked, end: { result: 'fail', reason: `judge: ${asks[0].why}` }, asks: [], fixable: wrongScreens(asks) };
             if (asks.length)
                 return { checked, asks, fixable: [] };
             if (checked.code !== PASS)
@@ -1434,6 +1554,13 @@ async function runSteps(dir) {
             }
         }
         if (p.asks.length) {
+            // auto_fix.verify never fixes a mixed result (wrong screens and unsure ones): the judge sorts the wrong ones, then all park.
+            const wrong = p.asks.filter((f) => f.level === 'fail');
+            if (tries && wrong.length && wrong.length < p.asks.length) {
+                const sorted = await sortJudged(run, cfg, failures(wrongScreens(wrong)), join(dir, 'agents', `triage${fixed ? '-gate' : ''}.json`), h, true);
+                if (typeof sorted !== 'string')
+                    p.asks = [...sorted, ...p.asks.filter((f) => f.level !== 'fail')];
+            }
             begin('gate');
             const findings = p.asks.map((f, i) => ({ id: `gate-${i + 1}`, severity: f.level === 'fail' ? 'error' : 'warning', what: f.why, action: 'ask-user' }));
             const checked = p.checked;
@@ -1472,7 +1599,8 @@ async function runSteps(dir) {
     }
 }
 const failures = (list) => list.map((f, i) => ({ id: `F${i + 1}`, ...f }));
-// What a verify fix never changes: the verify skill, .done-done.yaml, tests and test-runner configs. Other files a
+const wrongScreens = (asks) => asks.map((f) => ({ kind: 'judge', file: f.file ?? '', what: f.why }));
+// What a verify fix never changes: the verify skill, .done-done.yaml, tests, test-runner configs and the checkout's copied ignored files. Other files a
 // journey runs are not guarded, so review the fix branch.
 const TEST_FILE = /(^|\/)(test|tests|__tests__|e2e|spec)\/|\.(test|spec)\.[^/]*$|_test\.(go|py)$|(^|\/)test_[^/]*\.py$|(^|\/)((playwright|jest|vitest|cypress)\.config\.[^/]*|cypress\.json)$/;
 // The judge's question for a screen it called wrong: the claim is the truth unless it looks wrong or needs a decision.
@@ -1486,36 +1614,57 @@ const VERIFY_TRIAGE = {
     fix: 'fix',
 };
 // The judge the user set (never the fixer's agent) sorts the judge's failures before each fix: [] sends them all to the fixer;
-// with any ask (or unsure answer), every judge failure goes to the gate with its class. A string: why the judge did not answer.
-async function sortJudged(run, cfg, open, record, h) {
+// with any ask (or unsure answer), or `park`, every judge failure goes to the gate with its class. A string: why the judge did not answer.
+async function sortJudged(run, cfg, open, record, h, park = false) {
     const judged = open.filter((f) => f.kind === 'judge');
     if (!judged.length)
         return [];
     const step = h.begin('triage');
-    const choice = refuseSameSession(selectJudge(cfg, selectAgent(cfg)));
+    const choice = selectJudge(cfg, selectAgent(cfg), true);
     const asks = await triage(cfg, choice, judged, VERIFY_TRIAGE, { app: cfg.app, outcome: run.claim, findings: judged }, record);
     h.log('triage', { judge: { route: choice.route, model: choice.model, independence: choice.independence }, ask_user: asks });
     h.set(step, typeof asks === 'string' ? 'failed' : 'completed');
-    if (typeof asks === 'string' || !asks.length)
+    if (typeof asks === 'string' || !(asks.length || park))
         return typeof asks === 'string' ? asks : [];
     return judged.map((f) => ({ level: 'fail', why: `${(asks.find((x) => x.id === f.id) ?? f).what}; triage: ${asks.some((x) => x.id === f.id) ? 'ask' : 'fix'}`, file: f.file }));
 }
 // auto_fix.verify: the user's agent fixes product code in a done-done worktree at the verified head, done-done commits it and
 // `again` verifies there, up to `tries` times; a pass or a gate keeps a done-done/verify-<run-id> branch, never the user's.
 async function fixVerify(run, cfg, dir, first, tries, h, again) {
-    h.begin('fix');
+    const fixStep = h.begin('fix');
     const repo = run.repo;
     const skill = relative(repo, join(repo, cfg.skill));
-    const off = (p) => p === '.done-done.yaml' || p.startsWith(`${skill}/`) || TEST_FILE.test(p);
     const agent = selectAgent(cfg);
-    const checkout = repoState(repo);
+    // done-done's own folders in the repo (an evidence root, DONE_DONE_HOME): a re-run writes there, so they are never the user's checkout.
+    const own = [cfg.evidence.root, home()].map((p) => under(repo, p)).filter((p) => p !== null);
+    const checkout = repoState(repo, own);
+    const ignored = git(repo, 'ls-files', '-z', '--others', '--ignored', '--exclude-standard', '--directory', ...pathspec(own)).split('\0').filter(Boolean);
+    const carried = (p) => ignored.some((c) => p === c || (c.endsWith('/') && p.startsWith(c)));
+    const off = (p) => p === '.done-done.yaml' || p.startsWith(`${skill}/`) || TEST_FILE.test(p) || carried(p);
     const wt = join(dir, 'fix');
     const scratch = join(dir, 'tmp');
     const rounds = [];
     let open = failures(first.fixable);
     const record = JSON.parse(readFileSync(run.record, 'utf8'));
-    return inWorktree(repo, wt, async (start) => {
+    // The checkout's ignored state (node_modules, .env.local) is copied, never linked, into the worktree, and copied again over
+    // whatever the fixer did to it before each re-run, so the re-run sees the fix commit with the user's own ignored files.
+    // ponytail: a full copy each round (a clone where the file system can); a huge node_modules on ext4 is slow, link read-only if it bites.
+    const carry = () => {
+        git(wt, 'clean', '-fdqX');
+        for (const p of ignored) {
+            try {
+                cpSync(join(repo, p), join(wt, p), { recursive: true, verbatimSymlinks: true, mode: constants.COPYFILE_FICLONE });
+            }
+            catch (e) {
+                return `copy of your ignored ${p} into the fix worktree failed: ${errorText(e)}`;
+            }
+        }
+    };
+    const attempts = async (start) => {
         let base = start;
+        const copied = carry();
+        if (copied)
+            return (h.set(fixStep, 'failed'), run.findings = open, { blocked: copied });
         for (let k = 1; k <= tries; k++) {
             const step = h.begin('fix');
             const round = { attempt: k, failures: open };
@@ -1541,7 +1690,7 @@ Answer with summary (what you changed, in one line) and blocker ("" when you fix
             Object.assign(round, { record: a.record ?? a.recordError, ...(a.ok ? { summary: a.answer?.summary, blocker: a.answer?.blocker } : { error: a.error }) });
             // The diff guard: product code only, in the worktree only; anything else drops the attempt with the worktree.
             const changed = (round.changed = changedSince(wt, base, false));
-            const problem = attemptProblem(repo, checkout, wt, base, agent.agent, a, changed, changed.filter(off), 'the verify skill, .done-done.yaml, a test file or a test-runner config, which a fix never changes', 'the product');
+            const problem = attemptProblem(repo, checkout, wt, base, agent.agent, a, changed, changed.filter(off), 'the verify skill, .done-done.yaml, a test file, a test-runner config or a copied ignored file of your checkout, which a fix never changes', 'the product', own);
             if (problem)
                 return blocked(problem);
             if (!changed.length)
@@ -1550,10 +1699,13 @@ Answer with summary (what you changed, in one line) and blocker ("" when you fix
             if (typeof made === 'string')
                 return blocked(made);
             if (made.files.some(off))
-                return blocked('the commit holds the verify skill, .done-done.yaml, a test file or a test-runner config (a commit hook added them), so no branch is made');
+                return blocked('the commit holds the verify skill, .done-done.yaml, a test file, a test-runner config or a copied ignored file (a commit hook added them), so no branch is made');
             base = round.commit = made.commit;
             run.fix = { commit: made.commit, record: join(recordsDir(cfg), `${run.run_id}-fix${k}.json`) };
             // Verify again at the fix commit; its records are named fix<k>-, and the judge sorts its failures before the next fix.
+            const recopied = carry();
+            if (recopied)
+                return blocked(recopied);
             const next = await again(wt, `fix${k}`);
             round.rerun = { result: next.end?.result ?? (next.asks.length ? 'gate' : 'pass'), reason: next.end?.reason, ...next.logs };
             if (next.end && !next.fixable.length)
@@ -1572,6 +1724,14 @@ Answer with summary (what you changed, in one line) and blocker ("" when you fix
         }
         run.findings = open;
         return { blocked: `auto_fix.verify allows ${tries} ${tries === 1 ? 'attempt' : 'attempts'}, and the re-run still fails after them` };
+    };
+    return inWorktree(repo, wt, async (start) => {
+        try {
+            return await attempts(start);
+        }
+        finally {
+            git(wt, 'clean', '-fdqX');
+        }
     }, record.commit);
 }
 // EPERM: the pid is alive but not ours to signal. A pid reused by another process still reads as alive: the known limit of a pid check.
@@ -1672,17 +1832,18 @@ function showRun(dir, cfg, command, gone = false) {
             ]
                 : run.result === 'overridden' ? [`This head is not proven: ${run.response?.by} chose ${run.response?.action} past the judge, and receipt --verify refuses this receipt`, `Capture proof the judge passes: ${again}`]
                     : code === WAITING ? [`The run goes on without this command; read it later: done-done status --run ${run.run_id}`]
-                        : run.result === 'changed' ? [`Review the fix on its own branch (your branch is untouched): git show ${run.fix.branch}`, `Take it: git merge ${run.fix.branch}, or drop it: git branch -D ${run.fix.branch}`]
-                            : run.kind === 'maintain' && status === 'completed' ? (run.result === 'clean' ? [`The verify skill matches the source; read the readers' recipes: done-done logs --step reconcile --run ${run.run_id}`]
-                                : run.result === 'drift' ? [`Fix the findings in ${cfg.skill} (--full lists them all), commit, then run again: ${again}`, `Or let done-done's agent fix them on a branch: set auto_fix: { maintain: 2 } in .done-done.yaml, then run again: ${again}`]
-                                    : /^ask-user:/.test(run.reason ?? '') ? ['Ask the user about each ask-user finding: is the product or the skill wrong? Never decide it for them', `Product wrong: fix the product (maintain never edits product code). Skill wrong: fix ${cfg.skill}, commit, then run again: ${again}`]
-                                        : /^fix:/.test(run.reason ?? '') ? [`Read what each fix attempt did: done-done logs --step fix --run ${run.run_id}`, `Fix the findings in ${cfg.skill} by hand, commit, then run again: ${again}`]
-                                            : /^locate: no verify skill/.test(run.reason ?? '') ? ['Create the verify skill: done-done init']
-                                                : /^locate:/.test(run.reason ?? '') ? [`Make ${cfg.skill} a real folder inside the repository (not a link), commit, then run again: ${again}`]
-                                                    : [`Read the step logs in ${shown(run.repo, join(dir, 'logs'))}`, `Fix the cause, then run again: ${again}`])
-                                : code === PASS ? [`Verify this receipt (CI or merge): done-done receipt --verify ${rec.commit}`]
-                                    : status === 'cancelled' ? [...(run.kind === 'maintain' ? [] : [`Start again from the failed step: done-done rerun --run ${run.run_id}`]), `List past runs: done-done history`]
-                                        : [`Read the step logs in ${shown(run.repo, join(dir, 'logs'))}`, ...(run.kind === 'maintain' ? [] : [`Fix the cause, commit, then run again from the failed step: done-done rerun --run ${run.run_id}`]), `Or start a new run: ${again}`];
+                        : run.kind === 'verify' && /^fix:/.test(run.reason ?? '') ? [`Read what each fix attempt did: done-done logs --step fix --run ${id}`, `Fix the product by hand, commit, then run again: ${again}`]
+                            : run.result === 'changed' ? [`Review the fix on its own branch (your branch is untouched): git show ${run.fix.branch}`, `Take it: git merge ${run.fix.branch}, or drop it: git branch -D ${run.fix.branch}`]
+                                : run.kind === 'maintain' && status === 'completed' ? (run.result === 'clean' ? [`The verify skill matches the source; read the readers' recipes: done-done logs --step reconcile --run ${run.run_id}`]
+                                    : run.result === 'drift' ? [`Fix the findings in ${cfg.skill} (--full lists them all), commit, then run again: ${again}`, `Or let done-done's agent fix them on a branch: set auto_fix: { maintain: 2 } in .done-done.yaml, then run again: ${again}`]
+                                        : /^ask-user:/.test(run.reason ?? '') ? ['Ask the user about each ask-user finding: is the product or the skill wrong? Never decide it for them', `Product wrong: fix the product (maintain never edits product code). Skill wrong: fix ${cfg.skill}, commit, then run again: ${again}`]
+                                            : /^fix:/.test(run.reason ?? '') ? [`Read what each fix attempt did: done-done logs --step fix --run ${run.run_id}`, `Fix the findings in ${cfg.skill} by hand, commit, then run again: ${again}`]
+                                                : /^locate: no verify skill/.test(run.reason ?? '') ? ['Create the verify skill: done-done init']
+                                                    : /^locate:/.test(run.reason ?? '') ? [`Make ${cfg.skill} a real folder inside the repository (not a link), commit, then run again: ${again}`]
+                                                        : [`Read the step logs in ${shown(run.repo, join(dir, 'logs'))}`, `Fix the cause, then run again: ${again}`])
+                                    : code === PASS ? [`Verify this receipt (CI or merge): done-done receipt --verify ${rec.commit}`]
+                                        : status === 'cancelled' ? [...(run.kind === 'maintain' ? [] : [`Start again from the failed step: done-done rerun --run ${run.run_id}`]), `List past runs: done-done history`]
+                                            : [`Read the step logs in ${shown(run.repo, join(dir, 'logs'))}`, ...(run.kind === 'maintain' ? [] : [`Fix the cause, commit, then run again from the failed step: done-done rerun --run ${run.run_id}`]), `Or start a new run: ${again}`];
     emit(result);
     return code;
 }
@@ -1691,11 +1852,11 @@ async function waitRun(dir, pid) {
         await new Promise((r) => setTimeout(r, 200));
 }
 // The judge a command will start: the user's agent and judge (asked for when unset), refused when it is the author.
-async function preflightJudge(cfg, needsAgent = true) {
+async function preflightJudge(cfg, needsAgent = true, fix = false) {
     if (needsAgent)
         await withChoice('agent', cfg);
     await withChoice('judge', cfg);
-    return selectJudge(cfg, cfg.agent ? selectAgent(cfg) : NO_AUTHOR);
+    return selectJudge(cfg, cfg.agent ? selectAgent(cfg) : NO_AUTHOR, fix);
 }
 const NO_AUTHOR = { agent: '', model: '' };
 // A run waiting at its gate is the user's call, so a new verify or rerun is refused until the user answers that run or it is
@@ -1720,9 +1881,7 @@ async function preflightVerify(cfg, judging) {
     }
     if (!judging)
         return;
-    const choice = await preflightJudge(cfg);
-    if (cfg.auto_fix.verify)
-        refuseSameSession(choice);
+    await preflightJudge(cfg, true, !!cfg.auto_fix.verify);
 }
 async function cmdVerify(argv) {
     const { values, positionals } = parseArgs({
@@ -1799,7 +1958,7 @@ async function cmdMaintain(argv) {
     if (cfg.auto_fix.maintain) {
         if (cfg.agent.startsWith('acp:'))
             throw new UsageError(`${cfg.agent} cannot fix the verify skill: done-done runs ACP agents with every tool denied`, `Set auto_fix.maintain: 0 to report only, or set agent: to one of ${AGENTS.join(', ')}`);
-        refuseSameSession(await preflightJudge(cfg));
+        await preflightJudge(cfg, true, true);
     }
     const id = newRunId(git(repo, 'rev-parse', 'HEAD'));
     const dir = join(runsRoot(cfg.app), id);
@@ -1887,9 +2046,11 @@ async function cmdRerun(argv) {
     // A source run with no journey is driven again by the author agent config names now; schema 2 runs before PR 4 always had a journey.
     const journey = src.journey ?? null;
     const drive = journey === null ? await agentDrive(src.repo, cfg, src.feature) : undefined;
-    const inputs = inputsOf(src.repo, loadConfig(src.repo), journey, drive?.author);
+    const srcCfg = loadConfig(src.repo);
+    const inputs = inputsOf(src.repo, srcCfg, journey, drive?.author);
     const same = !!src.inputs && ['head', 'journey', 'skill'].every((k) => src.inputs[k] === inputs[k]);
-    const driveReuse = same && drivesClean(src.record, src.inputs?.head);
+    // A reused drive keeps the guard it ran under, so it is only reused when the watched inputs are the same ones.
+    const driveReuse = same && drivesClean(src.record, src.inputs?.head) && JSON.stringify(src.guarded?.patterns ?? []) === JSON.stringify(srcCfg.inputs);
     const reused = (name) => (name === 'resolve' && same) || (name === 'drive' && driveReuse);
     // A rerun judges as its source did; --no-judge turns it off for this run. A missing or forbidden judge is a usage
     // error here too.
@@ -1903,7 +2064,7 @@ async function cmdRerun(argv) {
         return s && reused(name) && s.status === 'completed' ? { ...s } : { name, status: 'pending' };
     });
     const created = now();
-    const run = { schema: 2, run_id: id, kind: src.kind, app: cfg.app, repo: src.repo, journey, ...drive, claim: src.claim, claim_id: src.claim_id, branch: src.branch, judge: judging, status: 'pending', inputs, steps, created, updated: created, ...(driveReuse && src.record && { record: src.record }) };
+    const run = { schema: 2, run_id: id, kind: src.kind, app: cfg.app, repo: src.repo, journey, ...drive, claim: src.claim, claim_id: src.claim_id, branch: src.branch, judge: judging, status: 'pending', inputs, steps, created, updated: created, ...(driveReuse && src.record && { record: src.record }), ...(driveReuse && src.guarded && { guarded: src.guarded }) };
     saveRun(dir, run);
     for (const s of steps) {
         const f = join(root, srcId, 'logs', `${s.name}.log`);

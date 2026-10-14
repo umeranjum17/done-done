@@ -29,7 +29,7 @@ What ships now:
 - **A gate that asks the user.** When the judge says fail or unsure, the run stops and waits. The user answers with `respond`.
 - **Receipts.** A receipt records a passing check, the commit and the hash of each file. You can check it again later.
 - **Maintain.** `maintain` keeps the verify skill in step with the code.
-- **Fix loop.** `auto_fix.maintain` lets done-done fix verify skill drift, with the same config shape as no-mistakes.
+- **Fix loop.** `auto_fix.maintain` lets done-done fix verify skill drift, and `auto_fix.verify` lets it fix the product after a failed verify, with the same config shape as no-mistakes.
 - **Run-instance harness.** An `instance` block starts the app under test per run, on its own port, with its own HOME and XDG folders, and stops it at the end.
 - **Capture matrix.** One verify run captures every theme x width x form cell the repo asks for; each cell is captured or skipped with a reason.
 - **DOM assertions.** With a `dom` block, each captured screen's page-check record must be clean: no horizontal overflow, squashed text, or console error or failed request that an allow list does not name.
@@ -38,7 +38,6 @@ What ships now:
 
 What comes next:
 
-- `auto_fix` for each `verify` step, like no-mistakes.
 - More project-agnostic primitives, such as an `init` base for new projects.
 - Help to write the proof steps for your app.
 

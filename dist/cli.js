@@ -2379,13 +2379,12 @@ function detectApp(repo) {
         features.push({ slug: s, title: f.title, reach: f.reach, drive: f.drive, capture: (driver === 'browser' ? shot : saved)(s) });
     }
     const shown = features.slice(0, 5);
-    return { surface, launch, ready, harness, observe, isolate, features: shown, reference: driver === 'tty' ? routes : [], omitted: features.length - shown.length };
+    return { surface, launch, ready, harness, observe, isolate, features: shown, omitted: features.length - shown.length };
 }
 function verifySkillMd(app, d) {
     const name = `verify-${app}`;
     const found = [
         ...d.features.map((f) => `- ${f.title}: ${f.reach}`),
-        ...d.reference.map((r) => `- ${r}: reference only, ${d.harness} does not send HTTP requests to it`),
         ...(d.omitted ? [`- ${d.omitted} more found and not listed; add them by hand or run maintain later.`] : []),
     ];
     return `---

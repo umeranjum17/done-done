@@ -1157,7 +1157,6 @@ test('init drives a CLI with routes over its commands only, never with curl', ()
   assert.equal(dd('init').code, 2);
   const dir = join(repo, '.agents', 'skills', 'verify-notes');
   assert.deepEqual(featureFiles(dir), ['README.md', 'add.md', 'list.md'], 'a route is not a feature under a PTY harness');
-  assert.match(readFileSync(join(dir, 'SKILL.md'), 'utf8'), /^- GET \/api\/items: reference only/m, 'the route is listed as reference');
   for (const f of ['add', 'list']) assert.doesNotMatch(readFileSync(join(dir, 'features', `${f}.md`), 'utf8'), /curl/, `${f} names no curl driver`);
 });
 

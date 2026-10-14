@@ -111,6 +111,7 @@ done-done run review
 - writes a run record to `<root>/.done-done/runs/<run-id>.json`.
 
 A non-zero command exit, or a run that wrote nothing, fails. A run that wrote nothing names its folder and the two names the command gets it under: `DONE_DONE_EVIDENCE_ROOT` and `DONE_DONE_RUN_ID` (or `${RUN_ID}` in the command).
+
 For a proof you drive by hand or through an agent:
 
 ```sh
@@ -351,7 +352,7 @@ When the judge says `fail` or `unsure` for a capture (or an agent drive has a ca
 - `--action skip --reason "<why>"`: go on without a judge pass.
 - `--action fix`: end the run `fail`; fix the product or the verify skill's recipe (`done-done maintain` checks the skill against the source), commit, then `rerun`.
 
-Approve and skip need a non-empty `--reason`. Each answer is logged in `events.jsonl` (`step: gate`, the action, who answered (git `user.name`, else the OS user) and the reason) and kept in `run.json` as `response`. Approve and skip end the run `overridden`, never `pass` (exit 1), and write a receipt with `result: overridden`, the `override` (action, who, why, when) and the judge's verdicts; `receipt --verify` refuses it. A run is answered once (a second `respond` exits 2). `abort` cancels a parked run. While a run waits at its gate, `verify` and `rerun` of the same claim (its `--claim-id`, else the branch it started on) in the same checkout exit 2, naming the waiting run and its `respond` and `abort` commands, so a new run never goes around the gate. A run waiting with neither key, recorded by an older build in the same checkout, blocks every `verify` and `rerun` there until it is answered or aborted. A run record that cannot be read or parsed stops `verify`, `rerun`, `status`, `respond`, `abort` and `history` (exit 2), naming the file to fix or remove.
+Approve and skip need a non-empty `--reason`. Each answer is logged in `events.jsonl` (`step: gate`, the action, who answered (git `user.name`, else the OS user) and the reason) and kept in `run.json` as `response`. Approve and skip end the run `overridden`, never `pass` (exit 1; the spend gate differs, see [Journeys that spend](#journeys-that-spend)), and write a receipt with `result: overridden`, the `override` (action, who, why, when) and the judge's verdicts; `receipt --verify` refuses it. A run is answered once (a second `respond` exits 2). `abort` cancels a parked run. While a run waits at its gate, `verify` and `rerun` of the same claim (its `--claim-id`, else the branch it started on) in the same checkout exit 2, naming the waiting run and its `respond` and `abort` commands, so a new run never goes around the gate. A run waiting with neither key, recorded by an older build in the same checkout, blocks every `verify` and `rerun` there until it is answered or aborted. A run record that cannot be read or parsed stops `verify`, `rerun`, `status`, `respond`, `abort` and `history` (exit 2), naming the file to fix or remove.
 
 #### Secrets in the evidence
 

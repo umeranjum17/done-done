@@ -297,7 +297,8 @@ export const JUDGES = AGENTS.filter((a) => a === 'claude' || ANSWERER_JUDGES.inc
 export const noJudge = () =>
   askError('judge', JUDGES.join(', '), 'never pick one for them, and never the agent that did the work', `done-done init --judge <agent> --judge-model <model>, e.g. done-done init --judge opencode --judge-model ${CHEAP.opencode.model}`);
 
-export function selectJudge(cfg: Config, found: { agent: string; model: string }): JudgeChoice {
+// fix: the judge on a fix path (auto_fix) is never the fixer's own agent, at any model, and judge.allow_same does not apply.
+export function selectJudge(cfg: Config, found: { agent: string; model: string }, fix = false): JudgeChoice {
   const route = cfg.judge.route;
   if (!route) throw noJudge();
   // A key route judges on the user's own key at judge.model; an agent route judges through that agent at its model.
@@ -310,6 +311,8 @@ export function selectJudge(cfg: Config, found: { agent: string; model: string }
   const independence = keyed
     ? found.model && model === found.model ? 'session-only' : 'agent'
     : agent !== knownAgentOf(found.agent) ? 'agent' : found.model && model !== found.model ? 'model' : 'session-only';
+  if (fix && independence !== 'agent')
+    throw new UsageError(`judge: the judge ${agent} (model ${model}) is the fixer's own agent (${found.agent}) at any model, and the judge is never the agent that did the work; judge.allow_same does not apply to auto_fix`, 'Ask the user for another judge agent and save it: done-done init --judge <agent> --judge-model <model>');
   if (independence === 'session-only' && !cfg.judge.allow_same)
     throw new UsageError(`judge: the judge ${agent} (model ${model}) is the author's own agent and model (${found.agent}), and the judge is never the agent that did the work`, `Ask the user for another judge agent or model and save it: done-done init --judge <agent> --judge-model <model>; or set judge.allow_same: true in ~/.done-done/config.yaml to accept a fresh session of the same one`);
   return { route, agent, model, independence, author: { agent: found.agent, model: found.model } };

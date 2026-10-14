@@ -11,6 +11,7 @@ import { crc32, deflateSync } from 'node:zlib';
 import jpeg from 'jpeg-js';
 import { parse } from 'yaml';
 import { decode } from '@toon-format/toon';
+import { SQUASHED_TEXT } from '../dist/dom.js';
 
 const CLI = join(dirname(fileURLToPath(import.meta.url)), '..', 'dist', 'cli.js');
 
@@ -2540,7 +2541,7 @@ test('design fails a screen on each defect the judge names, alone or next to its
   writeFileSync(join(t.env.DONE_DONE_HOME, 'config.yaml'), 'agent: claude\njudge:\n  route: answerer:opencode\n');
   writeFileSync(join(t.dir, 'mock.png'), screen(3));
   writeFileSync(join(t.dir, 'blank.png'), blank());
-  const kinds = ['aspect', 'clipped-text', 'overlap', 'off-screen', 'blank-strip', 'layout'];
+  const kinds = ['aspect', 'clipped-text', 'overlap', 'off-screen', 'blank-strip', 'squashed-text', 'layout'];
   const answer = (flagged = {}) => JSON.stringify(Object.fromEntries(kinds.map((k) => [k, { probabilities: flagged[k] ?? { defect: 0.03, none: 0.97 }, rationale: 'Looked.', personReason: flagged[k] ? `${k} at the header, top left` : 'Nothing of this kind.' }])));
   // Run from outside any repo, as a project's own capture step might.
   const design = (reply, ...args) => {
@@ -2587,12 +2588,12 @@ test('design fails a screen on each defect the judge names, alone or next to its
 });
 
 // A cheap model sometimes answers every kind with all-zero probabilities: that is a malformed answer to ask again, not
-// a judge unsure of all six kinds, so the same screen gets the same verdict on every run.
+// a judge unsure of all seven kinds, so the same screen gets the same verdict on every run.
 test('design asks again when the judge answers with probabilities it cannot read, and never calls that unsure', () => {
   const t = setup();
   mkdirSync(t.env.DONE_DONE_HOME, { recursive: true });
   writeFileSync(join(t.env.DONE_DONE_HOME, 'config.yaml'), 'agent: claude\njudge:\n  route: answerer:opencode\n');
-  const kinds = ['aspect', 'clipped-text', 'overlap', 'off-screen', 'blank-strip', 'layout'];
+  const kinds = ['aspect', 'clipped-text', 'overlap', 'off-screen', 'blank-strip', 'squashed-text', 'layout'];
   const answer = (p) => JSON.stringify(Object.fromEntries(kinds.map((k) => [k, { probabilities: p, rationale: '' }])));
   // The stub opencode gives its answers in turn, the last one from then on.
   const design = (...replies) => {
@@ -2614,7 +2615,7 @@ console.log(JSON.stringify({ type: 'text', part: { type: 'text', text: replies[M
   const never = design(zero);
   assert.equal(never.code, 3, never.out);
   assert.equal(never.calls.length, 2);
-  assert.equal(toon(never).screens[0].reason, 'the judge did not answer: no probabilities for aspect, clipped-text, overlap, off-screen, blank-strip, layout that are each 0 to 1 and sum to 1');
+  assert.equal(toon(never).screens[0].reason, 'the judge did not answer: no probabilities for aspect, clipped-text, overlap, off-screen, blank-strip, squashed-text, layout that are each 0 to 1 and sum to 1');
   // One kind left without an option is malformed too, and only that kind is named.
   const partial = JSON.parse(answer({ defect: 0.02, none: 0.98 }));
   partial.layout.probabilities = { defect: 0.02 };
@@ -2626,7 +2627,7 @@ test('design fails an overlay the approved mock does not draw in that place', ()
   mkdirSync(t.env.DONE_DONE_HOME, { recursive: true });
   writeFileSync(join(t.env.DONE_DONE_HOME, 'config.yaml'), 'agent: claude\njudge:\n  route: answerer:opencode\n');
   writeFileSync(join(t.dir, 'mock.png'), screen(3));
-  const kinds = ['aspect', 'clipped-text', 'overlap', 'off-screen', 'blank-strip', 'layout'];
+  const kinds = ['aspect', 'clipped-text', 'overlap', 'off-screen', 'blank-strip', 'squashed-text', 'layout'];
   const reply = JSON.stringify(Object.fromEntries(kinds.map((k) => [k, k === 'overlap' ? { probabilities: { defect: 0.9, none: 0.1 }, rationale: 'Looked.', personReason: 'toast over the save button' } : { probabilities: { defect: 0.03, none: 0.97 }, rationale: 'Looked.', personReason: 'Nothing of this kind.' }])));
   const s = stubAgents(t.env, reply);
   symlinkSync(process.execPath, join(s.bin, 'node'));
@@ -2651,7 +2652,7 @@ test('design measures a blank strip along an edge, but not a nav rail with icons
   writeFileSync(join(t.dir, 'strip.png'), png(240, 160, (x, y) => (x < 24 ? [20, 22, 20] : text(x, y) ? [40, 40, 40] : light)));
   writeFileSync(join(t.dir, 'rail.png'), png(240, 160, (x, y) => (x < 48 ? (x >= 14 && x < 34 && y % 40 >= 10 && y % 40 < 30 ? [220, 220, 220] : [30, 30, 36]) : text(x, y) ? [40, 40, 40] : light)));
   writeFileSync(join(t.dir, 'uniform.png'), png(240, 160, () => [20, 22, 20]));
-  const clean = JSON.stringify(Object.fromEntries(['aspect', 'clipped-text', 'overlap', 'off-screen', 'blank-strip', 'layout'].map((k) => [k, { probabilities: { defect: 0.02, none: 0.98 }, rationale: 'Looked.', personReason: 'Nothing of this kind.' }])));
+  const clean = JSON.stringify(Object.fromEntries(['aspect', 'clipped-text', 'overlap', 'off-screen', 'blank-strip', 'squashed-text', 'layout'].map((k) => [k, { probabilities: { defect: 0.02, none: 0.98 }, rationale: 'Looked.', personReason: 'Nothing of this kind.' }])));
   const s = stubAgents(t.env, clean);
   symlinkSync(process.execPath, join(s.bin, 'node'));
   const design = (...args) => {
@@ -2678,7 +2679,7 @@ test('design does not report a strip its approved mock has too, but reports one 
   writeFileSync(join(t.dir, 'strip.png'), png(240, 160, (x) => (x < 24 ? [20, 22, 20] : light)));
   writeFileSync(join(t.dir, 'band-mock.png'), png(240, 160, (x) => (x < 24 ? [20, 22, 20] : light)));
   writeFileSync(join(t.dir, 'plain-mock.png'), png(240, 160, (x, y) => (x >= 60 && x < 220 && y % 30 >= 10 && y % 30 < 16 ? [40, 40, 40] : light)));
-  const clean = JSON.stringify(Object.fromEntries(['aspect', 'clipped-text', 'overlap', 'off-screen', 'blank-strip', 'layout'].map((k) => [k, { probabilities: { defect: 0.02, none: 0.98 }, rationale: 'Looked.', personReason: 'Nothing of this kind.' }])));
+  const clean = JSON.stringify(Object.fromEntries(['aspect', 'clipped-text', 'overlap', 'off-screen', 'blank-strip', 'squashed-text', 'layout'].map((k) => [k, { probabilities: { defect: 0.02, none: 0.98 }, rationale: 'Looked.', personReason: 'Nothing of this kind.' }])));
   const s = stubAgents(t.env, clean);
   symlinkSync(process.execPath, join(s.bin, 'node'));
   const design = (...args) => {
@@ -2703,7 +2704,7 @@ test('design does not read a transparent margin as a strip, on a dark screen eit
   writeFileSync(join(t.env.DONE_DONE_HOME, 'config.yaml'), 'agent: claude\njudge:\n  route: answerer:opencode\n');
   // An RGBA capture on a near-black screen whose left tenth is fully transparent, as a window capture's shadow margin is.
   writeFileSync(join(t.dir, 'margin.png'), png(240, 160, (x) => (x < 24 ? [0, 0, 0, 0] : [16, 18, 20, 255]), 6));
-  const clean = JSON.stringify(Object.fromEntries(['aspect', 'clipped-text', 'overlap', 'off-screen', 'blank-strip', 'layout'].map((k) => [k, { probabilities: { defect: 0.02, none: 0.98 }, rationale: 'Looked.', personReason: 'Nothing of this kind.' }])));
+  const clean = JSON.stringify(Object.fromEntries(['aspect', 'clipped-text', 'overlap', 'off-screen', 'blank-strip', 'squashed-text', 'layout'].map((k) => [k, { probabilities: { defect: 0.02, none: 0.98 }, rationale: 'Looked.', personReason: 'Nothing of this kind.' }])));
   const s = stubAgents(t.env, clean);
   symlinkSync(process.execPath, join(s.bin, 'node'));
   const r = spawnSync(process.execPath, [CLI, 'design', '--full', 'margin.png'], { cwd: t.dir, env: s.env, encoding: 'utf8' });
@@ -2718,7 +2719,7 @@ test('design reports an opaque black strip that has transparent pixels beside it
   writeFileSync(join(t.dir, 'partial.png'), png(240, 160, (x, y) => (x < 24 ? (y < 30 ? [0, 0, 0, 0] : [0, 0, 0, 255]) : [245, 240, 230, 255]), 6));
   writeFileSync(join(t.dir, 'clear-edge.png'), png(240, 160, (x) => (x === 0 ? [0, 0, 0, 0] : x < 24 ? [0, 0, 0, 255] : [245, 240, 230, 255]), 6));
   writeFileSync(join(t.dir, 'clear-inside.png'), png(240, 160, (x) => (x === 3 ? [0, 0, 0, 0] : x < 8 ? [0, 0, 0, 255] : [245, 240, 230, 255]), 6));
-  const clean = JSON.stringify(Object.fromEntries(['aspect', 'clipped-text', 'overlap', 'off-screen', 'blank-strip', 'layout'].map((k) => [k, { probabilities: { defect: 0.02, none: 0.98 }, rationale: 'Looked.', personReason: 'Nothing of this kind.' }])));
+  const clean = JSON.stringify(Object.fromEntries(['aspect', 'clipped-text', 'overlap', 'off-screen', 'blank-strip', 'squashed-text', 'layout'].map((k) => [k, { probabilities: { defect: 0.02, none: 0.98 }, rationale: 'Looked.', personReason: 'Nothing of this kind.' }])));
   const s = stubAgents(t.env, clean);
   symlinkSync(process.execPath, join(s.bin, 'node'));
   const design = (name) => spawnSync(process.execPath, [CLI, 'design', '--full', name], { cwd: t.dir, env: s.env, encoding: 'utf8' });
@@ -2743,7 +2744,7 @@ test('design judges a JPEG longer than the judge size, downscaled to a PNG', () 
     data.set([(x * 7) % 256, (y * 11) % 256, (x + y) % 256, 255], i);
   }
   writeFileSync(join(t.dir, 'long.jpg'), jpeg.encode({ width: 1300, height: 90, data }, 90).data);
-  const clean = JSON.stringify(Object.fromEntries(['aspect', 'clipped-text', 'overlap', 'off-screen', 'blank-strip', 'layout'].map((k) => [k, { probabilities: { defect: 0.02, none: 0.98 }, rationale: 'Looked.', personReason: 'Nothing of this kind.' }])));
+  const clean = JSON.stringify(Object.fromEntries(['aspect', 'clipped-text', 'overlap', 'off-screen', 'blank-strip', 'squashed-text', 'layout'].map((k) => [k, { probabilities: { defect: 0.02, none: 0.98 }, rationale: 'Looked.', personReason: 'Nothing of this kind.' }])));
   const s = stubAgents(t.env, clean);
   symlinkSync(process.execPath, join(s.bin, 'node'));
   const r = spawnSync(process.execPath, [CLI, 'design', '--full', 'long.jpg'], { cwd: t.dir, env: s.env, encoding: 'utf8' });
@@ -5157,6 +5158,33 @@ test('a dom block asks for a page-check record of a gif capture too', () => {
     'home.dark.gif: no page-check record home.dark.dom.json next to it (the dom block needs one per captured screen)',
     'home.light.gif: no page-check record home.light.dom.json next to it (the dom block needs one per captured screen)',
   ]);
+});
+
+// Squashed text: done-done's measurement function run by headless Chrome on a fixture page, its list in the record.
+const CHROME = ['google-chrome', 'google-chrome-stable', 'chromium'].find((b) => spawnSync(b, ['--version']).status === 0);
+const measure = (body) => {
+  const dir = mkdtempSync(join(tmpdir(), 'done-done-chrome-'));
+  after(() => rmSync(dir, { recursive: true, force: true }));
+  const page = `<style>body{margin:0;font:16px sans-serif}</style>${body}<script>document.title = encodeURIComponent(JSON.stringify((${SQUASHED_TEXT})()))</script>`;
+  const r = spawnSync(CHROME, ['--headless', '--no-sandbox', '--disable-gpu', `--user-data-dir=${dir}`, '--window-size=390,800', '--dump-dom', `data:text/html,${encodeURIComponent(page)}`], { encoding: 'utf8' });
+  return JSON.parse(decodeURIComponent(r.stdout.match(/<title>(.*?)<\/title>/)?.[1] ?? 'null'));
+};
+// A card title in the column left beside a long label: 20 px wide it wraps one letter per line, 270 px wide it fits.
+const card = (label) => `<div style="display:flex;width:390px"><span style="flex:none;width:${label}px">Waiting for review from the release captain</span><div style="min-width:0"><h3 class="title" style="margin:0;overflow-wrap:anywhere">Approved</h3></div></div>`;
+
+test('squashed text: the measurement flags a title wrapped one letter per line, and the dom check fails its record', { skip: !CHROME && 'no Chrome on PATH' }, () => {
+  const narrow = measure(card(370));
+  assert.deepEqual(narrow.map((q) => [q.element, q.text, q.lines > 1, q.words, q.chars < 8]), [['h3.title', 'Approved', true, 1, true]]);
+  assert.deepEqual(measure(card(120)), []);
+  // Under 8 characters wide with text wider than the box fails, as does a line count over the word count; a short
+  // label in a narrow box and a normal paragraph do not.
+  const limits = measure('<p>A normal paragraph of plain words wraps over a few lines at this width and is never squashed.</p><div style="width:4ch"><b>OK</b></div>'
+    + '<div class="clip" style="width:5ch;white-space:nowrap;overflow:hidden">Continue to checkout</div><div style="width:10ch;word-break:break-all"><i class="long">Supercalifragilistic</i></div>');
+  assert.deepEqual(limits.map((q) => [q.element, q.chars < 8, q.lines, q.words]), [['div.clip', true, 1, 3], ['i.long', false, 2, 1]]);
+  const { r, d, why } = domVerify('dom:\n', { light: { ...CLEAN, squashed_text: measure(card(120)) }, dark: { ...CLEAN, squashed_text: narrow } });
+  assert.equal(r.code, 1, r.out);
+  assert.equal(d.result, 'fail');
+  assert.deepEqual(why.map((w) => w.replace(/^.*\/home\./, 'home.').replace(/[\d.]+ characters/, 'N characters')), [`home.dark.png: http://127.0.0.1/home squashed text: h3.title "Approved" is N characters wide (lines ${narrow[0].lines}, words 1)`]);
 });
 
 // base_ref: verify drives the base ref too, in a done-done worktree, and the judge sees each head capture with its base capture.

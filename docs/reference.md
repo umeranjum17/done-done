@@ -156,7 +156,7 @@ Each axis is optional; done-done expands the set axes into cells and drops skipp
 
 ### DOM assertions
 
-A screenshot judge misses page-level defects. With a `dom` block, a run also fails when a captured screen's page overflows the viewport horizontally, logged a console error or had a failed request:
+A screenshot judge misses page-level defects. With a `dom` block, a run also fails when a captured screen's page overflows the viewport horizontally, logged a console error, had a failed request or shows squashed text:
 
 ```yaml
 dom:
@@ -168,10 +168,11 @@ dom:
 done-done never drives the browser: the recipe or journey writes one page-check record next to each capture (PNG, JPEG, WebP, GIF, MP4 or WebM), named as the capture with `.dom.json` for its extension (`home.dark.390w.png` -> `home.dark.390w.dom.json`, so a matrix cell's record carries its `DONE_DONE_CELL` suffix):
 
 ```json
-{"url": "http://127.0.0.1:4100/", "overflow": true, "overflowing": ["div#wide"], "console_errors": ["boom"], "failed_requests": [{"url": "http://127.0.0.1:4100/x.js", "status": 404}]}
+{"url": "http://127.0.0.1:4100/", "overflow": true, "overflowing": ["div#wide"], "console_errors": ["boom"], "failed_requests": [{"url": "http://127.0.0.1:4100/x.js", "status": 404}],
+ "squashed_text": [{"element": "h3.card-title", "text": "Approved", "chars": 1.6, "lines": 8, "words": 1}]}
 ```
 
-With your browser tool, for example chrome-devtools-axi: `overflow` and `overflowing` from `eval` (document `scrollWidth` beyond `clientWidth`, and the elements whose right edge passes it), `console_errors` from `console --type error`, `failed_requests` (status 400 or more, or 0 for no response) from `network`. The scaffolded verify skill and the agent drive prompt carry the same recipe. Verify's check and `done-done check` fail naming the capture and each issue not on an allow list, and fail when a capture has no record or a record is not this shape. No `dom` block keeps today's behaviour.
+With your browser tool, for example chrome-devtools-axi: `overflow` and `overflowing` from `eval` (document `scrollWidth` beyond `clientWidth`, and the elements whose right edge passes it), `console_errors` from `console --type error`, `failed_requests` (status 400 or more, or 0 for no response) from `network`, `squashed_text` from `eval` of done-done's measurement function, run in each frame of the page (an embedded frame too). It lists every visible element with its own text whose box is under 8 characters wide (its width over the average glyph width of its font) while its text is wider than the box, or whose text sits on more lines (distinct line boxes) than it has words: a title wrapped one letter per line in a narrow column. `squashed_text` is optional, so a record written without it stays valid. The scaffolded verify skill and the agent drive prompt carry the same recipe. Verify's check and `done-done check` fail naming the capture and each issue not on an allow list, and fail when a capture has no record or a record is not this shape. No `dom` block keeps today's behaviour.
 
 ### Base-ref before
 
@@ -298,6 +299,7 @@ done-done design shots/home.png --mock shots/home.png=design/home.png
   | `overlap` | elements cover each other, or content sits under the status bar or system bars |
   | `off-screen` | an element is pushed past the left, right or top edge (content that scrolls below the bottom is fine) |
   | `blank-strip` | a blank, black or solid band where the app should paint, such as a black bar down one side; also measured from the pixels, below |
+  | `squashed-text` | a word or title broken across lines one or a few letters per line, in a column far narrower than its text |
   | `layout` | elements misaligned, squeezed, badly wrapped or stacked wrongly, or text unreadable against its background |
 
 - **Measured strips.** A blank strip is also measured from the pixels of each PNG or JPEG screen, before and apart from the judge: a band along a whole edge, at least 2% of that side deep, in one plain colour with nothing in it, and clearly apart from the screen's main colour. It fails the screen as `blank-strip` with its edge, colour and depth (`left edge: a plain #151815 band 132 px deep (12% of the width), full height, with nothing in it`), even when the judge is unsure or does not answer. A nav rail or bar that holds icons or a title is content, not a strip, and a screen that is all one colour is the blank-frame check's. A band its `--mock` has too (same edge, about as deep as a share of that side, and in about the same colour) is approved design and is not reported; a band the mock lacks still fails. If the mock is given but cannot be measured (not a PNG or JPEG, or undecodable), a band on the screen makes it `unsure` with the reason `approved mock could not be measured; give a PNG or JPEG mock` (exit 3), never a pass. A fully transparent pixel is never measured as part of a band, so a transparent margin is not a strip on a light or dark screen. The measure misses a strip close to the screen's main colour (a black bar on a near-black screen); the judge's question still covers it.

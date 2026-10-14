@@ -29,11 +29,15 @@ export const KINDS: Record<string, { defect: string; look: string }> = {
     defect: 'A plain band with nothing in it runs along a whole edge of the image (left, right, top or bottom), in a colour different from the screen background beside it, such as a black bar beside a light screen; or a region of the image is left unpainted. The image is the screen captured edge to edge, with no border, margin, frame, crop or letterbox bars of its own, so black side bars or letterboxing mean the app did not fill the screen: that is this defect.',
     look: 'describe what runs along each of the four edges of the image and its colour next to the background colour; any band there is part of the screenshot',
   },
+  'squashed-text': {
+    defect: 'A word or title is broken across lines one or a few letters per line, in a column far narrower than its text.',
+    look: 'name each text block whose lines hold three letters or fewer, with how many letters wide its column is and how many lines it takes',
+  },
   layout: { defect: 'Elements are misaligned, squeezed, badly wrapped or stacked wrongly, a control is far too small or large for its place, or text is hard to read against its background.', look: 'describe how the main elements line up and space out' },
 };
 const NONE = 'Nothing like this is in the image.';
 const FLOOR = 0.7;
-// A cheap model sometimes answers six questions with the schema itself, so a malformed answer is asked once more.
+// A cheap model sometimes answers seven questions with the schema itself, so a malformed answer is asked once more.
 const ASK_ATTEMPTS = 2;
 const SCREEN = 'The image "screen" is an app\'s screen exactly as captured, edge to edge: everything in it, its edges included, is the app. Answer what you see and measure, not whether it looks intended. For a defect, name the element and where it is in personReason, for example "header avatar, top left".';
 const MOCK = ' The image "mock" is the approved design for that screen. Answer about the screen, and count a difference from the mock that a user would see as broken under its kind (a moved, missing or resized element is layout). A difference in live data such as names, numbers or times is not a defect, and neither is an element drawn the same shape as in the mock. A dialog, sheet, menu, popover or toast is approved only where the mock draws that same overlay in the same place: then it covers or cuts the app as in the mock and is no defect of its own; one the mock lacks, or draws elsewhere, is judged like any other element.';

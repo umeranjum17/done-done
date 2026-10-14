@@ -4907,3 +4907,91 @@ console.log(JSON.stringify({ type: 'text', part: { type: 'text', text: JSON.stri
   const branch = git('branch', '--list', 'done-done/*').trim();
   assert.deepEqual([git('rev-parse', 'HEAD'), git('status', '--porcelain'), git('diff', '--name-only', head, branch)], [head, '', 'src/app.js'], 'one fix on its own branch; the user branch and checkout are untouched');
 });
+
+const MATRIXED = `app: notes
+judge:
+  enabled: false
+evidence:
+  root: .proof
+  ignore_paths: ["docs/**"]
+matrix:
+  theme: [light, dark]
+  width: [390, 1280]
+journeys:
+  cells:
+    command: node make-cells.mjs
+`;
+// A stub journey proving the cell reached it: it refuses without its env, then runs `then`.
+const matrixed = (yaml, needs, then) => {
+  const t = setup(yaml);
+  writeFileSync(join(t.repo, 'make-cells.mjs'), `import { copyFileSync, mkdirSync } from 'node:fs';
+const root = process.env.DONE_DONE_EVIDENCE_ROOT;
+const { DONE_DONE_THEME: theme, DONE_DONE_WIDTH: width, DONE_DONE_FORM: form, DONE_DONE_CELL: cell } = process.env;
+if (${needs}) { console.error('missing cell env'); process.exit(1); }
+mkdirSync(root, { recursive: true });
+${then(t)}
+`);
+  t.sh('add', '-A'); t.sh('commit', '-qm', 'matrix journey');
+  return t;
+};
+// Captures its cell's own shot (distinct bytes per cell), refusing without the full cell env.
+const shot = (cells) => (t) => {
+  cells.forEach((s, i) => writeFileSync(join(t.dir, `${s}.png`), screen(i)));
+  return `copyFileSync(${JSON.stringify(t.dir)} + '/' + cell + '.png', root + '/home.' + cell + '.png');`;
+};
+
+test('a matrix run captures every cell with its env and suffix in the manifest', () => {
+  const t = matrixed(MATRIXED, "!theme || !width || form !== '' || !cell", shot(['light.390w', 'light.1280w', 'dark.390w', 'dark.1280w']));
+  const d = toon(t.dd('run', 'cells'));
+  assert.equal(d.result, 'pass');
+  assert.deepEqual(d.matrix.cells.map((c) => c.suffix).sort(), ['dark.1280w', 'dark.390w', 'light.1280w', 'light.390w']);
+  for (const c of d.matrix.cells) assert.equal(c.files.length, 1, `${c.cell} names its capture`);
+  assert.deepEqual(d.matrix.skipped, []);
+});
+
+test('a matrix skip drops the partial cell and records its reason', () => {
+  const yaml = MATRIXED.replace('  width: [390, 1280]\n', '').replace('journeys:', '  skip:\n    - theme: dark\n      reason: dark ships later\njourneys:');
+  const t = matrixed(yaml, "!theme || width !== '' || form !== '' || !cell", shot(['light']));
+  const d = toon(t.dd('run', 'cells'));
+  assert.deepEqual(d.matrix.cells.map((c) => c.cell), ['theme=light']);
+  assert.equal(d.matrix.cells[0].files.length, 1);
+  assert.deepEqual(d.matrix.skipped, [{ cell: 'theme=dark', reason: 'dark ships later' }]);
+});
+
+test('a matrix skip that drops every cell or matches no cell is refused when the config is read', () => {
+  const all = MATRIXED.replace('  width: [390, 1280]\n', '').replace('  theme: [light, dark]', '  theme: [dark]').replace('journeys:', '  skip:\n    - theme: dark\n      reason: ships later\njourneys:');
+  const unmatched = MATRIXED.replace('journeys:', '  skip:\n    - form: phone\n      reason: no form axis\njourneys:');
+  for (const [yaml, why] of [[all, 'every cell is skipped, so there is nothing to capture'], [unmatched, 'skip form=phone matches no cell'], [MATRIXED.replace('[light, dark]', '[light, dark.hc]'), 'dark.hc']]) {
+    const r = setup(yaml).dd('run', 'cells'); assert.equal(r.code, 2, r.out); assert.ok(r.out.includes(why), r.out);
+  }
+});
+
+test('the check fails naming a matrix cell with no capture', () => {
+  const t = matrixed(MATRIXED.replace('  width: [390, 1280]\n', '').replace('[light, dark]', '[light, dark, dark-hc]'), "!theme || width !== '' || !cell", (t) => `if (theme !== 'dark') copyFileSync(${JSON.stringify(t.dir)} + (theme === 'light' ? '/screen.png' : '/screen2.png'), root + '/home.' + theme + '.png');`);
+  const run = toon(t.dd('run', 'cells'));
+  const r = t.dd('check', '--outcome', 'home renders light', `.proof/${run.run_id}/home.light.png`, `.proof/${run.run_id}/home.dark-hc.png`);
+  assert.equal(r.code, 1, r.out);
+  assert.equal(toon(r).findings.length, 1, r.out);
+  assert.match(toon(r).findings[0].why, /cell theme=dark has no capture: name one file \*dark\*/);
+});
+
+test('without a matrix block a run carries no manifest and sets no cell env', () => {
+  const t = setup();
+  writeFileSync(join(t.repo, 'plain.mjs'), `import { copyFileSync, mkdirSync } from 'node:fs';\nif (['DONE_DONE_THEME', 'DONE_DONE_WIDTH', 'DONE_DONE_FORM', 'DONE_DONE_CELL'].some((k) => process.env[k] !== undefined)) process.exit(1);\nconst root = process.env.DONE_DONE_EVIDENCE_ROOT;\nmkdirSync(root, { recursive: true });\ncopyFileSync(${JSON.stringify(join(t.dir, 'screen.png'))}, root + '/plain.png');\n`);
+  appendFileSync(join(t.repo, '.done-done.yaml'), '  plain:\n    command: node plain.mjs\n');
+  t.sh('add', '-A'); t.sh('commit', '-qm', 'plain journey');
+  const r = t.dd('run', 'plain');
+  assert.equal(r.code, 0, r.out);
+  assert.equal(toon(r).matrix, undefined);
+});
+
+test('one verify run captures every matrix cell, and status shows the manifest', () => {
+  const t = matrixed(MATRIXED, "!theme || !width || form !== '' || !cell", shot(['light.390w', 'light.1280w', 'dark.390w', 'dark.1280w']));
+  const s = toon(t.dd('verify', 'cells', '--outcome', 'home renders in every cell', '--foreground'));
+  assert.equal(s.result, 'pass');
+  assert.equal(s.matrix.cells.length, 4);
+  assert.deepEqual(s.matrix.skipped, []);
+  assert.equal(toon(t.dd('status')).matrix.cells.length, 4);
+  const rec = JSON.parse(readFileSync(join(t.repo, '.proof', '.done-done', 'runs', `${s.run_id}.json`), 'utf8'));
+  assert.equal(rec.matrix.cells.length, 4, 'the run record keeps the manifest');
+});

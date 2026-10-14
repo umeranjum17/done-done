@@ -1512,7 +1512,7 @@ async function fixVerify(run: Run, cfg: Config, dir: string, first: VerifyPass, 
       }
     }
   };
-  return inWorktree(repo, wt, async (start) => {
+  const attempts = async (start: string) => {
     let base = start;
     const copied = carry();
     if (copied) return (h.set(fixStep, 'failed'), run.findings = open, { blocked: copied });
@@ -1568,6 +1568,13 @@ Answer with summary (what you changed, in one line) and blocker ("" when you fix
     }
     run.findings = open;
     return { blocked: `auto_fix.verify allows ${tries} ${tries === 1 ? 'attempt' : 'attempts'}, and the re-run still fails after them` };
+  };
+  return inWorktree(repo, wt, async (start) => {
+    try {
+      return await attempts(start);
+    } finally {
+      git(wt, 'clean', '-fdqX');
+    }
   }, record.commit);
 }
 

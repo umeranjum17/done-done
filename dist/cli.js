@@ -1538,7 +1538,7 @@ async function fixVerify(run, cfg, dir, first, tries, h, again) {
             }
         }
     };
-    return inWorktree(repo, wt, async (start) => {
+    const attempts = async (start) => {
         let base = start;
         const copied = carry();
         if (copied)
@@ -1602,6 +1602,14 @@ Answer with summary (what you changed, in one line) and blocker ("" when you fix
         }
         run.findings = open;
         return { blocked: `auto_fix.verify allows ${tries} ${tries === 1 ? 'attempt' : 'attempts'}, and the re-run still fails after them` };
+    };
+    return inWorktree(repo, wt, async (start) => {
+        try {
+            return await attempts(start);
+        }
+        finally {
+            git(wt, 'clean', '-fdqX');
+        }
     }, record.commit);
 }
 // EPERM: the pid is alive but not ours to signal. A pid reused by another process still reads as alive: the known limit of a pid check.

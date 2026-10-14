@@ -224,7 +224,7 @@ Files that are in no run record give an inconclusive result: nothing ties them t
 
 ### Judge relevance
 
-The checks above prove a screenshot is real, fresh and tied to a commit. They do not prove it shows the outcome. The judge adds that one question: is this capture the correct screen for the outcome, or the wrong one (another screen, an error, a dialog or keyboard hiding the content)?
+The checks above prove a capture is real, fresh and tied to a commit. They do not prove it shows the outcome. The judge adds that one question: is this capture the correct screen or text for the outcome, or the wrong one (another screen, an error, a dialog or keyboard hiding the content)?
 
 ```sh
 done-done init --judge claude --judge-model claude-haiku-5-5   # once: the judge you choose

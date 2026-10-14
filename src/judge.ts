@@ -12,7 +12,7 @@ import { downscaleToPng, type Verdict } from './media.js';
 // BYOKit decide backend on the user's own plan or key: the claude-code route, the answerer backend over another
 // agent's CLI, or a key route (the kit's openai backend on the user's API key).
 
-// before: the same screen on the base ref (base_ref), judged with it as one pair, never against the outcome alone.
+// before: the same capture on the base ref (base_ref), judged with it as one pair, never against the outcome alone.
 export type Capture = { name: string; bytes: Buffer; sha256: string; media: Verdict; before?: Capture };
 export type Judged = { path: string; sha256: string; verdict: 'pass' | 'fail' | 'unsure'; reason: string; cached: boolean; before?: string };
 

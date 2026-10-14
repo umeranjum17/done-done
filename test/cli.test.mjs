@@ -5194,7 +5194,8 @@ const CHROME = ['google-chrome', 'google-chrome-stable', 'chromium'].find((b) =>
 const measure = (body) => {
   const dir = mkdtempSync(join(tmpdir(), 'done-done-chrome-'));
   after(() => rmSync(dir, { recursive: true, force: true }));
-  const page = `<style>body{margin:0;font:16px sans-serif}</style>${body}<script>document.title = encodeURIComponent(JSON.stringify((${SQUASHED_TEXT})()))</script>`;
+  // The fixture has its own 390 px column: a fresh headless profile sometimes starts with a 0 px viewport.
+  const page = `<style>body{margin:0;font:16px sans-serif}</style><div style="width:390px">${body}</div><script>document.title = encodeURIComponent(JSON.stringify((${SQUASHED_TEXT})()))</script>`;
   const r = spawnSync(CHROME, ['--headless', '--no-sandbox', '--disable-gpu', `--user-data-dir=${dir}`, '--window-size=390,800', '--dump-dom', `data:text/html,${encodeURIComponent(page)}`], { encoding: 'utf8' });
   return JSON.parse(decodeURIComponent(r.stdout.match(/<title>(.*?)<\/title>/)?.[1] ?? 'null'));
 };

@@ -1265,6 +1265,15 @@ test('init takes the readiness port only from the dev script', () => {
   assert.doesNotMatch(body, /localhost:5432/, 'a database URL in the README is not the app port');
 });
 
+test('init gives a tty CLI no curl readiness check when its start script carries a port', () => {
+  const { repo, dd } = shapeRepo('cli', 'notes');
+  writeFileSync(join(repo, 'package.json'), JSON.stringify({ name: 'notes', bin: { notes: 'bin/cli.js' }, scripts: { start: 'node bin/cli.js daemon --port 9090' }, dependencies: { commander: '^12.0.0' } }));
+  assert.equal(dd('init').code, 2);
+  const body = readFileSync(join(repo, '.agents', 'skills', 'verify-notes', 'SKILL.md'), 'utf8');
+  assert.doesNotMatch(body, /localhost:9090/, 'a PTY harness gets no curl-on-localhost readiness check');
+  assert.match(body, /Ready when the launch command runs with no error \(exit 0, or a prompt waiting for input\)/, 'a PTY harness waits on the launch command itself');
+});
+
 test('init does not map README code samples as routes or commands', () => {
   const { repo, dd } = shapeRepo('cli', 'notes');
   writeFileSync(join(repo, 'README.md'), "# notes\n\n```js\napp.get('/docs-example');\nprogram.command('demo');\n```\n");

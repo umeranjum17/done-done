@@ -2325,7 +2325,7 @@ function detectApp(repo) {
                     : `No start script, bin or Makefile was found: read README.md and the entry file for how the app starts, and start it; ${RECORD}.`;
     const port = `${scripts.dev ?? ''} ${scripts.start ?? ''}`.match(/(?:localhost:|--port[= ])(\d{4,5})/)?.[1];
     const driver = browserTests ? 'browser' : cliish ? 'tty' : api ? 'curl' : web ? 'browser' : 'shell';
-    const ready = port
+    const ready = port && (driver === 'browser' || driver === 'curl')
         ? `\`curl -sS -o /dev/null http://localhost:${port}/\` exits 0. BASE below is http://localhost:${port}`
         : driver === 'browser' || driver === 'curl'
             ? `the launch output prints the app URL and \`curl -sS -o /dev/null <that URL>\` exits 0. BASE below is that URL; ${RECORD}`

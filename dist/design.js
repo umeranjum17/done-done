@@ -19,8 +19,8 @@ export const KINDS = {
         look: 'describe what runs along each of the four edges of the image and its colour next to the background colour; any band there is part of the screenshot',
     },
     'squashed-text': {
-        defect: 'A word or title is broken across lines one or a few letters per line, in a column far narrower than its text.',
-        look: 'name each text block whose lines hold three letters or fewer, with how many letters wide its column is and how many lines it takes',
+        defect: 'A text block is squashed: it renders narrower than about 8 characters while its text does not fit, or it is broken onto more lines than it has words, such as a title wrapped one letter per line in a narrow column.',
+        look: 'name each text block rendered narrower than about 8 characters while its text does not fit, or with more lines than words, with how many characters wide its column is and how many lines and words it takes',
     },
     layout: { defect: 'Elements are misaligned, squeezed, badly wrapped or stacked wrongly, a control is far too small or large for its place, or text is hard to read against its background.', look: 'describe how the main elements line up and space out' },
 };

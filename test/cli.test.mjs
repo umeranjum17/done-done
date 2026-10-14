@@ -1145,7 +1145,7 @@ test('init names one driver for a react and express app: the harness, the route 
   const [feat] = featureFiles(dir).filter((f) => f !== 'README.md');
   const body = readFileSync(join(dir, 'features', feat), 'utf8');
   assert.match(body, /^## Driving it with plain HTTP \(curl\)$/m, 'the feature names the harness driver');
-  assert.match(body, /^2\. Send it with `curl -sS -i -X GET "BASE\/api\/items"`/m, 'the route is driven with curl, not a browser');
+  assert.match(body, /^2\. Send it with `curl -sS -X GET -w '\\nstatus %{http_code}\\n' "BASE\/api\/items"`/m, 'the route is driven with curl, not a browser');
   assert.match(body, /^3\. Capture: save the output and exit status to \$DONE_DONE_EVIDENCE_ROOT\/\S+\.txt/m, 'the capture is text');
 });
 

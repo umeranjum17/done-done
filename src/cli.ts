@@ -2258,7 +2258,7 @@ function detectApp(repo: string): Detected {
   const found: { base: string; title: string; reach: string; drive: string }[] = [
     ...(driver === 'browser' || driver === 'curl' ? routes : []).map((r) => {
       const [method, path] = r.split(' ');
-      const drive = driver === 'curl' ? `send it with \`curl -sS -i -X ${method} "BASE${path}"\`, with the body its handler reads; ${params} (search the source for "${path}")`
+      const drive = driver === 'curl' ? `send it with \`curl -sS -X ${method} -w '\\nstatus %{http_code}\\n' "BASE${path}"\`, with the body its handler reads; ${params} (search the source for "${path}")`
         : method === 'GET' ? `${open.replace('BASE', `BASE${path}`)}; ${params}`
         : `find the form or button that sends ${r} (search the source for "${path}"), ${params}, then fill and submit it as a user does`;
       return { base: slug(r), title: r, reach: `the ${r} route`, drive };
@@ -2267,7 +2267,7 @@ function detectApp(repo: string): Detected {
   ];
   const fallback = {
     browser: { title: 'Main page', reach: 'BASE, the first page a user opens', drive: open },
-    curl: { title: 'Main request', reach: 'the first endpoint README.md shows a client calling', drive: `read README.md and the entry file for the first endpoint a client calls, then send it with \`curl -sS -i -X <METHOD> BASE<path>\`, with the body its handler reads; ${RECORD}` },
+    curl: { title: 'Main request', reach: 'the first endpoint README.md shows a client calling', drive: `read README.md and the entry file for the first endpoint a client calls, then send it with \`curl -sS -X <METHOD> -w '\\nstatus %{http_code}\\n' "BASE<path>"\`, with the body its handler reads; ${RECORD}` },
     tty: { title: 'Main command', reach: 'what README.md says a user runs first', drive: `read README.md for the first command a user runs, then run it with its arguments as a user does; ${RECORD}` },
     shell: { title: 'Main journey', reach: 'what README.md says a user runs first', drive: `read README.md and the entry file for what a user runs first, then run it in a shell as a user does; ${RECORD}` },
   }[driver];

@@ -2353,19 +2353,21 @@ function detectApp(repo) {
     const saved = (s) => `save the output and exit status to $DONE_DONE_EVIDENCE_ROOT/${s}.txt`;
     const open = 'open BASE in the browser, take a snapshot and act on the page by its visible labels';
     const params = 'replace each :param or ${...} in the path with a real value from the handler or seed data';
+    const spends = 'a route that charges money or calls a paid outside service must be declared under `spends:` and never sent without the user approval';
     const found = [
         ...(driver === 'browser' || driver === 'curl' ? routes : []).map((r) => {
             const [method, path] = r.split(' ');
-            const drive = driver === 'curl' ? `send it with \`curl -sS -X ${method} -w '\\nstatus %{http_code}\\n' "BASE${path}"\`, with the body its handler reads; ${params} (search the source for "${path}")`
+            const writes = method === 'GET' ? '' : `; ${spends}`;
+            const drive = driver === 'curl' ? `send it with \`curl -sS -X ${method} -w '\\nstatus %{http_code}\\n' "BASE${path}"\`, with the body its handler reads; ${params} (search the source for "${path}")${writes}`
                 : method === 'GET' ? `${open.replace('BASE', `BASE${path}`)}; ${params}`
-                    : `find the form or button that sends ${r} (search the source for "${path}"), ${params}, then fill and submit it as a user does`;
+                    : `find the form or button that sends ${r} (search the source for "${path}"), ${params}, then fill and submit it as a user does${writes}`;
             return { base: slug(r), title: r, reach: `the ${r} route`, drive };
         }),
         ...(driver === 'tty' ? commands : []).map((c) => ({ base: slug(c), title: `\`${c}\` command`, reach: `the CLI run with \`${c}\``, drive: `run ${runCli(`${c} --help`)} to learn its arguments, then ${runCli(`${c} <arguments>`)} as a user does` })),
     ];
     const fallback = {
         browser: { title: 'Main page', reach: 'BASE, the first page a user opens', drive: open },
-        curl: { title: 'Main request', reach: 'the first endpoint README.md shows a client calling', drive: `read README.md and the entry file for the first endpoint a client calls, then send it with \`curl -sS -X <METHOD> -w '\\nstatus %{http_code}\\n' "BASE<path>"\`, with the body its handler reads; ${RECORD}` },
+        curl: { title: 'Main request', reach: 'the first endpoint README.md shows a client calling', drive: `read README.md and the entry file for the first endpoint a client calls, then send it with \`curl -sS -X <METHOD> -w '\\nstatus %{http_code}\\n' "BASE<path>"\`, with the body its handler reads; ${spends}; ${RECORD}` },
         tty: { title: 'Main command', reach: 'what README.md says a user runs first', drive: `read README.md for the first command a user runs, then run it with its arguments as a user does; ${RECORD}` },
         shell: { title: 'Main journey', reach: 'what README.md says a user runs first', drive: `read README.md and the entry file for what a user runs first, then run it in a shell as a user does; ${RECORD}` },
     }[driver];

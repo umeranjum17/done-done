@@ -3,6 +3,7 @@ import { homedir } from 'node:os';
 import { basename, isAbsolute, join, resolve } from 'node:path';
 import { parse } from 'yaml';
 import { checkMatrix } from './matrix.js';
+import { parseDom } from './dom.js';
 export class UsageError extends Error {
     help;
     // The exact next command, when the error has one.
@@ -56,6 +57,7 @@ const KEYS = {
     journeys: { scope: 'repo', type: 'journeys' },
     instance: { scope: 'repo', type: 'instance' },
     matrix: { scope: 'repo', type: 'matrix' },
+    dom: { scope: 'repo', type: 'dom' },
     'evidence.root': { scope: 'repo', type: 'string' },
     'evidence.allow_dirty': { scope: 'repo', type: 'boolean' },
     'evidence.ignore_paths': { scope: 'repo', type: 'string[]' },
@@ -178,6 +180,14 @@ function apply(target, text, file, scope) {
             target[key] = { command: v.command, ready: has(r.url) ? { url: r.url } : { command: r.command }, ready_timeout: v.ready_timeout ?? '30s' };
             continue;
         }
+        if (key === 'dom') {
+            const d = parseDom(value);
+            if (typeof d === 'string')
+                throw new UsageError(`${file}: dom ${d}`);
+            target.from[key] = scope;
+            target.dom = d;
+            continue;
+        }
         if (!ok)
             throw new UsageError(`${file}: ${key} must be ${want[spec.type] ?? `a ${spec.type}`}${key === 'matrix' ? `: ${checkMatrix(value)}` : ''}`);
         if (key === 'checks.not_proven' && value !== 'inconclusive' && value !== 'allow')
@@ -238,6 +248,7 @@ function defaultConfig(repo) {
         journeys: {},
         instance: null,
         matrix: null,
+        dom: null,
         evidence: { local_root: join(home(), 'evidence'), root: '', allow_dirty: false, ignore_paths: [] },
         secrets: { patterns: {}, allow: [] },
         checks: { not_proven: 'inconclusive', fix_title: '^(fix|bugfix|hotfix)\\b' },

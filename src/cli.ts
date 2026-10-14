@@ -10,7 +10,7 @@ import { parseArgs } from 'node:util';
 import { encode } from '@toon-format/toon';
 import { Document, parseDocument } from 'yaml';
 import { ACPX_INSTALL, agentChoices, agentPath, agentRun, askAgent, editOnlyReason, findBin, JUDGES, modelFor, noAgent, noJudge, notStartable, routeOf, selectAgent, selectJudge, type AgentAnswer, type JudgeChoice } from './agents.js';
-import { AGENTS, CHEAP, type Config, globalConfigText, home, isAgent, loadConfig, parseDuration, UsageError } from './config.js';
+import { AGENTS, CHEAP, type Config, globalConfigText, home, inputPattern, isAgent, loadConfig, parseDuration, UsageError } from './config.js';
 import { backend, type Capture, judge, judgeable, type Judged, onPath, quote } from './judge.js';
 import { startInstance, stopInstance } from './instance.js';
 import { attemptProblem, changedSince, commitFix, dirtyTracked, FIX_SCHEMA, type Finding as MaintainFinding, inWorktree, maintainSteps, type MaintainResult, named, refuseSameSession, repoState, triage, type Triage } from './maintain.js';
@@ -928,7 +928,7 @@ type Run = {
   fix?: { branch?: string; commit: string; files?: string[]; attempts?: number; record?: string }; // a maintain or verify fix (auto_fix)
   inputs?: { head: string; journey: string; skill: string };
   // Primitive 17 (input guard): the watched inputs hashed before and after the drive.
-  guarded?: { before: GuardFile[]; after: GuardFile[] };
+  guarded?: { patterns: string[]; before: GuardFile[]; after: GuardFile[] };
   // What respond needs to write the receipt once the caller answers the gate, and the answer.
   gate?: { findings: GateFinding[]; cited: { path: string; sha256: string }[]; head: { commit: string; tree: string }; judge?: JudgeBlock };
   response?: { action: 'approve' | 'skip' | 'fix'; by: string; reason?: string; at: string };
@@ -1004,11 +1004,13 @@ type GuardFile = { path: string; sha256: string | null };
 
 // Every file the guard can see: tracked files plus untracked ones, git-ignored ones included.
 function guardCandidates(at: string): string[] {
+  let listed: string;
   try {
-    return [...new Set(execFileSync('git', ['ls-files', '-z', '--cached', '--others'],{ cwd: at, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).split('\0').filter(Boolean))].sort();
-  } catch {
-    return [];
+    listed = execFileSync('git', ['ls-files', '-z', '--cached', '--others'], { cwd: at, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+  } catch (e) {
+    throw new Error(`input guard: cannot list the repo files: ${(e as Error).message.split('\n')[0]}`);
   }
+  return [...new Set(listed.split('\0').filter(Boolean))].sort();
 }
 
 function guardSnapshot(at: string, patterns: string[]): GuardFile[] {
@@ -1016,7 +1018,7 @@ function guardSnapshot(at: string, patterns: string[]): GuardFile[] {
   const candidates = guardCandidates(at);
   const paths = new Set<string>();
   for (const raw of patterns) {
-    const p = raw.replace(/^(\.\/)+/, '').replace(/\/+$/, '');
+    const p = inputPattern(raw);
     if (/[*?{\[]/.test(p)) {
       for (const c of candidates) if (c === p || c.startsWith(`${p}/`) || matchesGlob(c, p)) paths.add(c);
     } else if (existsSync(join(at, p)) && statSync(join(at, p)).isDirectory()) {
@@ -1024,11 +1026,13 @@ function guardSnapshot(at: string, patterns: string[]): GuardFile[] {
     } else paths.add(p);
   }
   return [...paths].sort().map((path) => {
+    const full = join(at, path);
+    const st = statSync(full, { throwIfNoEntry: false });
+    if (!st?.isFile()) return { path, sha256: null };
     try {
-      if (!statSync(join(at, path)).isFile()) return { path, sha256: null };
-      return { path, sha256: sha256(readFileSync(join(at, path))) };
-    } catch {
-      return { path, sha256: null };
+      return { path, sha256: sha256(readFileSync(full)) };
+    } catch (e) {
+      throw new Error(`input guard: cannot read ${path}: ${(e as Error).message.split('\n')[0]}`);
     }
   });
 }
@@ -1197,16 +1201,15 @@ async function runSteps(dir: string): Promise<void> {
     const id = fix ? `${run.run_id}-${fix}` : run.run_id;
     const fail = (reason: string, fixable: Failure[] = [], result: 'fail' | 'inconclusive' = 'fail'): VerifyPass => ({ end: { result, reason: `drive: ${reason}` }, asks: [], fixable });
     const reusing = !fix && done('drive') && !!run.record;
+    begin('drive');
     const guardBefore = reusing ? [] : guardSnapshot(at, cfg.inputs);
     let rec: RunRecord;
     if (reusing) {
-      begin('drive');
       rec = JSON.parse(readFileSync(run.record!, 'utf8'));
       set(step!, 'completed');
     } else if (run.journey === null) {
       // The author agent drives the feature in its own process group, so a timeout, an abort or a dead runner stops it
       // and the app it launched; a drive that changed tracked files would prove code that is not committed.
-      begin('drive');
       const author = run.author!;
       rec = { ...openRun(at, cfg, null, null, id), author };
       const evidence = runDir(cfg, rec.run_id);
@@ -1251,7 +1254,6 @@ async function runSteps(dir: string): Promise<void> {
       // Only a blocker says the product stopped the drive; a lost or bad answer is the agent's own failure.
       if (why) return fail(why, a.ok && blocker && !changed ? [{ kind: 'drive', file: `features/${run.feature || picked || 'README'}.md`, what: why }] : []);
     } else {
-      begin('drive');
       rec = openRun(at, cfg, run.journey!, command!.replaceAll('${RUN_ID}', id), id);
       const logFile = join(dir, 'logs', `${fix}drive.log`);
       const fd = openSync(logFile, 'a');
@@ -1308,7 +1310,7 @@ async function runSteps(dir: string): Promise<void> {
       if (matrix && failed.length) return fail(`the journey command failed for cell ${failed.join('; ')}`);
       if (sealed.code !== PASS) return fail(sealed.reason, tries && /^the run command exited/.test(sealed.reason) ? [{ kind: 'drive', file: run.journey!, what: `the journey ${sealed.reason}; the end of its output:\n${readFileSync(logFile, 'utf8').slice(-2000)}` }] : []);
     }
-    if (!reusing && cfg.inputs.length) run.guarded = { before: guardBefore, after: guardSnapshot(at, cfg.inputs) };
+    if (!reusing && cfg.inputs.length) run.guarded = { patterns: cfg.inputs, before: guardBefore, after: guardSnapshot(at, cfg.inputs) };
 
     begin('check');
     const files = rec.files.map((f) => join(cfg.evidence.root, f.path));
@@ -1791,8 +1793,8 @@ async function cmdRerun(argv: string[]): Promise<number> {
   const srcCfg = loadConfig(src.repo);
   const inputs = inputsOf(src.repo, srcCfg, journey, drive?.author);
   const same = !!src.inputs && (['head', 'journey', 'skill'] as const).every((k) => src.inputs![k] === inputs[k]);
-  // A reused drive keeps the guard it ran under; a source that ran with no guard cannot vouch for newly watched inputs.
-  const driveReuse = same && drivesClean(src.record, src.inputs?.head) && (!srcCfg.inputs.length || !!src.guarded);
+  // A reused drive keeps the guard it ran under, so it is only reused when the watched inputs are the same ones.
+  const driveReuse = same && drivesClean(src.record, src.inputs?.head) && JSON.stringify(src.guarded?.patterns ?? []) === JSON.stringify(srcCfg.inputs);
   const reused = (name: string) => (name === 'resolve' && same) || (name === 'drive' && driveReuse);
   // A rerun judges as its source did; --no-judge turns it off for this run. A missing or forbidden judge is a usage
   // error here too.

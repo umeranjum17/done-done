@@ -5085,11 +5085,34 @@ test('a watched input the repo git-ignores is still guarded by its name', () => 
   assert.match(toon(e).reason, /input guard: data\/seed\.json: changed during the drive/);
 });
 
-test('an inputs path that leaves the worktree is refused at config time', () => {
-  const t = guarded(GUARDED.replace('inputs: ["data/**"]', 'inputs: ["../outside.txt"]'));
+test('an inputs path that leaves the worktree or names the repo root is refused at config time', () => {
+  for (const pattern of ['../outside.txt', './']) {
+    const t = guarded(GUARDED.replace('inputs: ["data/**"]', `inputs: ["${pattern}"]`));
+    const r = t.dd('verify', 'shots', '--outcome', 'home renders', '--foreground');
+    assert.notEqual(r.code, 0, r.out);
+    assert.match(r.out, /inputs must be a list of repo-relative paths or globs/, pattern);
+  }
+});
+
+test('a watched input that cannot be read fails the run naming it, never passes', { skip: process.getuid?.() === 0 }, () => {
+  const t = guarded();
+  chmodSync(join(t.repo, 'data', 'seed.json'), 0o000);
   const r = t.dd('verify', 'shots', '--outcome', 'home renders', '--foreground');
   assert.notEqual(r.code, 0, r.out);
-  assert.match(r.out, /inputs must be a list of repo-relative paths or globs/);
+  assert.match(r.out, /input guard: cannot read data\/seed\.json/);
+});
+
+test('a rerun whose watched inputs changed drives again instead of reusing the source guard', () => {
+  const t = guarded(`${GUARDED}  tamper:\n    command: node make-shots.mjs \${RUN_ID} && echo tampered >> fixtures/seed.json\n`);
+  mkdirSync(join(t.repo, 'fixtures'));
+  writeFileSync(join(t.repo, 'fixtures', 'seed.json'), 'seed\n');
+  t.sh('update-index', '--skip-worktree', '.done-done.yaml');
+  const a = t.dd('verify', 'tamper', '--outcome', 'home renders', '--foreground');
+  assert.equal(toon(a).result, 'pass', a.out);
+  writeFileSync(join(t.repo, '.done-done.yaml'), `${GUARDED.replace('inputs: ["data/**"]', 'inputs: ["data/**", "fixtures/seed.json"]')}  tamper:\n    command: node make-shots.mjs \${RUN_ID} && echo tampered >> fixtures/seed.json\n`);
+  const r = t.dd('rerun', '--run', toon(a).run_id);
+  assert.equal(r.code, 1, r.out);
+  assert.match(toon(r).reason, /input guard: fixtures\/seed\.json: changed during the drive/);
 });
 
 test('a non-ASCII untracked input is guarded by its real name', () => {

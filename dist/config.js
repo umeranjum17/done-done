@@ -99,6 +99,10 @@ function flatten(doc, file) {
     }
     return out;
 }
+// An input pattern in its canonical repo-relative form: no leading ./, no trailing /, and '' for the repo root.
+export function inputPattern(p) {
+    return p.replace(/^(\.\/)+/, '').replace(/\/+$/, '').replace(/^\.$/, '');
+}
 // A binary: a bare name looked up on PATH, or an absolute path (~ is the home folder).
 const isBin = (v) => typeof v === 'string' && (/^[\w.-]+$/.test(v) || isAbsolute(tilde(v)));
 const tilde = (p) => p.replace(/^~(?=\/|$)/, homedir());
@@ -122,7 +126,7 @@ function apply(target, text, file, scope) {
         const ok = spec.type === 'string' ? typeof value === 'string'
             : spec.type === 'boolean' ? typeof value === 'boolean'
                 : spec.type === 'string[]' ? Array.isArray(value) && value.every((v) => typeof v === 'string')
-                    : spec.type === 'inputs' ? Array.isArray(value) && value.every((v) => typeof v === 'string' && v !== '' && !isAbsolute(v) && !v.split('/').includes('..'))
+                    : spec.type === 'inputs' ? Array.isArray(value) && value.every((v) => typeof v === 'string' && inputPattern(v) !== '' && !isAbsolute(v) && !v.split('/').includes('..'))
                         : spec.type === 'agent' ? isAgent(value)
                             : spec.type === 'route' ? typeof value === 'string' && (value === 'claude-code' || Object.hasOwn(KEY_ROUTES, value) || ANSWERER_JUDGES.some((a) => value === `answerer:${a}`))
                                 : spec.type === 'claude_code' ? isMap(value) && Object.entries(value).every(([k, v]) => k === 'config_dir' && typeof v === 'string')

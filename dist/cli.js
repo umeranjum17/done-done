@@ -10,7 +10,7 @@ import { parseArgs } from 'node:util';
 import { encode } from '@toon-format/toon';
 import { Document, parseDocument } from 'yaml';
 import { ACPX_INSTALL, agentChoices, agentPath, agentRun, askAgent, editOnlyReason, findBin, JUDGES, modelFor, noAgent, noJudge, notStartable, routeOf, selectAgent, selectJudge } from './agents.js';
-import { AGENTS, CHEAP, globalConfigText, home, isAgent, loadConfig, parseDuration, UsageError } from './config.js';
+import { AGENTS, CHEAP, globalConfigText, home, inputPattern, isAgent, loadConfig, parseDuration, UsageError } from './config.js';
 import { backend, judge, judgeable, onPath, quote } from './judge.js';
 import { startInstance, stopInstance } from './instance.js';
 import { attemptProblem, changedSince, commitFix, dirtyTracked, FIX_SCHEMA, inWorktree, maintainSteps, named, refuseSameSession, repoState, triage } from './maintain.js';
@@ -982,12 +982,14 @@ function skillHash(repo, cfg) {
 }
 // Every file the guard can see: tracked files plus untracked ones, git-ignored ones included.
 function guardCandidates(at) {
+    let listed;
     try {
-        return [...new Set(execFileSync('git', ['ls-files', '-z', '--cached', '--others'], { cwd: at, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).split('\0').filter(Boolean))].sort();
+        listed = execFileSync('git', ['ls-files', '-z', '--cached', '--others'], { cwd: at, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
     }
-    catch {
-        return [];
+    catch (e) {
+        throw new Error(`input guard: cannot list the repo files: ${e.message.split('\n')[0]}`);
     }
+    return [...new Set(listed.split('\0').filter(Boolean))].sort();
 }
 function guardSnapshot(at, patterns) {
     if (!patterns.length)
@@ -995,7 +997,7 @@ function guardSnapshot(at, patterns) {
     const candidates = guardCandidates(at);
     const paths = new Set();
     for (const raw of patterns) {
-        const p = raw.replace(/^(\.\/)+/, '').replace(/\/+$/, '');
+        const p = inputPattern(raw);
         if (/[*?{\[]/.test(p)) {
             for (const c of candidates)
                 if (c === p || c.startsWith(`${p}/`) || matchesGlob(c, p))
@@ -1010,13 +1012,15 @@ function guardSnapshot(at, patterns) {
             paths.add(p);
     }
     return [...paths].sort().map((path) => {
-        try {
-            if (!statSync(join(at, path)).isFile())
-                return { path, sha256: null };
-            return { path, sha256: sha256(readFileSync(join(at, path))) };
-        }
-        catch {
+        const full = join(at, path);
+        const st = statSync(full, { throwIfNoEntry: false });
+        if (!st?.isFile())
             return { path, sha256: null };
+        try {
+            return { path, sha256: sha256(readFileSync(full)) };
+        }
+        catch (e) {
+            throw new Error(`input guard: cannot read ${path}: ${e.message.split('\n')[0]}`);
         }
     });
 }
@@ -1194,17 +1198,16 @@ async function runSteps(dir) {
             const id = fix ? `${run.run_id}-${fix}` : run.run_id;
             const fail = (reason, fixable = [], result = 'fail') => ({ end: { result, reason: `drive: ${reason}` }, asks: [], fixable });
             const reusing = !fix && done('drive') && !!run.record;
+            begin('drive');
             const guardBefore = reusing ? [] : guardSnapshot(at, cfg.inputs);
             let rec;
             if (reusing) {
-                begin('drive');
                 rec = JSON.parse(readFileSync(run.record, 'utf8'));
                 set(step, 'completed');
             }
             else if (run.journey === null) {
                 // The author agent drives the feature in its own process group, so a timeout, an abort or a dead runner stops it
                 // and the app it launched; a drive that changed tracked files would prove code that is not committed.
-                begin('drive');
                 const author = run.author;
                 rec = { ...openRun(at, cfg, null, null, id), author };
                 const evidence = runDir(cfg, rec.run_id);
@@ -1255,7 +1258,6 @@ async function runSteps(dir) {
                     return fail(why, a.ok && blocker && !changed ? [{ kind: 'drive', file: `features/${run.feature || picked || 'README'}.md`, what: why }] : []);
             }
             else {
-                begin('drive');
                 rec = openRun(at, cfg, run.journey, command.replaceAll('${RUN_ID}', id), id);
                 const logFile = join(dir, 'logs', `${fix}drive.log`);
                 const fd = openSync(logFile, 'a');
@@ -1324,7 +1326,7 @@ async function runSteps(dir) {
                     return fail(sealed.reason, tries && /^the run command exited/.test(sealed.reason) ? [{ kind: 'drive', file: run.journey, what: `the journey ${sealed.reason}; the end of its output:\n${readFileSync(logFile, 'utf8').slice(-2000)}` }] : []);
             }
             if (!reusing && cfg.inputs.length)
-                run.guarded = { before: guardBefore, after: guardSnapshot(at, cfg.inputs) };
+                run.guarded = { patterns: cfg.inputs, before: guardBefore, after: guardSnapshot(at, cfg.inputs) };
             begin('check');
             const files = rec.files.map((f) => join(cfg.evidence.root, f.path));
             // The input guard: the drive must leave the watched inputs alone. A difference fails the check step,
@@ -1856,8 +1858,8 @@ async function cmdRerun(argv) {
     const srcCfg = loadConfig(src.repo);
     const inputs = inputsOf(src.repo, srcCfg, journey, drive?.author);
     const same = !!src.inputs && ['head', 'journey', 'skill'].every((k) => src.inputs[k] === inputs[k]);
-    // A reused drive keeps the guard it ran under; a source that ran with no guard cannot vouch for newly watched inputs.
-    const driveReuse = same && drivesClean(src.record, src.inputs?.head) && (!srcCfg.inputs.length || !!src.guarded);
+    // A reused drive keeps the guard it ran under, so it is only reused when the watched inputs are the same ones.
+    const driveReuse = same && drivesClean(src.record, src.inputs?.head) && JSON.stringify(src.guarded?.patterns ?? []) === JSON.stringify(srcCfg.inputs);
     const reused = (name) => (name === 'resolve' && same) || (name === 'drive' && driveReuse);
     // A rerun judges as its source did; --no-judge turns it off for this run. A missing or forbidden judge is a usage
     // error here too.

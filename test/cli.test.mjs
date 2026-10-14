@@ -1633,7 +1633,7 @@ test('a failed verify drive whose output holds a secret names where and never pr
   t.sh('commit', '-qm', 'failing journey');
   const r = t.dd('verify', 'failer', '--outcome', 'home and settings render');
   assert.equal(r.code, 1, r.out);
-  assert.match(toon(r).reason, /drive: .*the run command exited 1; secrets: .*\/drive\.log:2: holds a secret \(key-value\)/);
+  assert.match(toon(r).reason, /^drive: secrets: .*\/drive\.log:2: holds a secret \(key-value\)/);
   assert.equal(r.out.includes(token.slice(-12)), false, 'the secret value is never printed');
 });
 
@@ -2075,7 +2075,7 @@ if (process.env.DRIVE === 'probe') {
   });
   appendFileSync(${JSON.stringify(join(s.bin, 'calls.jsonl'))}, JSON.stringify({ probe: probes }) + '\\n');
 }
-process.stdout.write(JSON.stringify({ type: 'result', is_error: false, structured_output: { feature: 'features/add-note.md', captures: process.env.DRIVE === 'log' ? ['note.png', 'session.log'] : ['note.png'], blocker: '' } }));
+process.stdout.write(JSON.stringify({ type: 'result', is_error: false, structured_output: { feature: 'features/add-note.md', captures: process.env.DRIVE === 'log' ? ['note.png', 'session.log'] : ['note.png'], blocker: process.env.DRIVE === 'blocker' ? process.env.BLOCKER : '' } }));
 `, { mode: 0o755 });
     return s;
   };
@@ -2198,6 +2198,12 @@ process.stdout.write(JSON.stringify({ type: 'result', is_error: false, structure
   assert.equal(wip.code, 1, wip.out);
   assert.match(wip.o.reason, /^drive: claude changed tracked files in the repo during the drive/);
   t.sh('checkout', '--', 'src/app.js', '.done-done.yaml');
+  const secret = 'API_' + 'TOKEN=' + 'f4ke0'.repeat(6);
+  const blocked = verify({ ...right.env, DRIVE: 'blocker', BLOCKER: `login rejected ${secret}` }, 'the note Umer added shows in the list');
+  assert.equal(blocked.code, 1, blocked.out);
+  assert.match(blocked.o.reason, /^drive: secrets: .*holds a secret \(key-value\)/);
+  const status = spawnSync(process.execPath, [CLI, 'status', '--run', blocked.o.run_id], { cwd: t.repo, env: right.env, encoding: 'utf8' });
+  assert.equal([blocked.out, status.stdout + status.stderr].some((o) => o.includes(secret)), false, 'the blocker secret is never printed');
   // Usage errors before any run: an unknown feature, a journey with --feature, no verify skill.
   assert.match(toon(verify(right.env, 'x', '--feature', 'nope')).error, /no feature nope in \.agents\/skills\/verify-notes\/features; it has: add-note/);
   rmSync(skill, { recursive: true });

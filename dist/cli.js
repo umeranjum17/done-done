@@ -1138,10 +1138,10 @@ async function runSteps(dir) {
             const scanRun = (files) => scanSecrets([...files, join(dir, 'logs'), join(dir, 'agents')], cfg.secrets);
             const secretWhy = (l) => `${shown(run.repo, l.file)}:${l.line}: holds a secret (${l.pattern}); remove it, or allow a known-safe match with secrets.allow in .done-done.yaml`;
             const evidenceFiles = () => rec.files.map((f) => join(cfg.evidence.root, f.path));
-            // Every failed drive is scanned too: a leak is named in the reason, and a leaking log excerpt never reaches the fix agent.
+            // Every failed drive is scanned too: a leak replaces the reason, so unscanned agent or instance text never echoes a secret, and a leaking log excerpt never reaches the fix agent.
             const failScanned = (reason, files, fixable = [], result = 'fail') => {
                 const leak = scanRun(files)[0];
-                return leak ? fail(`${reason}; secrets: ${secretWhy(leak)}`) : fail(reason, fixable, result);
+                return leak ? fail(`secrets: ${secretWhy(leak)}`) : fail(reason, fixable, result);
             };
             let rec;
             if (!fix && done('drive') && run.record) {

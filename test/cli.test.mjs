@@ -1637,6 +1637,31 @@ test('a failed verify drive whose output holds a secret names where and never pr
   assert.equal(r.out.includes(token.slice(-12)), false, 'the secret value is never printed');
 });
 
+test('auto_fix.verify never re-runs a spends journey: one approval buys one spend, and the reason says so', () => {
+  const t = setup(JUDGED.replace('journeys:', 'judge:\n  enabled: false\nauto_fix:\n  verify: 2\njourneys:'));
+  appendFileSync(join(t.repo, '.done-done.yaml'), '  paid:\n    command: echo spent >> ../spent.txt && node shot.mjs\n    spends: one live generation\n');
+  writeFileSync(join(t.repo, 'shot.mjs'), `import { copyFileSync, mkdirSync, readFileSync } from 'node:fs';\nif (readFileSync('src/app.js', 'utf8').includes('BUG')) process.exit(1);\nmkdirSync(process.env.DONE_DONE_EVIDENCE_ROOT, { recursive: true });\ncopyFileSync(${JSON.stringify(join(t.dir, 'screen.png'))}, process.env.DONE_DONE_EVIDENCE_ROOT + '/home.png');\n`);
+  writeFileSync(join(t.repo, 'src', 'app.js'), 'export const title = "BUG";\n');
+  t.sh('add', '-A');
+  t.sh('commit', '-qm', 'a spending journey and a broken title');
+  const e = pathEnv(t.env, []);
+  writeFileSync(join(e.PATH, 'opencode'), `#!${process.execPath}
+const { writeFileSync } = require('node:fs');
+writeFileSync('src/app.js', 'export const title = "Notes";\\n');
+console.log(JSON.stringify({ type: 'text', part: { type: 'text', text: JSON.stringify({ summary: 'fixed the title', blocker: '' }) } }));
+`, { mode: 0o755 });
+  mkdirSync(t.env.DONE_DONE_HOME, { recursive: true });
+  writeFileSync(join(t.env.DONE_DONE_HOME, 'config.yaml'), 'agent: opencode\nagent_config:\n  opencode: { model: opencode-go/author }\n');
+  const spent = join(t.dir, 'spent.txt');
+  const spends = () => (existsSync(spent) ? readFileSync(spent, 'utf8').split('\n').filter(Boolean).length : 0);
+  const parked = toon(t.dd('verify', 'paid', '--outcome', 'home and settings render'));
+  assert.equal(parked.status, 'awaiting_approval', JSON.stringify(parked));
+  const r = t.dd('respond', '--run', parked.run_id, '--action', 'approve', '--reason', 'Umer approved one generation');
+  assert.equal(r.code, 1, r.out);
+  assert.equal(spends(), 1, 'one approval buys one spend');
+  assert.match(toon(r).reason, /auto_fix\.verify does not re-run a spends journey/);
+});
+
 test('a journey that spends parks before it runs until the user approves; respond approve runs it', () => {
   const t = setup();
   const spent = join(t.dir, 'spent.txt');

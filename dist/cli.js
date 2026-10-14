@@ -1323,7 +1323,9 @@ async function runSteps(dir) {
         let fixed = false;
         // auto_fix.verify: the judge sorts the product failures first (an ask parks the run at the gate); then a checkout with
         // uncommitted tracked changes is never fixed, since the fix starts from the committed head.
-        if (tries && p.end && p.fixable.length) {
+        if (tries && p.end && p.fixable.length && journey?.spends)
+            p.end = { ...p.end, reason: `${p.end.reason}; auto_fix.verify does not re-run a spends journey` };
+        if (tries && p.end && p.fixable.length && !journey?.spends) {
             const sorted = await sortJudged(run, cfg, failures(p.fixable), join(dir, 'agents', 'triage.json'), h);
             if (typeof sorted === 'string')
                 return finish('blocked', `triage: ${sorted}`);

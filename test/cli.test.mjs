@@ -1667,6 +1667,8 @@ test('a journey that spends parks before it runs until the user approves; respon
   assert.deepEqual([toon(ok).result, toon(ok).spend.reason, spends()], ['pass', 'Umer approved one generation', 1]);
   const no = toon(t.dd('verify', 'paid', '--outcome', 'home and settings render'));
   assert.equal(no.status, 'awaiting_approval', 'every new run asks again');
+  const sg = JSON.parse(readFileSync(toon(t.dd('signoff')).file, 'utf8'));
+  assert.deepEqual([sg.title, sg.options.map((o) => o.value), sg.recommend_value], ['Spend one live generation on the notes paid run?', ['approve', 'skip'], 'approve'], 'its sign-off gate offers what respond takes');
   assert.equal(t.dd('respond', '--run', no.run_id, '--action', 'fix').code, 2, 'a spend gate takes approve or skip');
   const skip = t.dd('respond', '--run', no.run_id, '--action', 'skip', '--reason', 'Umer said no');
   assert.match(toon(skip).reason, /chose skip: the journey was not run, so nothing was spent/);
@@ -2028,6 +2030,16 @@ test('verify judges by default with the judge the user set: opencode judges a cl
     const text = readFileSync(join(runDir, 'agents', n), 'utf8');
     assert.doesNotMatch(text, /home and settings render|Answer the typed questions/, `${n} keeps no prompt text`);
   }
+  // The sign-off message is evidence (contract v1, section 6), key for key; its media resolve inside its own folder.
+  const sent = t.dd('signoff', '--run', o.run_id);
+  assert.equal(sent.code, 0, sent.out);
+  const evFile = join(t.repo, toon(sent).file);
+  assert.equal(toon(sent).help[0], `Post it to the sign-off board (done-done never posts): npx -y sign-off-axi post --kind evidence --from ${toon(sent).file}`);
+  assert.deepEqual(JSON.parse(readFileSync(evFile, 'utf8')), {
+    contract: 1, kind: 'evidence', schema: 1, key: `dd-evidence-${o.run_id}`, filer: 'done-done', title: 'notes shots: verify pass', about: 'home and settings render', media: ['home.png', 'settings.png'],
+    run: { run_id: o.run_id, commit: t.head(), outcome: 'home and settings render', repro: 'n/a', proof: `no verify skill: done-done verify shots, run ${o.run_id}: pass`, evidence: 'home.png, settings.png' },
+  });
+  assert.equal(dirname(evFile), join(t.repo, '.proof', o.run_id), 'the message sits in the run folder its media resolve from');
   const v = t.dd('receipt', '--verify', t.head());
   assert.equal(v.code, 0, v.out);
   assert.deepEqual([toon(v).schema, toon(v).judge.route, toon(v).judge.verdicts.map((x) => x.verdict)], [2, 'answerer:opencode', ['pass', 'pass']]);
@@ -2041,6 +2053,14 @@ test('verify judges by default with the judge the user set: opencode judges a cl
   assert.deepEqual([b.findings.length, b.findings[0].id, b.findings[0].severity, b.findings[0].action], [2, 'gate-1', 'error', 'ask-user']);
   assert.match(b.findings[0].what, /judge says wrong screen/);
   assert.ok(b.help.some((h) => h.includes(`done-done respond --run ${b.run_id} --action approve --reason`)), bad.out);
+  // Parked at its gate, the run's sign-off message is a gate that recommends fix, since the judge failed a capture.
+  const gated = t.dd('signoff');
+  assert.equal(gated.code, 0, gated.out);
+  assert.deepEqual(JSON.parse(readFileSync(toon(gated).file, 'utf8')), {
+    contract: 1, kind: 'gate', schema: 1, key: `dd-gate-${b.run_id}`, filer: 'done-done', title: 'Move the notes shots run on past its judge?',
+    about: 'home.png: judge says wrong screen: The list shows the notes. (and 1 more)', run: { run_id: b.run_id, commit: t.head() },
+    options: [{ value: 'approve', label: 'Approve' }, { value: 'skip', label: 'Skip the judge' }, { value: 'fix', label: 'Fix first' }], recommend_value: 'fix', close: 'done',
+  });
   // An approve needs a reason; with one, the run ends overridden (exit 1, never pass) and the receipt says who and why.
   const noReason = t.dd('respond', '--run', b.run_id, '--action', 'approve');
   assert.equal(noReason.code, 2, noReason.out);
@@ -2262,6 +2282,18 @@ process.stdout.write(JSON.stringify({ type: 'result', is_error: false, structure
   const none = verify(right.env, 'x');
   assert.equal(none.code, 2, none.out);
   assert.match(toon(none).error, /needs a journey or a verify skill/);
+});
+
+test('signoff refuses a value past the contract limit and writes no file, and refuses a run with no message to send', () => {
+  const t = setup();
+  const long = t.dd('verify', 'shots', '--outcome', 'x'.repeat(501), '--foreground');
+  assert.equal(long.code, 0, long.out);
+  const r = t.dd('signoff');
+  assert.equal(r.code, 2, r.out);
+  assert.match(toon(r).error, /cannot make a valid sign-off message, so no file was written: about \(the outcome\) is 501 characters, and the contract takes 1-500$/);
+  assert.equal(existsSync(join(t.repo, '.proof', toon(long).run_id, 'signoff-evidence.json')), false);
+  const m = t.dd('signoff', '--run', 'nope');
+  assert.equal(m.code, 2, m.out);
 });
 
 test('a rerun refused by the judge preflight exits 2 and creates no run folder', () => {

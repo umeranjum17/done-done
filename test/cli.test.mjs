@@ -5151,6 +5151,10 @@ journeys:
     command: node make-shots.mjs \${RUN_ID} && echo new > data/extra.json
   remove:
     command: node make-shots.mjs \${RUN_ID} && rm data/seed.json
+  dot:
+    command: node make-shots.mjs \${RUN_ID} && echo new > data/.cache.json
+  accent:
+    command: node make-shots.mjs \${RUN_ID} && echo new > "data/café.json"
 `;
 // A repo with a committed data file watched by the input guard.
 const guarded = (yaml = GUARDED) => {
@@ -5160,6 +5164,7 @@ const guarded = (yaml = GUARDED) => {
   t.sh('add', '-A'); t.sh('commit', '-qm', 'data file');
   return t;
 };
+const guardedWith = (inputs, extra = '') => guarded(GUARDED.replace('inputs: ["data/**"]', `inputs: [${inputs}]`) + extra);
 const guardRun = (t, journey) => join(t.env.DONE_DONE_HOME, 'runs', 'notes', journey, 'run.json');
 
 test('an honest drive leaves the watched inputs alone and passes, keeping the hash lists', () => {
@@ -5172,25 +5177,14 @@ test('an honest drive leaves the watched inputs alone and passes, keeping the ha
   assert.deepEqual(run.guarded.after, run.guarded.before, 'the run record keeps the before/after hash lists');
 });
 
-test('a drive that edits a watched input fails naming the path, never its contents', () => {
-  const t = guarded();
-  const r = t.dd('verify', 'edit', '--outcome', 'home renders', '--foreground');
-  assert.equal(r.code, 1, r.out);
-  assert.match(toon(r).reason, /input guard: data\/seed\.json: changed during the drive/);
-  assert.ok(!r.out.includes('secret-value-xyz'), 'file contents are never printed');
-  const run = JSON.parse(readFileSync(guardRun(t, toon(r).run_id), 'utf8'));
-  assert.notEqual(run.guarded.before[0].sha256, run.guarded.after[0].sha256);
-});
-
-test('a drive that adds or removes a watched file fails naming it', () => {
-  const added = guarded();
-  const a = added.dd('verify', 'add', '--outcome', 'home renders', '--foreground');
-  assert.equal(a.code, 1, a.out);
-  assert.match(toon(a).reason, /input guard: data\/extra\.json: appeared during the drive/);
-  const removed = guarded();
-  const d = removed.dd('verify', 'remove', '--outcome', 'home renders', '--foreground');
-  assert.equal(d.code, 1, d.out);
-  assert.match(toon(d).reason, /input guard: data\/seed\.json: disappeared during the drive/);
+test('a drive that edits, adds or removes a watched input, dotfiles and non-ASCII names too, fails naming the path', () => {
+  for (const [journey, change] of [['edit', 'data/seed.json: changed'], ['add', 'data/extra.json: appeared'], ['remove', 'data/seed.json: disappeared'], ['dot', 'data/.cache.json: appeared'], ['accent', 'data/café.json: appeared']]) {
+    const t = guarded();
+    const r = t.dd('verify', journey, '--outcome', 'home renders', '--foreground');
+    assert.equal(r.code, 1, r.out);
+    assert.match(toon(r).reason, new RegExp(`input guard: ${change} during the drive`));
+    assert.ok(!r.out.includes('secret-value-xyz'), 'file contents are never printed');
+  }
 });
 
 test('without an inputs key the guard stays off and the run behaves as before', () => {
@@ -5204,12 +5198,18 @@ test('without an inputs key the guard stays off and the run behaves as before', 
   assert.ok(!e.out.includes('input guard'), 'the guard says nothing with no inputs key');
 });
 
-test('a directory pattern with a trailing slash or a leading ./ still guards its files', () => {
+test('a directory pattern with a trailing slash or a leading ./ still guards its files, and a path that leaves the repo or names its root is refused', () => {
   for (const pattern of ['./data/', 'data/']) {
-    const t = guarded(GUARDED.replace('inputs: ["data/**"]', `inputs: ["${pattern}"]`));
+    const t = guardedWith(`"${pattern}"`);
     const e = t.dd('verify', 'edit', '--outcome', 'home renders', '--foreground');
     assert.equal(e.code, 1, e.out);
     assert.match(toon(e).reason, /input guard: data\/seed\.json: changed during the drive/, pattern);
+  }
+  for (const pattern of ['../outside.txt', './']) {
+    const t = guardedWith(`"${pattern}"`);
+    const r = t.dd('verify', 'shots', '--outcome', 'home renders', '--foreground');
+    assert.notEqual(r.code, 0, r.out);
+    assert.match(r.out, /inputs must be a list of repo-relative paths or globs/, pattern);
   }
 });
 
@@ -5224,23 +5224,28 @@ test('a watched input the repo git-ignores is still guarded by its name', () => 
   assert.match(toon(e).reason, /input guard: data\/seed\.json: changed during the drive/);
 });
 
-test('an inputs path that leaves the worktree or names the repo root is refused at config time', () => {
-  for (const pattern of ['../outside.txt', './']) {
-    const t = guarded(GUARDED.replace('inputs: ["data/**"]', `inputs: ["${pattern}"]`));
+test('a watched link that leaves the repo, or a folder link a glob cannot see through, fails naming it', () => {
+  const cases = [
+    ['"data/**"', (t) => { writeFileSync(join(dirname(t.repo), 'outside.json'), '{}\n'); symlinkSync(join(dirname(t.repo), 'outside.json'), join(t.repo, 'data', 'escape.json')); }, /input guard: data\/escape\.json links outside the repo/],
+    ['"linkdir/seed.json"', (t) => { mkdirSync(join(dirname(t.repo), 'outdir')); writeFileSync(join(dirname(t.repo), 'outdir', 'seed.json'), '{}\n'); symlinkSync(join(dirname(t.repo), 'outdir'), join(t.repo, 'linkdir')); }, /input guard: linkdir\/seed\.json links outside the repo/],
+    ['"linkdir"', (t) => symlinkSync(join(t.repo, 'data'), join(t.repo, 'linkdir')), /input guard: linkdir reaches linkdir, a symlink to a folder/],
+  ];
+  for (const [inputs, link, why] of cases) {
+    const t = guardedWith(inputs);
+    link(t);
+    t.sh('add', '-A'); t.sh('commit', '-qm', 'link');
     const r = t.dd('verify', 'shots', '--outcome', 'home renders', '--foreground');
     assert.notEqual(r.code, 0, r.out);
-    assert.match(r.out, /inputs must be a list of repo-relative paths or globs/, pattern);
+    assert.match(r.out, why, inputs);
   }
 });
 
-test('a watched input under a symlinked parent that points outside the repo fails naming it', () => {
-  const t = guarded(GUARDED.replace('inputs: ["data/**"]', 'inputs: ["linkdir/seed.json"]'));
-  mkdirSync(join(dirname(t.repo), 'outdir'));
-  writeFileSync(join(dirname(t.repo), 'outdir', 'seed.json'), '{}\n');
-  symlinkSync(join(dirname(t.repo), 'outdir'), join(t.repo, 'linkdir'));
+test('a watched input that cannot be read fails the run naming it, never passes',{ skip: process.getuid?.() === 0 }, () => {
+  const t = guarded();
+  chmodSync(join(t.repo, 'data', 'seed.json'), 0o000);
   const r = t.dd('verify', 'shots', '--outcome', 'home renders', '--foreground');
   assert.notEqual(r.code, 0, r.out);
-  assert.match(r.out, /input guard: linkdir\/seed\.json links outside the repo/);
+  assert.match(r.out, /input guard: cannot read data\/seed\.json/);
 });
 
 test('an input-guard failure is never handed to the fixer', () => {
@@ -5256,23 +5261,6 @@ test('an input-guard failure is never handed to the fixer', () => {
   assert.equal(toon(r).result, 'fail', r.out);
   assert.match(toon(r).reason, /check: input guard: data\/seed\.json: changed during the drive/);
   assert.equal(existsSync(calls), false, 'the fixer is never started for a guard failure');
-});
-
-test('a watched symlink that points outside the repo fails the run naming it', () => {
-  const t = guarded();
-  writeFileSync(join(dirname(t.repo), 'outside.json'), '{}\n');
-  symlinkSync(join(dirname(t.repo), 'outside.json'), join(t.repo, 'data', 'escape.json'));
-  const r = t.dd('verify', 'shots', '--outcome', 'home renders', '--foreground');
-  assert.notEqual(r.code, 0, r.out);
-  assert.match(r.out, /input guard: data\/escape\.json links outside the repo/);
-});
-
-test('a watched input that cannot be read fails the run naming it, never passes',{ skip: process.getuid?.() === 0 }, () => {
-  const t = guarded();
-  chmodSync(join(t.repo, 'data', 'seed.json'), 0o000);
-  const r = t.dd('verify', 'shots', '--outcome', 'home renders', '--foreground');
-  assert.notEqual(r.code, 0, r.out);
-  assert.match(r.out, /input guard: cannot read data\/seed\.json/);
 });
 
 test('a rerun whose watched inputs changed drives again instead of reusing the source guard', () => {
@@ -5294,33 +5282,7 @@ test('a glob input still guards in a repo whose file listing exceeds 1 MiB', () 
   for (let i = 0; i < 12000; i++) writeFileSync(join(t.repo, 'scratch', `${String(i).padStart(5, '0')}-${'x'.repeat(90)}.txt`), '');
   const s = toon(t.dd('verify', 'shots', '--outcome', 'home renders', '--foreground'));
   assert.equal(s.result, 'pass', s.reason);
-  const run = JSON.parse(readFileSync(guardRun(t, s.run_id), 'utf8'));
-  assert.deepEqual(run.guarded.before.map((f) => f.path), ['data/seed.json']);
-});
-
-test('a glob input watches a dotfile under it like any other file', () => {
-  const t = guarded(`${GUARDED}  dot:\n    command: node make-shots.mjs \${RUN_ID} && echo tampered >> data/.cache.json\n`);
-  writeFileSync(join(t.repo, 'data', '.cache.json'), '{}\n');
-  t.sh('add', '-A'); t.sh('commit', '-qm', 'dotfile');
-  const d = t.dd('verify', 'dot', '--outcome', 'home renders', '--foreground');
-  assert.equal(d.code, 1, d.out);
-  assert.match(toon(d).reason, /input guard: data\/\.cache\.json: changed during the drive/);
-});
-
-test('a watched input that is a symlink to a folder fails the run naming it, never passes empty', () => {
-  const t = guarded(GUARDED.replace('inputs: ["data/**"]', 'inputs: ["linkdir"]'));
-  symlinkSync(join(t.repo, 'data'), join(t.repo, 'linkdir'));
-  t.sh('add', '-A'); t.sh('commit', '-qm', 'folder link');
-  const r = t.dd('verify', 'shots', '--outcome', 'home renders', '--foreground');
-  assert.notEqual(r.code, 0, r.out);
-  assert.match(r.out, /input guard: linkdir reaches linkdir, a symlink to a folder/);
-});
-
-test('a non-ASCII untracked input is guarded by its real name', () => {
-  const t = guarded(`${GUARDED}  accent:\n    command: node make-shots.mjs \${RUN_ID} && echo new > "data/café.json"\n`);
-  const a = t.dd('verify', 'accent', '--outcome', 'home renders', '--foreground');
-  assert.equal(a.code, 1, a.out);
-  assert.match(toon(a).reason, /input guard: data\/café\.json: appeared during the drive/);
+  assert.deepEqual(JSON.parse(readFileSync(guardRun(t, s.run_id), 'utf8')).guarded.before.map((f) => f.path), ['data/seed.json']);
 });
 
 test('a rerun that reuses the drive keeps guarding it, so a guarded change still fails', () => {

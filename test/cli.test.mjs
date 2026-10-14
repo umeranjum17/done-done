@@ -4968,7 +4968,7 @@ const domVerify = (dom, records, capture = shot(['light', 'dark'])) => {
 };
 
 test('a dom block passes when every capture has a clean page-check record', () => {
-  const { r, d } = domVerify('dom:\n', { light: CLEAN, dark: CLEAN });
+  const { r, d } = domVerify('dom:\n', { light: CLEAN, dark: { ...CLEAN, failed_requests: [{ url: 'http://127.0.0.1/moved.js', status: 304 }] } });
   assert.equal(d.result, 'pass', r.out);
 });
 

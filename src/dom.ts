@@ -48,6 +48,6 @@ export function domIssues(dom: Dom, capture: string): string[] {
   return [
     ...(dom.fail_on_overflow && r.overflow ? [`${r.url} overflows the viewport horizontally${r.overflowing?.length ? ` (${r.overflowing.join(', ')})` : ''}`] : []),
     ...r.console_errors.filter((m) => !allowed(dom.allow_console, m)).map((m) => `${r.url} console error: ${m}`),
-    ...r.failed_requests.filter((q) => !allowed(dom.allow_requests, q.url)).map((q) => `${r.url} request failed (${q.status || 'no response'}): ${q.url}`),
+    ...r.failed_requests.filter((q) => (q.status === 0 || q.status >= 400) && !allowed(dom.allow_requests, q.url)).map((q) => `${r.url} request failed (${q.status || 'no response'}): ${q.url}`),
   ];
 }

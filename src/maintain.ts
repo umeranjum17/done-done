@@ -29,7 +29,7 @@ type Harness<S> = {
 };
 // sources: the file:line a reader cited for each drift finding, by finding id, for the triage judge.
 type Pass = { result: MaintainResult; reason?: string; sources?: Map<string, Source> };
-type MaintainRun = { run_id: string; repo: string; findings?: Finding[]; git_status?: string; unverified?: string[]; fix?: { branch: string; commit: string; files: string[]; attempts: number } };
+type MaintainRun = { run_id: string; repo: string; findings?: Finding[]; git_status?: string; unverified?: string[]; fix?: { branch?: string; commit: string; files?: string[]; attempts?: number } };
 
 // Plan 1.5 shared rules: a per-run call cap and a per-call timeout (agent_timeout) stop runaway cost.
 const MAX_CALLS = 30;

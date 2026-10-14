@@ -1869,16 +1869,14 @@ async function cmdAbort(argv) {
     };
     if (gated && !createOnce(join(dir, 'respond.lock')))
         return answering();
-    const read = () => {
-        try {
-            return loadRun(dir);
-        }
-        catch (e) {
-            if (gated)
-                rmSync(join(dir, 'respond.lock'), { force: true });
-            throw e;
-        }
-    };
+    const read = () => { try {
+        return loadRun(dir);
+    }
+    catch (e) {
+        if (gated)
+            rmSync(join(dir, 'respond.lock'), { force: true });
+        throw e;
+    } };
     const current = read();
     if (gated && current.status !== 'awaiting_approval') {
         rmSync(join(dir, 'respond.lock'), { force: true });

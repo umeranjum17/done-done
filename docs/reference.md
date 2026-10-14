@@ -462,6 +462,7 @@ An `agent_config` entry merges with the defaults field by field, so `claude: { m
 | `app` | repo directory name |
 | `skill` | `.agents/skills/verify-<app>` |
 | `journeys.<name>.command` | none |
+| `journeys.<name>.spends` | none; what a run of the journey spends, so `verify` waits for the user approval, see [Journeys that spend](#journeys-that-spend) |
 | `secrets.patterns`, `secrets.allow` | `{}` and `[]`; extra `<name>: <regex>` secret shapes and known-safe regexes, see [Secrets in the evidence](#secrets-in-the-evidence) |
 | `journeys.<name>.timeout` | `30m`; a positive duration such as `90s` or `30m` (up to about 24 days), used by `verify` |
 | `instance` | none; the app under test started per run, see [Run-instance harness](#run-instance-harness) |

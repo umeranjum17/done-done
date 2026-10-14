@@ -5215,8 +5215,7 @@ test('a directory pattern with a trailing slash or a leading ./ still guards its
 
 test('a watched input the repo git-ignores is still guarded by its name', () => {
   const t = setup(GUARDED);
-  mkdirSync(join(t.repo, 'data'), { recursive: true });
-  writeFileSync(join(t.repo, 'data', 'seed.json'), '{"token":"secret-value-xyz"}\n');
+  mkdirSync(join(t.repo, 'data'), { recursive: true }); writeFileSync(join(t.repo, 'data', 'seed.json'), '{"token":"secret-value-xyz"}\n');
   writeFileSync(join(t.repo, '.gitignore'), 'data/\n');
   t.sh('add', '-A'); t.sh('commit', '-qm', 'ignored data');
   const e = t.dd('verify', 'edit', '--outcome', 'home renders', '--foreground');
@@ -5265,8 +5264,7 @@ test('an input-guard failure is never handed to the fixer', () => {
 
 test('a rerun whose watched inputs changed drives again instead of reusing the source guard', () => {
   const t = guarded(`${GUARDED}  tamper:\n    command: node make-shots.mjs \${RUN_ID} && echo tampered >> fixtures/seed.json\n`);
-  mkdirSync(join(t.repo, 'fixtures'));
-  writeFileSync(join(t.repo, 'fixtures', 'seed.json'), 'seed\n');
+  mkdirSync(join(t.repo, 'fixtures')); writeFileSync(join(t.repo, 'fixtures', 'seed.json'), 'seed\n');
   t.sh('update-index', '--skip-worktree', '.done-done.yaml');
   const a = t.dd('verify', 'tamper', '--outcome', 'home renders', '--foreground');
   assert.equal(toon(a).result, 'pass', a.out);
@@ -5278,8 +5276,7 @@ test('a rerun whose watched inputs changed drives again instead of reusing the s
 
 test('a glob input still guards in a repo whose file listing exceeds 1 MiB', () => {
   const t = guarded();
-  mkdirSync(join(t.repo, 'scratch'));
-  for (let i = 0; i < 12000; i++) writeFileSync(join(t.repo, 'scratch', `${String(i).padStart(5, '0')}-${'x'.repeat(90)}.txt`), '');
+  mkdirSync(join(t.repo, 'scratch')); for (let i = 0; i < 12000; i++) writeFileSync(join(t.repo, 'scratch', `${String(i).padStart(5, '0')}-${'x'.repeat(90)}.txt`), '');
   const s = toon(t.dd('verify', 'shots', '--outcome', 'home renders', '--foreground'));
   assert.equal(s.result, 'pass', s.reason);
   assert.deepEqual(JSON.parse(readFileSync(guardRun(t, s.run_id), 'utf8')).guarded.before.map((f) => f.path), ['data/seed.json']);

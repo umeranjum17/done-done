@@ -5048,3 +5048,44 @@ test('a dom block asks for a page-check record of a gif capture too', () => {
     'home.light.gif: no page-check record home.light.dom.json next to it (the dom block needs one per captured screen)',
   ]);
 });
+
+// base_ref: verify drives the base ref too, in a done-done worktree, and the judge sees each head capture with its base capture.
+test('base_ref pairs each cell with its base capture in one judge request, and reports a head capture with none', () => {
+  const t = matrixed(MATRIXED.replace('  width: [390, 1280]\n', '').replace('  enabled: false\n', ''), '!cell', (t) =>
+    `const page = readFileSync('page.txt', 'utf8').trim();\nif (existsSync(${JSON.stringify(t.dir)} + '/' + page + '.' + cell + '.png')) copyFileSync(${JSON.stringify(t.dir)} + '/' + page + '.' + cell + '.png', root + '/home.' + cell + '.png');`);
+  writeFileSync(join(t.repo, 'make-cells.mjs'), readFileSync(join(t.repo, 'make-cells.mjs'), 'utf8').replace('mkdirSync }', 'mkdirSync, existsSync, readFileSync }'));
+  ['old.light', 'old.dark', 'new.light', 'new.dark'].forEach((n, i) => writeFileSync(join(t.dir, `${n}.png`), screen(i * 11)));
+  writeFileSync(join(t.repo, 'page.txt'), 'old\n');
+  t.sh('add', '-A'); t.sh('commit', '-qm', 'old page');
+  const base = t.head();
+  writeFileSync(join(t.repo, 'page.txt'), 'new\n');
+  t.sh('commit', '-qam', 'new page');
+  const s = stubAgents(t.env, JSON.stringify({ relevance: { probabilities: CORRECT, rationale: 'The page is new.', personReason: 'The page is new.' } }));
+  writeFileSync(join(t.env.DONE_DONE_HOME, 'config.yaml'), 'agent: claude\njudge:\n  route: answerer:opencode\n');
+  symlinkSync(process.execPath, join(s.bin, 'node'));
+  const verify = () => {
+    const r = spawnSync(process.execPath, [CLI, 'verify', 'cells', '--outcome', 'home shows the new page', '--foreground'], { cwd: t.repo, env: s.env, encoding: 'utf8' });
+    return { code: r.status, out: r.stdout + r.stderr, run: toon({ out: r.stdout }) };
+  };
+  // Key off: each capture is judged alone and nothing is driven at a base ref.
+  const off = verify();
+  assert.equal(off.code, 0, off.out);
+  assert.deepEqual([s.calls().map((c) => c.attached.length), existsSync(join(t.repo, '.proof', off.run.run_id, 'before'))], [[1, 1], false]);
+  writeFileSync(join(t.repo, '.done-done.yaml'), `${readFileSync(join(t.repo, '.done-done.yaml'), 'utf8')}base_ref: ${base}\n`);
+  t.sh('commit', '-qam', 'compare with the old page');
+  const on = verify();
+  assert.equal(on.code, 0, on.out);
+  const calls = s.calls().slice(2);
+  assert.ok(calls.length === 2 && calls.every((c) => c.attached.join() === 'PNG,PNG' && c.file.includes('base ref')), 'one request per cell holds its before and after images');
+  const proof = join(t.repo, '.proof', on.run.run_id);
+  for (const cell of ['light', 'dark']) assert.deepEqual(readFileSync(join(proof, 'before', `home.${cell}.png`)), readFileSync(join(t.dir, `old.${cell}.png`)), `the ${cell} base capture is the base ref's page`);
+  const judged = decode(readFileSync(join(t.env.DONE_DONE_HOME, 'runs', 'notes', on.run.run_id, 'logs', 'judge.log'), 'utf8')).judged;
+  assert.deepEqual(judged.map((j) => [basename(j.path), j.before.replace(`${proof}/`, '')]).sort(), [['home.dark.png', 'before/home.dark.png'], ['home.light.png', 'before/home.light.png']], 'pairs by screen name and cell');
+  assert.equal(JSON.parse(readFileSync(join(t.repo, '.proof', '.done-done', 'runs', `${on.run.run_id}.json`), 'utf8')).base.commit, base);
+  assert.equal(t.sh('worktree', 'list').toString().trim().split('\n').length, 1, 'the base worktree is removed after the run');
+  // A head capture whose base capture is missing is reported, never passed silently.
+  rmSync(join(t.dir, 'old.dark.png'));
+  const gap = verify();
+  assert.equal(gap.code, 3, gap.out);
+  assert.match(gap.run.reason, /home\.dark\.png: no base capture to compare with: the drive at base_ref \w+ saved no before\/home\.dark\.png/);
+});

@@ -1,0 +1,9 @@
+# done-done project config. `done-done init` never overwrites this file.
+# The app name finds this repo's evidence and receipts from every checkout.
+app: "done-done"
+journeys:
+  e2e:
+    command: node journeys/e2e.mjs
+
+# This repo's coding agent, over agent in ~/.done-done/config.yaml (model, effort and the other agent settings stay there).
+# agent: opencode

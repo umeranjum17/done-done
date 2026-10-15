@@ -18,3 +18,18 @@ jobs:
       - run: npm ci
       - run: npm test
       - run: npm run build:skill -- --check
+  proof:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      # The merge gate: the repo proves itself with its own tool. The e2e
+      # journey drives the built CLI against a throwaway fixture repo
+      # (doctor, run, check, receipt), then verify checks that evidence
+      # and records the receipt for HEAD. --no-judge keeps it deterministic;
+      # --claim-id ci names the claim on CI's detached HEAD.
+      - run: node dist/cli.js verify e2e --foreground --no-judge --claim-id ci --outcome "the done-done CLI proves a fixture repo end to end"

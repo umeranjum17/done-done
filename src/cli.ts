@@ -96,6 +96,7 @@ const FLAGS: Record<string, string> = {
   '--outcome "<claim>"': 'the outcome the evidence files prove; the files follow as arguments',
   '--from <file | - | PR URL>': 'read the claim from the newest "## Checks" block of a file, stdin or a PR body',
   '--trusted-ref <ref>': 'read .done-done.yaml from this git ref instead of the working tree (use in CI)',
+  '--citation-base <dir>': 'resolve evidence citations against this directory (default: cwd); absolute citations stay unchanged; does not change repo, config or run storage',
   '--claim-id <id>': 'the claim the evidence proves; evidence already used for another claim id is reuse (default: the current branch, or the PR branch with --from <PR URL>; required on a detached HEAD)',
   '--judge': 'the judge the user set (judge.route, never the agent and model that did the work) says whether each PNG/JPEG capture shows the outcome (verify does this by default; check and receipt only with --judge or judge.enabled: true)',
   '--no-judge': 'skip the judge, only when the user chooses to (or judge.enabled: false in .done-done.yaml)',
@@ -155,19 +156,19 @@ const COMMANDS: Record<string, { usage: [string, string][]; flags: string[]; mor
   },
   check: {
     usage: [
-      ['done-done check --outcome "<claim>" <files...> [--claim-id <id>] [--trusted-ref <ref>] [--judge]', 'check evidence files against a claim'],
-      ['done-done check --from <file | - | PR URL> [--claim-id <id>] [--trusted-ref <ref>] [--judge]', "check a claim's Checks block"],
+      ['done-done check --outcome "<claim>" <files...> [--claim-id <id>] [--trusted-ref <ref>] [--citation-base <dir>] [--judge]', 'check evidence files against a claim'],
+      ['done-done check --from <file | - | PR URL> [--claim-id <id>] [--trusted-ref <ref>] [--citation-base <dir>] [--judge]', "check a claim's Checks block"],
     ],
-    flags: ['--outcome "<claim>"', '--from <file | - | PR URL>', '--claim-id <id>', '--trusted-ref <ref>', '--judge'],
+    flags: ['--outcome "<claim>"', '--from <file | - | PR URL>', '--claim-id <id>', '--trusted-ref <ref>', '--citation-base <dir>', '--judge'],
     more: [CHECKS_TEXT],
   },
   receipt: {
     usage: [
-      ['done-done receipt --outcome "<claim>" <files...> [--claim-id <id>] [--trusted-ref <ref>] [--judge]', 'record a passing check for HEAD'],
-      ['done-done receipt --from <file | - | PR URL> [--claim-id <id>] [--trusted-ref <ref>] [--judge]', "record from a claim's Checks block"],
+      ['done-done receipt --outcome "<claim>" <files...> [--claim-id <id>] [--trusted-ref <ref>] [--citation-base <dir>] [--judge]', 'record a passing check for HEAD'],
+      ['done-done receipt --from <file | - | PR URL> [--claim-id <id>] [--trusted-ref <ref>] [--citation-base <dir>] [--judge]', "record from a claim's Checks block"],
       ['done-done receipt --verify <head>', 'read-only: verify a recorded receipt'],
     ],
-    flags: ['--outcome "<claim>"', '--from <file | - | PR URL>', '--claim-id <id>', '--trusted-ref <ref>', '--judge', '--verify <head>'],
+    flags: ['--outcome "<claim>"', '--from <file | - | PR URL>', '--claim-id <id>', '--trusted-ref <ref>', '--citation-base <dir>', '--judge', '--verify <head>'],
     more: [CHECKS_TEXT],
   },
   verify: {
@@ -589,9 +590,10 @@ type CheckOutcome = {
 async function runCheck(argv: string[], run?: { dir: string; judge: boolean; judging: (code: number, findings: Finding[]) => void; author?: { agent: string; model: string }; repo: string; cfg: Config }): Promise<CheckOutcome> {
   const { values, positionals } = parseArgs({
     args: argv,
-    options: { outcome: { type: 'string' }, from: { type: 'string' }, 'claim-id': { type: 'string' }, 'trusted-ref': { type: 'string' }, judge: { type: 'boolean' } },
+    options: { outcome: { type: 'string' }, from: { type: 'string' }, 'claim-id': { type: 'string' }, 'trusted-ref': { type: 'string' }, 'citation-base': { type: 'string' }, judge: { type: 'boolean' } },
     allowPositionals: true,
   });
+  if (values['citation-base']?.trim() === '') throw new UsageError('--citation-base needs a non-empty directory');
   if (!!values.outcome === !!values.from) throw new UsageError('check needs exactly one of --outcome or --from');
   if (values.from && positionals.length) throw new UsageError('--from takes no file arguments; the Checks block names them');
   if (values['claim-id']?.trim() === '') throw new UsageError('--claim-id needs a non-empty id');
@@ -624,10 +626,10 @@ async function runCheck(argv: string[], run?: { dir: string; judge: boolean; jud
   if (claim?.notProven) {
     const allowed = cfg.checks.not_proven === 'allow' && cfg.trusted;
     const all = findings.concat(allowed ? [] : [{ level: 'inconclusive', why: `not proven: ${claim.notProven}` }]);
-    const rep = report(all, [], { cfg, repo, claim: claim.outcome, source: values.from, notProven: true }, allowed ? 'not proven (allowed by trusted config)' : '');
+    const rep = report(all, [], { cfg, repo, claim: claim.outcome, source: values.from, citationBase: values['citation-base'], notProven: true }, allowed ? 'not proven (allowed by trusted config)' : '');
     return { code: rep.code, result: rep.result, claim: claim?.outcome, files: [], cited: [], head: now, findings: all };
   }
-  const files = claim?.files ?? [];
+  const files = (claim?.files ?? []).map((name) => values['citation-base'] === undefined ? name : resolve(values['citation-base'], name));
   const records = loadRecords(cfg);
   const seen = new Map<string, string>();
   const hashes: string[] = [];
@@ -750,7 +752,7 @@ async function runCheck(argv: string[], run?: { dir: string; judge: boolean; jud
       judged.note = 'PNG and JPEG screens and text captures (logs, JSON, CLI output) are judged; video and other files are not';
     }
   }
-  const rep = report(findings, files, { cfg, repo, claim: claim?.outcome, source: values.from, judge: judged, judgeLevel });
+  const rep = report(findings, files, { cfg, repo, claim: claim?.outcome, source: values.from, citationBase: values['citation-base'], judge: judged, judgeLevel });
   if (rep.code === PASS) {
     mkdirSync(dirname(ledger), { recursive: true });
     appendFileSync(ledger, hashes.filter((h) => !used.get(h)?.has(claimId)).map((h) => `${h} ${claimId}\n`).join(''));
@@ -906,20 +908,21 @@ function staleness(repo: string, cfg: Config, from: string, to: string): string 
   return `evidence is for commit ${from.slice(0, 12)}, HEAD is ${to.slice(0, 12)}${outside.length ? ` (changed: ${outside.slice(0, 3).join(', ')}${outside.length > 3 ? ', ...' : ''})` : ''}`;
 }
 
-type ReportContext = { cfg: Config; repo: string; claim?: string; source?: string; notProven?: boolean; judge?: Record<string, unknown>; judgeLevel?: Finding['level'] };
+type ReportContext = { cfg: Config; repo: string; claim?: string; source?: string; citationBase?: string; notProven?: boolean; judge?: Record<string, unknown>; judgeLevel?: Finding['level'] };
 
 // Quote an argument only when a shell would split it.
 const arg = (a: string) => (/^[\w./@:+-]+$/.test(a) ? a : `'${a.replaceAll("'", `'\\''`)}'`);
 
-function checkHelp(code: number, files: string[], { cfg, repo, claim, source, notProven, judgeLevel }: ReportContext): string[] {
+function checkHelp(code: number, files: string[], { cfg, repo, claim, source, citationBase, notProven, judgeLevel }: ReportContext): string[] {
   if (notProven) return ['Capture real proof and replace "not proven:", or set checks.not_proven: allow and re-check from a trusted ref'];
   if (judgeLevel === 'fail' && code === FAIL) return [`Capture the screen the outcome describes, then re-run this check: ${captureHint(cfg)}`];
   if (judgeLevel && code === INCONCLUSIVE) return ['Look at the capture yourself, or capture a clearer screen of the outcome and re-run this check'];
   if (code === PASS) {
     // The CI gate needs a PR on a remote; without one, a receipt records the pass locally.
-    if (spawnSync('git', ['remote', 'get-url', 'origin'], { cwd: repo }).status === 0) return ['Gate CI on this proof: done-done check --from <PR URL> --trusted-ref origin/main'];
+    const citationArgs = citationBase === undefined ? '' : ` --citation-base ${arg(citationBase)}`;
+    if (spawnSync('git', ['remote', 'get-url', 'origin'], { cwd: repo }).status === 0) return [`Gate CI on this proof: done-done check --from <PR URL> --trusted-ref origin/main${citationArgs}`];
     const claimArgs = source ? ['--from', source] : ['--outcome', claim ?? '', ...files];
-    return [`Record this pass for HEAD: done-done receipt ${claimArgs.map(arg).join(' ')}`];
+    return [`Record this pass for HEAD: done-done receipt ${claimArgs.map(arg).join(' ')}${citationArgs}`];
   }
   const capture = captureHint(cfg);
   if (code === INCONCLUSIVE) return [`Capture this proof through a run so it is tied to a commit, then re-run this check: ${capture}`];

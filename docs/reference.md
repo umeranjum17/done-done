@@ -197,6 +197,8 @@ done-done check --from pr-body.md                 # a file, `-` for stdin, or a 
 
 `check` looks only at the files the claim names. It never scans the whole folder.
 
+`check` and `receipt` accept `--citation-base <dir>` for evidence paths supplied as arguments or in a Checks block, for example `done-done check --citation-base /path/to/captures --from pr-body.md`. Relative citations resolve against that directory; a relative base itself resolves against cwd. Absolute citations are unchanged. With the flag, the existing result `evidence` list contains resolved absolute paths. Without it, lookup and output keep their compatibility default (cwd-relative citations). The flag does not relocate `--from`, change the caller repository/HEAD or config (`--trusted-ref` still selects trusted config), or change `evidence.root`: that remains the run-record, receipt and reuse-ledger store. All provenance, freshness and judge rules still apply. Passing checks preserve an explicit `--citation-base` in their suggested receipt or remote CI gate command; run the follow-up from the same cwd when the base is relative.
+
 With `--from`, it reads the newest `## Checks` block:
 
 ```

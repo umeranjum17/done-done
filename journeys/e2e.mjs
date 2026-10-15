@@ -58,7 +58,7 @@ try {
   // Fixture repo: minimal app with its own journey, judge off (deterministic).
   writeFileSync(join(repo, '.done-done.yaml'), 'app: fixture\njudge:\n  enabled: false\njourneys:\n  shots:\n    command: node make-shots.mjs ${RUN_ID}\n');
   writeFileSync(join(repo, 'make-shots.mjs'),
-    `import { copyFileSync, mkdirSync } from 'node:fs';\nconst out = process.env.DONE_DONE_EVIDENCE_ROOT + '/' + process.argv[2];\nmkdirSync(out, { recursive: true });\ncopyFileSync(${JSON.stringify(join(tmp, 'screen.png'))}, out + '/home.png');\n`);
+    `import { copyFileSync } from 'node:fs';\ncopyFileSync(${JSON.stringify(join(tmp, 'screen.png'))}, process.env.DONE_DONE_EVIDENCE_ROOT + '/home.png');\n`);
   writeFileSync(join(tmp, 'screen.png'), png(3));
   writeFileSync(join(repo, 'src', 'app.js'), 'export const app = 1;\n');
   sh('init', '-q', '-b', 'main'); sh('add', '-A'); sh('commit', '-qm', 'init');

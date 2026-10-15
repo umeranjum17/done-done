@@ -120,7 +120,7 @@ done-done run --open      # prints a run id
 done-done run --close <run-id>
 ```
 
-You can also run a one-off command without a journey: `done-done run -- <command>`.
+You can also run a one-off command without a journey: `done-done run -- <command>`. One word is taken as that whole shell command; several words are kept as given, each one quoted as needed, so a word holding spaces or shell metacharacters reaches the command intact (write them as you would write them inside `sh -c`).
 A run whose command matches no repo-recorded journey says so in its `help`: the recipe is not in the repo, so nobody can re-run the proof from the config. Record it with `done-done init --journey <name> -- <command>` and commit.
 Run `done-done` outside wrappers that expand `${...}` themselves (`systemd-run` does): put such a wrapper inside the command, or it eats `${RUN_ID}`.
 

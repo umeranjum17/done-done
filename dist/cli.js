@@ -279,6 +279,10 @@ function captureHint(cfg) {
         return `done-done run <journey> (${names.join(', ')})`;
     return 'done-done run -- <capture command>';
 }
+// The words after --, as the one shell command string a run executes. One word is already a whole command,
+// so it stays verbatim (the documented `-- '<shell command>'` recipe); several words are argv, and each one
+// is quoted so spaces and shell metacharacters inside a word survive the shell that runs the string.
+const commandOf = (words) => (words.length === 1 ? words[0] : words.map(quote).join(' '));
 // A path as the user should see it: repo-relative inside the repo, else with the home directory as ~.
 const outside = (r) => r === '..' || r.startsWith(`..${sep}`) || isAbsolute(r);
 const shown = (repo, p) => {
@@ -419,7 +423,7 @@ async function cmdRun(argv) {
     const spends = journey ? cfg.journeys[journey]?.spends : undefined;
     if (spends)
         throw new UsageError(`journey ${journey} spends (${spends}), so run refuses it: nothing ran`, `Ask the user, then: done-done verify ${journey} --outcome "<what a user can now do>"`);
-    let command = dash < 0 ? null : argv.slice(dash + 1).join(' ');
+    let command = dash < 0 ? null : commandOf(argv.slice(dash + 1));
     if (journey && !command) {
         const j = cfg.journeys[journey];
         if (!j)
@@ -2963,8 +2967,8 @@ async function cmdInit(argv) {
     };
     if (journey !== null) {
         // Record the capture recipe in the repo so any checkout can re-run the proof.
-        // The command is stored verbatim; ${RUN_ID} in it becomes the run id, like a run -- command.
-        const command = parts.join(' ');
+        // The command is built once, the same way `run --` builds it, so the recipe re-runs exactly; ${RUN_ID} in it becomes the run id.
+        const command = commandOf(parts);
         const doc = existed ? parseDocument(readFileSync(file, 'utf8')) : new Document({ app: cfg.app });
         const top = (doc.toJS() ?? {});
         if (typeof top !== 'object' || Array.isArray(top))

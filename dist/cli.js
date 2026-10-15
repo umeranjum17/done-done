@@ -607,7 +607,7 @@ async function runCheck(argv, run) {
     if (claim?.notProven) {
         const allowed = cfg.checks.not_proven === 'allow' && cfg.trusted;
         const all = findings.concat(allowed ? [] : [{ level: 'inconclusive', why: `not proven: ${claim.notProven}` }]);
-        const rep = report(all, [], { cfg, repo, claim: claim.outcome, source: values.from, notProven: true }, allowed ? 'not proven (allowed by trusted config)' : '');
+        const rep = report(all, [], { cfg, repo, claim: claim.outcome, source: values.from, citationBase: values['citation-base'], notProven: true }, allowed ? 'not proven (allowed by trusted config)' : '');
         return { code: rep.code, result: rep.result, claim: claim?.outcome, files: [], cited: [], head: now, findings: all };
     }
     const files = (claim?.files ?? []).map((name) => values['citation-base'] === undefined ? name : resolve(values['citation-base'], name));
@@ -756,7 +756,7 @@ async function runCheck(argv, run) {
             judged.note = 'PNG and JPEG screens and text captures (logs, JSON, CLI output) are judged; video and other files are not';
         }
     }
-    const rep = report(findings, files, { cfg, repo, claim: claim?.outcome, source: values.from, judge: judged, judgeLevel });
+    const rep = report(findings, files, { cfg, repo, claim: claim?.outcome, source: values.from, citationBase: values['citation-base'], judge: judged, judgeLevel });
     if (rep.code === PASS) {
         mkdirSync(dirname(ledger), { recursive: true });
         appendFileSync(ledger, hashes.filter((h) => !used.get(h)?.has(claimId)).map((h) => `${h} ${claimId}\n`).join(''));
@@ -906,7 +906,7 @@ function staleness(repo, cfg, from, to) {
 }
 // Quote an argument only when a shell would split it.
 const arg = (a) => (/^[\w./@:+-]+$/.test(a) ? a : `'${a.replaceAll("'", `'\\''`)}'`);
-function checkHelp(code, files, { cfg, repo, claim, source, notProven, judgeLevel }) {
+function checkHelp(code, files, { cfg, repo, claim, source, citationBase, notProven, judgeLevel }) {
     if (notProven)
         return ['Capture real proof and replace "not proven:", or set checks.not_proven: allow and re-check from a trusted ref'];
     if (judgeLevel === 'fail' && code === FAIL)
@@ -915,10 +915,11 @@ function checkHelp(code, files, { cfg, repo, claim, source, notProven, judgeLeve
         return ['Look at the capture yourself, or capture a clearer screen of the outcome and re-run this check'];
     if (code === PASS) {
         // The CI gate needs a PR on a remote; without one, a receipt records the pass locally.
+        const citationArgs = citationBase === undefined ? '' : ` --citation-base ${arg(citationBase)}`;
         if (spawnSync('git', ['remote', 'get-url', 'origin'], { cwd: repo }).status === 0)
-            return ['Gate CI on this proof: done-done check --from <PR URL> --trusted-ref origin/main'];
+            return [`Gate CI on this proof: done-done check --from <PR URL> --trusted-ref origin/main${citationArgs}`];
         const claimArgs = source ? ['--from', source] : ['--outcome', claim ?? '', ...files];
-        return [`Record this pass for HEAD: done-done receipt ${claimArgs.map(arg).join(' ')}`];
+        return [`Record this pass for HEAD: done-done receipt ${claimArgs.map(arg).join(' ')}${citationArgs}`];
     }
     const capture = captureHint(cfg);
     if (code === INCONCLUSIVE)

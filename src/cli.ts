@@ -626,7 +626,7 @@ async function runCheck(argv: string[], run?: { dir: string; judge: boolean; jud
   if (claim?.notProven) {
     const allowed = cfg.checks.not_proven === 'allow' && cfg.trusted;
     const all = findings.concat(allowed ? [] : [{ level: 'inconclusive', why: `not proven: ${claim.notProven}` }]);
-    const rep = report(all, [], { cfg, repo, claim: claim.outcome, source: values.from, notProven: true }, allowed ? 'not proven (allowed by trusted config)' : '');
+    const rep = report(all, [], { cfg, repo, claim: claim.outcome, source: values.from, citationBase: values['citation-base'], notProven: true }, allowed ? 'not proven (allowed by trusted config)' : '');
     return { code: rep.code, result: rep.result, claim: claim?.outcome, files: [], cited: [], head: now, findings: all };
   }
   const files = (claim?.files ?? []).map((name) => values['citation-base'] === undefined ? name : resolve(values['citation-base'], name));
@@ -752,7 +752,7 @@ async function runCheck(argv: string[], run?: { dir: string; judge: boolean; jud
       judged.note = 'PNG and JPEG screens and text captures (logs, JSON, CLI output) are judged; video and other files are not';
     }
   }
-  const rep = report(findings, files, { cfg, repo, claim: claim?.outcome, source: values.from, judge: judged, judgeLevel });
+  const rep = report(findings, files, { cfg, repo, claim: claim?.outcome, source: values.from, citationBase: values['citation-base'], judge: judged, judgeLevel });
   if (rep.code === PASS) {
     mkdirSync(dirname(ledger), { recursive: true });
     appendFileSync(ledger, hashes.filter((h) => !used.get(h)?.has(claimId)).map((h) => `${h} ${claimId}\n`).join(''));
@@ -908,20 +908,21 @@ function staleness(repo: string, cfg: Config, from: string, to: string): string 
   return `evidence is for commit ${from.slice(0, 12)}, HEAD is ${to.slice(0, 12)}${outside.length ? ` (changed: ${outside.slice(0, 3).join(', ')}${outside.length > 3 ? ', ...' : ''})` : ''}`;
 }
 
-type ReportContext = { cfg: Config; repo: string; claim?: string; source?: string; notProven?: boolean; judge?: Record<string, unknown>; judgeLevel?: Finding['level'] };
+type ReportContext = { cfg: Config; repo: string; claim?: string; source?: string; citationBase?: string; notProven?: boolean; judge?: Record<string, unknown>; judgeLevel?: Finding['level'] };
 
 // Quote an argument only when a shell would split it.
 const arg = (a: string) => (/^[\w./@:+-]+$/.test(a) ? a : `'${a.replaceAll("'", `'\\''`)}'`);
 
-function checkHelp(code: number, files: string[], { cfg, repo, claim, source, notProven, judgeLevel }: ReportContext): string[] {
+function checkHelp(code: number, files: string[], { cfg, repo, claim, source, citationBase, notProven, judgeLevel }: ReportContext): string[] {
   if (notProven) return ['Capture real proof and replace "not proven:", or set checks.not_proven: allow and re-check from a trusted ref'];
   if (judgeLevel === 'fail' && code === FAIL) return [`Capture the screen the outcome describes, then re-run this check: ${captureHint(cfg)}`];
   if (judgeLevel && code === INCONCLUSIVE) return ['Look at the capture yourself, or capture a clearer screen of the outcome and re-run this check'];
   if (code === PASS) {
     // The CI gate needs a PR on a remote; without one, a receipt records the pass locally.
-    if (spawnSync('git', ['remote', 'get-url', 'origin'], { cwd: repo }).status === 0) return ['Gate CI on this proof: done-done check --from <PR URL> --trusted-ref origin/main'];
+    const citationArgs = citationBase === undefined ? '' : ` --citation-base ${arg(citationBase)}`;
+    if (spawnSync('git', ['remote', 'get-url', 'origin'], { cwd: repo }).status === 0) return [`Gate CI on this proof: done-done check --from <PR URL> --trusted-ref origin/main${citationArgs}`];
     const claimArgs = source ? ['--from', source] : ['--outcome', claim ?? '', ...files];
-    return [`Record this pass for HEAD: done-done receipt ${claimArgs.map(arg).join(' ')}`];
+    return [`Record this pass for HEAD: done-done receipt ${claimArgs.map(arg).join(' ')}${citationArgs}`];
   }
   const capture = captureHint(cfg);
   if (code === INCONCLUSIVE) return [`Capture this proof through a run so it is tied to a commit, then re-run this check: ${capture}`];

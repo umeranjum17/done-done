@@ -8,7 +8,7 @@ import { execFileSync, spawnSync } from 'node:child_process';
 import assert from 'node:assert/strict';
 import { copyFileSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { join } from 'node:path';
 import { deflateSync } from 'node:zlib';
 import { crc32 } from 'node:zlib';
 
@@ -75,11 +75,22 @@ try {
   const shot = join(home, 'evidence', 'fixture', runId, 'home.png');
   dd('check', '--outcome', 'fixture home renders', shot);
   // Relative citations select the explicit base, never a same-named cwd file.
-  const base = dirname(shot);
+  const base = join(tmp, "citation base's captures");
+  mkdirSync(base);
+  copyFileSync(shot, join(base, 'home.png'));
   writeFileSync(join(repo, 'home.png'), 'wrong same-named file\n');
   drive(1, 'check', '--outcome', 'fixture home renders', 'home.png');
   const selected = JSON.parse(dd('--json', 'check', '--citation-base', base, '--outcome', 'fixture home renders', 'home.png'));
-  assert.deepEqual(selected.evidence, [shot]);
+  assert.deepEqual(selected.evidence, [join(base, 'home.png')]);
+  const follow = (result, source) => {
+    const command = result.help[0].split(': ')[1]
+      .replace('done-done ', `${JSON.stringify(process.execPath)} ${JSON.stringify(CLI)} `)
+      .replace('<PR URL>', JSON.stringify(source));
+    const output = execFileSync('sh', ['-c', command], { cwd: repo, env, encoding: 'utf8' });
+    say(`$ ${command}\n${output}`);
+    return output;
+  };
+  follow(selected);
   dd('check', '--citation-base', repo, '--outcome', 'fixture home renders', shot);
   drive(1, 'check', '--judge', '--citation-base', base, '--outcome', 'fixture home renders', 'missing.png');
   writeFileSync(join(base, 'stray.log'), 'unrecorded output\n');
@@ -87,8 +98,15 @@ try {
   const body = join(tmp, 'checks.md');
   writeFileSync(body, '## Checks\noutcome: fixture home renders\nrepro: n/a: no bug\nproof: no verify skill - done-done run shots\nevidence: home.png\n');
   // Untracked counterfactual output must not change the caller's tracked identity.
-  dd('receipt', '--citation-base', base, '--from', body);
+  const from = JSON.parse(dd('--json', 'check', '--citation-base', base, '--from', body));
+  follow(from);
   dd('receipt', '--verify', head);
+  sh('remote', 'add', 'origin', 'https://example.com/fixture.git');
+  sh('update-ref', 'refs/remotes/origin/main', head);
+  for (const args of [['--from', body], ['--outcome', 'fixture home renders', 'home.png']]) {
+    const remote = JSON.parse(dd('--json', 'check', '--citation-base', base, ...args));
+    follow(remote, body);
+  }
 
   // Proof for the outer run: transcript plus the fixture's own capture.
   mkdirSync(OUT, { recursive: true });

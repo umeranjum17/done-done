@@ -69,7 +69,7 @@ try {
   const runOut = dd('run', 'shots');
   const runId = /run_id:\s*"?([^\s"]+)"?/.exec(runOut)?.[1];
   if (!runId) throw new Error('could not parse run_id from run output');
-  const shot = `${runId}/home.png`;
+  const shot = join(home, 'evidence', 'fixture', runId, 'home.png');
   dd('check', '--outcome', 'fixture home renders', shot);
   dd('receipt', '--outcome', 'fixture home renders', shot);
   dd('receipt', '--verify', head);
@@ -77,8 +77,7 @@ try {
   // Proof for the outer run: transcript plus the fixture's own capture.
   mkdirSync(OUT, { recursive: true });
   writeFileSync(join(OUT, `${RUN_ID}.log`), log.join('\n') + '\n');
-  const shotSrc = join(home, 'evidence', 'fixture', shot);
-  copyFileSync(shotSrc, join(OUT, `${RUN_ID}.home.png`));
+  copyFileSync(shot, join(OUT, `${RUN_ID}.home.png`));
   const names = readdirSync(OUT).sort();
   say(`evidence: ${names.join(', ')}`);
 } catch (err) {

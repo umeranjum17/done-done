@@ -92,6 +92,7 @@ const FLAGS = {
     '--outcome "<claim>"': 'the outcome the evidence files prove; the files follow as arguments',
     '--from <file | - | PR URL>': 'read the claim from the newest "## Checks" block of a file, stdin or a PR body',
     '--trusted-ref <ref>': 'read .done-done.yaml from this git ref instead of the working tree (use in CI)',
+    '--citation-base <dir>': 'resolve evidence citations against this directory (default: cwd); absolute citations stay unchanged; does not change repo, config or run storage',
     '--claim-id <id>': 'the claim the evidence proves; evidence already used for another claim id is reuse (default: the current branch, or the PR branch with --from <PR URL>; required on a detached HEAD)',
     '--judge': 'the judge the user set (judge.route, never the agent and model that did the work) says whether each PNG/JPEG capture shows the outcome (verify does this by default; check and receipt only with --judge or judge.enabled: true)',
     '--no-judge': 'skip the judge, only when the user chooses to (or judge.enabled: false in .done-done.yaml)',
@@ -151,19 +152,19 @@ const COMMANDS = {
     },
     check: {
         usage: [
-            ['done-done check --outcome "<claim>" <files...> [--claim-id <id>] [--trusted-ref <ref>] [--judge]', 'check evidence files against a claim'],
-            ['done-done check --from <file | - | PR URL> [--claim-id <id>] [--trusted-ref <ref>] [--judge]', "check a claim's Checks block"],
+            ['done-done check --outcome "<claim>" <files...> [--claim-id <id>] [--trusted-ref <ref>] [--citation-base <dir>] [--judge]', 'check evidence files against a claim'],
+            ['done-done check --from <file | - | PR URL> [--claim-id <id>] [--trusted-ref <ref>] [--citation-base <dir>] [--judge]', "check a claim's Checks block"],
         ],
-        flags: ['--outcome "<claim>"', '--from <file | - | PR URL>', '--claim-id <id>', '--trusted-ref <ref>', '--judge'],
+        flags: ['--outcome "<claim>"', '--from <file | - | PR URL>', '--claim-id <id>', '--trusted-ref <ref>', '--citation-base <dir>', '--judge'],
         more: [CHECKS_TEXT],
     },
     receipt: {
         usage: [
-            ['done-done receipt --outcome "<claim>" <files...> [--claim-id <id>] [--trusted-ref <ref>] [--judge]', 'record a passing check for HEAD'],
-            ['done-done receipt --from <file | - | PR URL> [--claim-id <id>] [--trusted-ref <ref>] [--judge]', "record from a claim's Checks block"],
+            ['done-done receipt --outcome "<claim>" <files...> [--claim-id <id>] [--trusted-ref <ref>] [--citation-base <dir>] [--judge]', 'record a passing check for HEAD'],
+            ['done-done receipt --from <file | - | PR URL> [--claim-id <id>] [--trusted-ref <ref>] [--citation-base <dir>] [--judge]', "record from a claim's Checks block"],
             ['done-done receipt --verify <head>', 'read-only: verify a recorded receipt'],
         ],
-        flags: ['--outcome "<claim>"', '--from <file | - | PR URL>', '--claim-id <id>', '--trusted-ref <ref>', '--judge', '--verify <head>'],
+        flags: ['--outcome "<claim>"', '--from <file | - | PR URL>', '--claim-id <id>', '--trusted-ref <ref>', '--citation-base <dir>', '--judge', '--verify <head>'],
         more: [CHECKS_TEXT],
     },
     verify: {
@@ -562,9 +563,11 @@ function loadRecords(cfg) {
 async function runCheck(argv, run) {
     const { values, positionals } = parseArgs({
         args: argv,
-        options: { outcome: { type: 'string' }, from: { type: 'string' }, 'claim-id': { type: 'string' }, 'trusted-ref': { type: 'string' }, judge: { type: 'boolean' } },
+        options: { outcome: { type: 'string' }, from: { type: 'string' }, 'claim-id': { type: 'string' }, 'trusted-ref': { type: 'string' }, 'citation-base': { type: 'string' }, judge: { type: 'boolean' } },
         allowPositionals: true,
     });
+    if (values['citation-base']?.trim() === '')
+        throw new UsageError('--citation-base needs a non-empty directory');
     if (!!values.outcome === !!values.from)
         throw new UsageError('check needs exactly one of --outcome or --from');
     if (values.from && positionals.length)
@@ -607,7 +610,7 @@ async function runCheck(argv, run) {
         const rep = report(all, [], { cfg, repo, claim: claim.outcome, source: values.from, notProven: true }, allowed ? 'not proven (allowed by trusted config)' : '');
         return { code: rep.code, result: rep.result, claim: claim?.outcome, files: [], cited: [], head: now, findings: all };
     }
-    const files = claim?.files ?? [];
+    const files = (claim?.files ?? []).map((name) => values['citation-base'] === undefined ? name : resolve(values['citation-base'], name));
     const records = loadRecords(cfg);
     const seen = new Map();
     const hashes = [];

@@ -168,7 +168,7 @@ test('files outside any run record are inconclusive; a failed or dirty run fails
 });
 
 test('open and close a hand-driven run', () => {
-  const { repo, dd } = setup();
+  const { dir, repo, dd, head } = setup();
   const open = dd('run', '--open');
   assert.equal(open.code, 0, open.out);
   const { run_id: id, evidence_root: folder } = toon(open);
@@ -177,6 +177,26 @@ test('open and close a hand-driven run', () => {
   const close = dd('run', '--close', id);
   assert.equal(close.code, 0, close.out);
   assert.equal(dd('check', '--outcome', 'notes add works', `${folder}/cli.log`).code, 0);
+  const base = join(dir, 'citations');
+  mkdirSync(base);
+  cpSync(join(repo, folder, 'cli.log'), join(base, 'cli.log'));
+  writeFileSync(join(repo, 'cli.log'), 'wrong same-named output\n');
+  assert.equal(dd('check', '--outcome', 'notes add works', 'cli.log').code, 3, 'default still reads cwd, not the citation base');
+  const checked = dd('--json', 'check', '--citation-base', base, '--outcome', 'notes add works', 'cli.log');
+  assert.equal(checked.code, 0, checked.out);
+  assert.deepEqual(json(checked).evidence, [join(base, 'cli.log')]);
+  assert.equal(dd('check', '--citation-base', base, '--outcome', 'notes add works', join(repo, folder, 'cli.log')).code, 0, 'absolute citations stay absolute');
+  const missing = dd('check', '--citation-base', base, '--outcome', 'notes add works', 'missing.log');
+  assert.equal(missing.code, 1, missing.out);
+  assert.match(missing.out, /ENOENT/);
+  writeFileSync(join(base, 'stray.log'), 'unrecorded output\n');
+  assert.equal(dd('check', '--citation-base', base, '--outcome', 'notes add works', 'stray.log').code, 3, 'base does not bypass provenance');
+  const body = join(dir, 'checks.md');
+  writeFileSync(body, '## Checks\noutcome: notes add works\nrepro: n/a: no bug\nproof: no verify skill - done-done run --open\nevidence: cli.log\n');
+  const receipt = dd('receipt', '--citation-base', base, '--from', body);
+  assert.equal(receipt.code, 0, receipt.out);
+  assert.equal(dd('receipt', '--verify', head()).code, 0, 'receipt stays bound to caller repo/head and original run store');
+  assert.equal(dd('check', '--citation-base', '', '--outcome', 'x', 'cli.log').code, 2);
 });
 
 test('two runs in the same second at one commit get distinct ids and folders', () => {

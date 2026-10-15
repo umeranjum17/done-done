@@ -1,6 +1,6 @@
 # 0.3.1 patch release
 
-Fix: `check` and `receipt` accept `--citation-base <dir>` independently of repository identity and the configured run store. No flag keeps the cwd-relative default; absolute citations remain unchanged. Explicit-base check results return resolved evidence paths.
+For `--citation-base` behavior and usage, see [Check a claim](reference.md#check-a-claim).
 
 Installed usage:
 

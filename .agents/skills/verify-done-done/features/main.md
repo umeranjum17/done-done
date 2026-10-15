@@ -5,7 +5,7 @@ Part of the done-done verification map; reached at what README.md says a user ru
 ## Sub-features
 
 - Open/seal a native evidence run, check its captures, record a receipt and verify its caller HEAD.
-- Check or receipt citations with `--citation-base <dir>` independent of cwd and the configured run store. The existing e2e journey covers a same-named wrong cwd file, omitted-flag compatibility, unchanged absolute citations, missing evidence rejection and unrecorded evidence rejection with `--judge`.
+- Check or receipt citations with [`--citation-base <dir>`](../../../../docs/reference.md#check-a-claim). The existing e2e journey covers a same-named wrong cwd file, omitted-flag compatibility, unchanged absolute citations, missing evidence rejection and unrecorded evidence rejection with `--judge`, plus execution of suggested receipt and remote gate commands.
 
 ## How to get to it (user POV)
 
@@ -20,4 +20,4 @@ what README.md says a user runs first.
 
 ## Gotchas
 
-`--citation-base` changes only citation lookup. Keep cwd at the caller repository; do not point `evidence.root` at the citation folder to work around missing files. The journey disables positive relevance judging for its synthetic screen, but exercises judge-enabled missing/unrecorded controls; hosted judge acceptance remains covered by the CLI integration tests.
+See the [citation lookup contract](../../../../docs/reference.md#check-a-claim) rather than changing cwd or `evidence.root` to work around missing files. The journey disables positive relevance judging for its synthetic screen, but exercises judge-enabled missing/unrecorded controls; hosted judge acceptance remains covered by the CLI integration tests.

@@ -27,6 +27,7 @@ jobs:
           node-version: 24
           cache: npm
       - run: npm ci
+      - run: npx tsc
       # The merge gate: the repo proves itself with its own tool. The e2e
       # journey drives the built CLI against a throwaway fixture repo
       # (doctor, run, check, receipt), then verify checks that evidence

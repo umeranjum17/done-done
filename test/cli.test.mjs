@@ -838,17 +838,44 @@ test('init --journey keeps the comments and formatting of an existing config', (
 
 test('init --journey records the command a run executes, shell syntax included', () => {
   const { repo, sh, dd } = bareRepo();
-  assert.equal(dd('init', '--journey', 'unit', '--', 'echo', 'added', '>', '$DONE_DONE_EVIDENCE_ROOT/out.txt').code, 2);
-  assert.equal(parse(readFileSync(join(repo, '.done-done.yaml'), 'utf8')).journeys.unit.command, 'echo added > $DONE_DONE_EVIDENCE_ROOT/out.txt');
+  // A recipe is one shell command, so the documented one-word form is stored verbatim (README, docs/reference).
+  const recipe = 'echo added > $DONE_DONE_EVIDENCE_ROOT/out.txt';
+  assert.equal(dd('init', '--journey', 'unit', '--', recipe).code, 2);
+  assert.equal(parse(readFileSync(join(repo, '.done-done.yaml'), 'utf8')).journeys.unit.command, recipe);
   sh('add', '-A');
   sh('commit', '-qm', 'recipe');
   const run = dd('run', 'unit');
   assert.equal(run.code, 0, run.out);
   const [file] = toon(run).evidence;
   assert.equal(readFileSync(file, 'utf8'), 'added\n');
-  const adhoc = dd('run', '--', 'echo', 'added', '>', '$DONE_DONE_EVIDENCE_ROOT/out.txt');
+  const adhoc = dd('run', '--', recipe);
   assert.equal(adhoc.code, 0, adhoc.out);
   assert.ok(!toon(adhoc).help.join('\n').includes('not in the repo'), 'the same command run ad hoc matches the recorded recipe');
+});
+
+test('a command after -- keeps each word as it was given, in a run and in a recorded journey', () => {
+  const { repo, sh, dd } = bareRepo();
+  // The argument holds a space and shell metacharacters: joining the words bare and letting the shell split the
+  // string again drops its quoting, and cp then stops with "missing file operand".
+  const words = ['sh', '-c', 'cp "a b.png" "$DONE_DONE_EVIDENCE_ROOT/a b.png"'];
+  writeFileSync(join(repo, 'a b.png'), 'captured\n');
+  sh('add', '-A');
+  sh('commit', '-qm', 'fixture');
+  const adhoc = dd('run', '--', ...words);
+  assert.equal(adhoc.code, 0, adhoc.out);
+  const [copied] = toon(adhoc).evidence;
+  assert.equal(basename(copied), 'a b.png');
+  assert.equal(readFileSync(copied, 'utf8'), 'captured\n');
+  // Recorded as a journey, the same words re-run from the repo exactly as they were given.
+  assert.equal(dd('init', '--journey', 'copy', '--', ...words).code, 2);
+  assert.equal(parse(readFileSync(join(repo, '.done-done.yaml'), 'utf8')).journeys.copy.command, `sh -c 'cp "a b.png" "$DONE_DONE_EVIDENCE_ROOT/a b.png"'`);
+  sh('add', '-A');
+  sh('commit', '-qm', 'recipe');
+  const run = dd('run', 'copy');
+  assert.equal(run.code, 0, run.out);
+  const [replayed] = toon(run).evidence;
+  assert.equal(basename(replayed), 'a b.png');
+  assert.equal(readFileSync(replayed, 'utf8'), 'captured\n');
 });
 
 test('re-recording a journey replaces only its command and keeps its other keys and comments', () => {

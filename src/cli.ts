@@ -642,14 +642,26 @@ async function runCheck(argv: string[], run?: { dir: string; judge: boolean; jud
   };
   const befores = new Map<string, Capture>();
   const heads: [Capture, string | null, RunRecord][] = [];
+  // Citations are the paths `run` printed: repo-relative inside the repo, absolute outside it.
+  // Resolve a relative citation against the repo root first, so a check from a subdirectory
+  // finds the same evidence (a worker cwd once false-failed real proof as missing/ENOENT),
+  // then against the caller's cwd, so a shell-relative path typed for this shell still works.
+  const cite = (name: string) => {
+    if (isAbsolute(name)) return name;
+    const atRoot = resolve(repo, name);
+    if (existsSync(atRoot)) return atRoot;
+    const atCwd = resolve(name);
+    return existsSync(atCwd) ? atCwd : atRoot;
+  };
   for (const name of files) {
-    const path = resolve(name);
+    const path = cite(name);
     let bytes: Buffer;
     try {
       if (!statSync(path).isFile()) throw new Error('not a regular file');
       bytes = readFileSync(path);
     } catch (e) {
-      findings.push({ level: 'fail', why: `${name}: missing (${(e as NodeJS.ErrnoException).code ?? (e as Error).message})` });
+      const atCwd = !isAbsolute(name) && resolve(name) !== path ? ` or ${resolve(name)}` : '';
+      findings.push({ level: 'fail', why: `${name}: no such file (looked for ${path}${atCwd}${(e as NodeJS.ErrnoException).code ? `, ${(e as NodeJS.ErrnoException).code}` : ''})` });
       continue;
     }
     const v = checkMedia(path, bytes);
@@ -703,7 +715,7 @@ async function runCheck(argv: string[], run?: { dir: string; judge: boolean; jud
       findings.push({ level: 'inconclusive', why: `${c.name}: no base capture to compare with: the drive at base_ref ${rec.base!.ref} saved no ${join(BEFORE, inRoot ? relative(rec.run_id, inRoot) : c.name)}${rec.base!.error ? ` (${rec.base!.error})` : ''}`, file: c.name });
   // The capture matrix: every required cell needs a capture named with its suffix, never silently missing.
   if (hasMatrix(cfg.matrix))
-    for (const c of matrixManifest(cfg.matrix!, files.filter((f) => (!cfg.dom || !isDomRecord(f)) && !pairOf(under(cfg.evidence.root, resolve(f))))).cells.filter((c) => !c.files.length))
+    for (const c of matrixManifest(cfg.matrix!, files.filter((f) => (!cfg.dom || !isDomRecord(f)) && !pairOf(under(cfg.evidence.root, cite(f))))).cells.filter((c) => !c.files.length))
       findings.push({ level: 'fail', why: `cell ${c.cell} has no capture: name one file *${c.suffix}* (journeys name captures with DONE_DONE_CELL)` });
   // Reuse: fail only when every cited file was already used for a different claim id. The ledger lives in the
   // evidence root next to the run records it guards: one per app (repo), shared by every checkout of it, never in git.
@@ -744,7 +756,7 @@ async function runCheck(argv: string[], run?: { dir: string; judge: boolean; jud
       const { choice } = j;
       judged = { ...(choice && { route: choice.route, model: choice.model, independence: choice.independence, author: `${choice.author.agent} (model ${choice.author.model || 'none'})` }), judged: rows.items.map(({ sha256, ...r }) => r) };
       if (choice && j.judged.length) {
-        const byName = new Map(captures.map((c) => [c.name, receiptPath(repo, cfg, resolve(c.name))]));
+        const byName = new Map(captures.map((c) => [c.name, receiptPath(repo, cfg, cite(c.name))]));
         judgeBlock = { route: choice.route, model: choice.model, independence: choice.independence, author: choice.author, verdicts: j.judged.map((r) => ({ path: byName.get(r.path)!, sha256: r.sha256, verdict: r.verdict })) };
       }
       if (rows.omitted) judged.judged_omitted = rows.omitted;
@@ -847,8 +859,8 @@ function verifyReceipt(repo: string, cfg: Config, headArg: string): { code: numb
     let bytes: Buffer;
     try {
       bytes = readFileSync(f.path.startsWith(IN_EVIDENCE) ? join(cfg.evidence.root, f.path.slice(IN_EVIDENCE.length)) : resolve(repo, f.path));
-    } catch {
-      bad.push(`${f.path}: missing`);
+    } catch (e) {
+      bad.push(`${f.path}: no such file (looked for ${f.path.startsWith(IN_EVIDENCE) ? join(cfg.evidence.root, f.path.slice(IN_EVIDENCE.length)) : resolve(repo, f.path)}${(e as NodeJS.ErrnoException).code ? `, ${(e as NodeJS.ErrnoException).code}` : ''})`);
       continue;
     }
     if (sha256(bytes) !== f.sha256) {

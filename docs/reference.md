@@ -173,10 +173,54 @@ done-done never drives the browser: the recipe or journey writes one page-check 
 
 ```json
 {"url": "http://127.0.0.1:4100/", "overflow": true, "overflowing": ["div#wide"], "console_errors": ["boom"], "failed_requests": [{"url": "http://127.0.0.1:4100/x.js", "status": 404}],
- "squashed_text": [{"element": "h3.card-title", "text": "Approved", "chars": 1.6, "lines": 8, "words": 1}]}
+ "squashed_text": [{"element": "h3.card-title", "text": "Approved", "chars": 1.6, "lines": 8, "words": 1}],
+ "clipped_text": [{"element": "h3.card-title", "text": "Answered: the release notes are approved", "by": "its own box"}],
+ "cut_off": [{"element": "div.clock", "text": "12:30", "edges": ["top"]}]}
 ```
 
-With your browser tool, for example chrome-devtools-axi: `overflow` and `overflowing` from `eval` (document `scrollWidth` beyond `clientWidth`, and the elements whose right edge passes it), `console_errors` from `console --type error`, `failed_requests` (status 400 or more, or 0 for no response) from `network`, `squashed_text` from `eval` of done-done's measurement function, run in each frame of the page (an embedded frame too). It lists every visible HTML element with its own text (SVG text has no layout box and is skipped; widths are untransformed layout pixels, so a scaled ancestor does not shrink them) whose box is under 8 characters wide (its width over the average glyph width of its font) while its text is wider than the box, or whose text sits on more lines (distinct line boxes) than it has words: a title wrapped one letter per line in a narrow column. `squashed_text` is optional, so a record written without it stays valid. The scaffolded verify skill and the agent drive prompt carry the same recipe. Verify's check and `done-done check` fail naming the capture and each issue not on an allow list, and fail when a capture has no record or a record is not this shape. No `dom` block keeps today's behaviour.
+With your browser tool, for example chrome-devtools-axi: `overflow` and `overflowing` from `eval` (document `scrollWidth` beyond `clientWidth`, and the elements whose right edge passes it), `console_errors` from `console --type error`, `failed_requests` (status 400 or more, or 0 for no response) from `network`, `squashed_text` from `eval` of done-done's measurement function, run in each frame of the page (an embedded frame too). It lists every visible HTML element with its own text (SVG text has no layout box and is skipped; widths are untransformed layout pixels, so a scaled ancestor does not shrink them) whose box is under 8 characters wide (its width over the average glyph width of its font) while its text is wider than the box, or whose text sits on more lines (distinct line boxes) than it has words: a title wrapped one letter per line in a narrow column. `squashed_text`, `clipped_text` and `cut_off` are optional, so a record written without them stays valid; [`done-done look`](#look-check) writes all of them, and the check fails on each `clipped_text` and `cut_off` item as it does on `squashed_text`. The scaffolded verify skill and the agent drive prompt carry the same recipe. Verify's check and `done-done check` fail naming the capture and each issue not on an allow list, and fail when a capture has no record or a record is not this shape. No `dom` block keeps today's behaviour.
+
+### Look check
+
+`done-done look` is the look step a journey calls on a web page. It opens the page in headless Chrome at a phone viewport, measures the look defects in the DOM, writes the screenshot with its page-check record next to it, and exits 1 on any hit, naming the element, the kind and its text. No judge and no model: the same page gives the same answer.
+
+```sh
+done-done look http://127.0.0.1:3000/inbox --out "$DONE_DONE_EVIDENCE_ROOT/inbox.png"
+done-done look ./public/inbox.html --viewport 1280x800      # a path on disk opens as its file:// URL
+```
+
+A journey in `.done-done.yaml` that calls it (one command per screen, `&&` between them, so the first hit stops the journey):
+
+```yaml
+journeys:
+  inbox-look:
+    command: >-
+      done-done look "$DONE_DONE_BASE_URL/inbox" --out "$DONE_DONE_EVIDENCE_ROOT/inbox.png" &&
+      done-done look "$DONE_DONE_BASE_URL/inbox/1" --out "$DONE_DONE_EVIDENCE_ROOT/answered.png"
+```
+
+`$DONE_DONE_BASE_URL` is set when the repo has an [`instance` block](#run-instance-harness); without one, name the page's URL. A hit fails the journey, so `done-done run` and `verify` fail with it. Never write `done-done look ... || true` or log the exit and go on: that is the gap this step closes.
+
+- **What it measures.** In the page's main frame, after it loads and its web fonts are in:
+
+  | Kind | A hit when |
+  |---|---|
+  | overflow | the page is wider than the viewport, so it scrolls sideways (the elements past the right edge are named) |
+  | squashed text | done-done's [squashed-text measurement](#dom-assertions): a text block under 8 characters wide while its text does not fit, or on more lines than it has words |
+  | clipped text | part of an element's text shows and part runs past a container that hides its overflow (`overflow: hidden` or `clip`), with no `text-overflow: ellipsis` (sideways) or line clamp (downwards): a card title cut to one line |
+  | cut off | part of an element shows and part lies past the left, right or top edge of the viewport: a status-bar clock clipped at the top. The page is at its top, so content below the bottom edge is fine |
+
+  Something entirely outside its container or the viewport is hidden on purpose (a closed drawer, a visually hidden label) and is not a hit; a cut element's children are not listed again. Content in a scrolling container (`overflow: auto` or `scroll`, such as a carousel) scrolls into view and is not clipped.
+- **What it writes.** `--out <file.png>` (default `look.png` in `$DONE_DONE_EVIDENCE_ROOT` inside a journey, else in the current folder) gets the viewport screenshot, exactly the viewport size in pixels, and `<file>.dom.json` next to it the page-check record of [DOM assertions](#dom-assertions), with the page's console errors and failed requests too. look itself fails only on the four kinds above; with a `dom` block, verify's check also reads the record and applies its allow lists to console errors and failed requests.
+- **Viewport.** `--viewport <width>x<height>` in CSS pixels, default `390x844` (a phone), as a mobile device at 1x scale. Run it once per width your change touches, with a different `--out` each.
+- **Chrome.** look starts its own headless Chrome or Chromium (`google-chrome`, `google-chrome-stable`, `chromium` or `chromium-browser` on PATH, or `DONE_DONE_CHROME` naming the binary) with a throwaway profile, and removes both when it ends. It runs Chrome without its sandbox so it starts in containers and CI, so point it at your own app, not untrusted sites. No Chrome is a usage error (exit 2) that says how to install or point to one; a page that does not load (its network error, or no load event within 30 seconds) is exit 2 with the cause.
+- **Limits.** Only the main frame is measured, not an embedded frame; a transform or `clip-path` that hides part of a box is not seen; nothing is clicked or scrolled first, so drive the page to the state to check (a URL per state) before you call look. Look at the capture too: a defect the DOM cannot see (a stretched image, a colour) is the [design check](#design-check)'s.
+
+| Result | Exit |
+|---|---|
+| no hit | 0 |
+| a hit of any kind | 1 |
+| bad flags, no Chrome, or the page did not load | 2 |
 
 ### Base-ref before
 

@@ -4,7 +4,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import { accessSync, appendFileSync, closeSync, constants, cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir, userInfo } from 'node:os';
 import { basename, dirname, isAbsolute, join, matchesGlob, relative, resolve, sep } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { createInterface } from 'node:readline/promises';
 import { parseArgs } from 'node:util';
 import { encode } from '@toon-format/toon';
@@ -17,7 +17,8 @@ import { attemptProblem, changedSince, commitFix, dirtyTracked, FIX_SCHEMA, inWo
 import { cellEnv, cellName, cellSuffix, hasMatrix, matrixManifest, splitMatrix } from './matrix.js';
 import { design, KINDS } from './design.js';
 import { checkMedia } from './media.js';
-import { domIssues, isDomRecord, SQUASHED_TEXT } from './dom.js';
+import { domIssues, domRecord, isDomRecord, lookIssues, SQUASHED_TEXT } from './dom.js';
+import { look } from './look.js';
 import { scanSecrets } from './secrets.js';
 const PASS = 0, FAIL = 1, USAGE = 2, INCONCLUSIVE = 3, WAITING = 4;
 // The shape of a journey, so a new user or agent can write one without opening the reference.
@@ -109,6 +110,8 @@ const FLAGS = {
     '--action <approve|skip|fix>': 'approve: the captures do show the outcome; skip: go on without a judge pass; both end the run overridden; fix: end it fail, then fix the product or the verify skill (done-done maintain checks it against the source)',
     '--reason "<why>"': 'why (required for approve and skip); kept in the run and its receipt with who answered',
     '--limit <n>': 'how many past runs to list (default all)',
+    '--out <file.png>': 'where look writes the screenshot; its page-check record goes next to it as <file>.dom.json (default: look.png in $DONE_DONE_EVIDENCE_ROOT inside a journey, else in the current folder)',
+    '--viewport <width>x<height>': 'the CSS pixel viewport look opens the page at (default 390x844)',
     '--agent <agent>': 'the coding agent done-done starts (claude, codex, opencode, pi, gemini or acp:<target>), saved as agent in ~/.done-done/config.yaml; without it, init asks in a terminal',
     '--model <model>': 'with --agent: that agent\'s model, saved as agent_config.<agent>.model (opencode: provider/model)',
     '--judge <agent>': `the judge done-done starts (${JUDGES.join(' or ')}), saved as judge.route in ~/.done-done/config.yaml; never the agent and model that did the work; without it, init asks in a terminal`,
@@ -187,6 +190,14 @@ const COMMANDS = {
         more: [`design: one judge request per screen (the judge the user set, never the author); it fails a screen on any defect it names:
   ${Object.keys(KINDS).join(', ')}; capture each variant (dark, small width, large font) as its own screen; exit 0 every screen
   passed, 1 a screen failed, 3 none failed but one is unsure`],
+    },
+    look: {
+        usage: [['done-done look <url> [--out <file.png>] [--viewport <width>x<height>]', 'open a page in headless Chrome at a phone viewport, capture it with its page-check record, and fail on any squashed, clipped or cut-off UI']],
+        flags: ['--out <file.png>', '--viewport <width>x<height>'],
+        more: [`look: one deterministic step a journey calls as its command or inside its script; no judge, no model. It measures horizontal
+  overflow, squashed text, text clipped by its container and elements cut off by the left, right or top edge, writes the
+  screenshot and its .dom.json record, and exits 1 naming each element, kind and text, 0 when there is none. A hit always
+  fails: never wrap it in || true. Needs Chrome or Chromium (DONE_DONE_CHROME names the binary)`],
     },
     status: {
         usage: [['done-done status [--run <run-id>]', "show a run's steps, result, findings and next step"]],
@@ -3318,6 +3329,35 @@ async function cmdDoctor(argv) {
     return missingRequired.length ? USAGE : PASS;
 }
 // The design check: every named screen, and each --mock screen, judged for visual defects.
+async function cmdLook(argv) {
+    const { values, positionals } = parseArgs({ args: argv, options: { out: { type: 'string' }, viewport: { type: 'string' } }, allowPositionals: true });
+    if (positionals.length !== 1)
+        throw new UsageError('look needs one page URL', 'Re-run with the page to check: done-done look <url>');
+    // A path to a page on disk opens as its file:// URL.
+    const url = !/^[a-z][\w+.-]*:/i.test(positionals[0]) && existsSync(positionals[0]) ? pathToFileURL(resolve(positionals[0])).href : positionals[0];
+    const size = /^(\d+)x(\d+)$/.exec(values.viewport ?? '390x844');
+    if (!size || +size[1] < 1 || +size[2] < 1)
+        throw new UsageError(`--viewport ${values.viewport} must be <width>x<height> in CSS pixels, such as 390x844`);
+    const capture = resolve(values.out ?? join(process.env.DONE_DONE_EVIDENCE_ROOT || '.', 'look.png'));
+    if (!capture.endsWith('.png'))
+        throw new UsageError(`--out ${values.out} must be a .png file`);
+    mkdirSync(dirname(capture), { recursive: true });
+    const record = await look(url, capture, +size[1], +size[2]);
+    const hits = lookIssues(record);
+    const shown = cap(hits);
+    emit({
+        command: 'look',
+        result: hits.length ? 'fail' : 'pass',
+        url,
+        viewport: `${size[1]}x${size[2]}`,
+        capture,
+        record: domRecord(capture),
+        hits: shown.items,
+        ...(shown.omitted && { hits_omitted: shown.omitted }),
+        help: hits.length ? [`Fix each element named above so it fits the ${size[1]} px wide screen, then re-run: done-done look ${quote(positionals[0])}${values.viewport ? ` --viewport ${values.viewport}` : ''}${values.out ? ` --out ${quote(values.out)}` : ''}`] : ['No squashed, clipped or cut-off UI on this page; look at the capture to check the rest'],
+    });
+    return hits.length ? FAIL : PASS;
+}
 async function cmdDesign(argv) {
     const { values, positionals } = parseArgs({ args: argv, options: { mock: { type: 'string', multiple: true } }, allowPositionals: true });
     const mocks = new Map();
@@ -3439,6 +3479,8 @@ async function main(argv) {
             return await cmdMaintain(rest);
         if (cmd === 'design')
             return await cmdDesign(rest);
+        if (cmd === 'look')
+            return await cmdLook(rest);
         if (cmd === 'status')
             return cmdStatus(rest);
         if (cmd === 'attach')

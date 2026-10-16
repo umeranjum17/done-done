@@ -53,6 +53,16 @@ A run waiting at its gate (\`awaiting_approval\`) is the user's call: show them 
 \`done-done respond\` only with their answer and reason. Never approve or skip on your own; \`overridden\` is not done either.
 A journey that \`spends\` runs only after the user approves spending: \`done-done run <journey>\` refuses it, so ask the user and use \`verify\`.
 
+For a web page, \`done-done look <url>\` is the look step a journey calls: it captures the page at a 390x844 phone viewport
+with its page-check record and exits 1 on squashed, clipped or cut-off UI, naming each element. A hit fails the journey;
+never wrap it in \`|| true\` or log the exit and go on. A journey in \`.done-done.yaml\` that calls it:
+
+\`\`\`yaml
+journeys:
+  inbox-look:
+    command: done-done look http://127.0.0.1:3000/inbox --out "$DONE_DONE_EVIDENCE_ROOT/inbox.png"
+\`\`\`
+
 done-done starts a coding agent the user chose. When it says no agent is set, ask the user which agent
 (and model) to use and save their answer with the command it prints; never choose one for them.
 

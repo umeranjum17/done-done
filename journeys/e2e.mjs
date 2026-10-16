@@ -6,7 +6,7 @@
 // Pure node stdlib; exits nonzero on the first failure.
 import { execFileSync, spawnSync } from 'node:child_process';
 import assert from 'node:assert/strict';
-import { copyFileSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { copyFileSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { deflateSync } from 'node:zlib';
@@ -58,8 +58,10 @@ try {
   const dd = (...args) => drive(0, ...args);
   const sh = (...a) => execFileSync('git', a, { cwd: repo, env, encoding: 'utf8' });
 
-  // Fixture repo: minimal app with its own journey, judge off (deterministic).
-  writeFileSync(join(repo, '.done-done.yaml'), 'app: fixture\njudge:\n  enabled: false\njourneys:\n  shots:\n    command: node make-shots.mjs ${RUN_ID}\n');
+  // Fixture repo: minimal app with its own journeys, judge off (deterministic). The look journeys call the look step on a
+  // phone screen with a clipped card title and on the same screen fixed.
+  const look = (page) => `node ${JSON.stringify(CLI)} look ${JSON.stringify(join(REPO, 'test', 'fixtures', 'look', `${page}.html`))} --out "$DONE_DONE_EVIDENCE_ROOT/${page}.png"`;
+  writeFileSync(join(repo, '.done-done.yaml'), `app: fixture\njudge:\n  enabled: false\njourneys:\n  shots:\n    command: node make-shots.mjs \${RUN_ID}\n${['clipped', 'fixed'].map((p) => `  look-${p}:\n    command: ${JSON.stringify(look(p))}\n`).join('')}`);
   writeFileSync(join(repo, 'make-shots.mjs'),
     `import { copyFileSync } from 'node:fs';\ncopyFileSync(${JSON.stringify(join(tmp, 'screen.png'))}, process.env.DONE_DONE_EVIDENCE_ROOT + '/home.png');\n`);
   writeFileSync(join(tmp, 'screen.png'), png(3));
@@ -108,10 +110,26 @@ try {
     follow(remote, body);
   }
 
-  // Proof for the outer run: transcript plus the fixture's own capture.
+  // A look hit fails the journey that calls it, naming the element, kind and text; the fixed page passes.
+  const lookRun = (page, code) => {
+    const out = drive(code, 'run', `look-${page}`);
+    const id = /run_id:\s*"?([^\s"]+)"?/.exec(out)?.[1];
+    const capture = join(home, 'evidence', 'fixture', id, `${page}.png`);
+    const record = JSON.parse(readFileSync(capture.replace(/\.png$/, '.dom.json'), 'utf8'));
+    assert.deepEqual(readFileSync(capture).subarray(16, 24), Buffer.from([0, 0, 1, 134, 0, 0, 3, 76]), 'the capture is 390x844');
+    return { out: log.at(-1), record, capture };
+  };
+  const clipped = lookRun('clipped', 1);
+  assert.match(clipped.out, /clipped text: h3\.card-title \\?"Answered: the release notes are approved\\?" is cut by its own box/);
+  assert.deepEqual(clipped.record.clipped_text.map((q) => q.element), ['h3.card-title']);
+  const fixed = lookRun('fixed', 0);
+  assert.deepEqual([fixed.record.clipped_text, fixed.record.cut_off, fixed.record.squashed_text, fixed.record.overflow], [[], [], [], false]);
+
+  // Proof for the outer run: transcript plus the fixture's own captures.
   mkdirSync(OUT, { recursive: true });
   writeFileSync(join(OUT, `${RUN_ID}.log`), log.join('\n') + '\n');
   copyFileSync(shot, join(OUT, `${RUN_ID}.home.png`));
+  for (const [page, r] of [['clipped', clipped], ['fixed', fixed]]) copyFileSync(r.capture, join(OUT, `${RUN_ID}.look-${page}.png`));
   const names = readdirSync(OUT).sort();
   say(`evidence: ${names.join(', ')}`);
 } catch (err) {

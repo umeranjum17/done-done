@@ -1,0 +1,31 @@
+<!doctype html>
+<!-- look fixture: a phone screen with a known clipped element. The answered card's title sits in a box one line tall
+     with overflow hidden, so its second line is cut; fixed.html is the same screen with the box sized to its text. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Inbox</title>
+<style>
+  body { margin: 0; font: 16px/1.4 system-ui, sans-serif; background: #f4f4f6; color: #1c1c1e; }
+  header { display: flex; justify-content: space-between; padding: 12px 16px; background: #fff; font-weight: 600; }
+  main { padding: 16px; }
+  .card { background: #fff; border-radius: 12px; padding: 12px 16px; margin-bottom: 12px; }
+  .card-title { margin: 0; font-size: 18px; height: 24px; overflow: hidden; }
+  .card p { margin: 4px 0 0; color: #636366; }
+</style>
+</head>
+<body>
+<header><span>Inbox</span><span>Umer</span></header>
+<main>
+  <section class="card">
+    <h3 class="card-title">Answered: the release notes are approved and ready to send to the team</h3>
+    <p>Umer replied 2 minutes ago</p>
+  </section>
+  <section class="card">
+    <h3 class="card-title">Waiting</h3>
+    <p>Two questions still open</p>
+  </section>
+</main>
+</body>
+</html>

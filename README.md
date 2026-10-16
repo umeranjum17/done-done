@@ -159,7 +159,8 @@ Run `done-done` with no arguments to see the current config and the next step.
 - 📌 **Verifiable later**: `receipt` records a passing check against the exact commit and the sha256 of every file it cited; `receipt --verify` re-checks it from any checkout of that commit on the same machine (a merge gate or a fresh clone), or in CI once the evidence folder is copied there ([how](docs/reference.md#where-proof-lives)).
 - 👀 **Shows the outcome** (on by default in `verify`; `check` and `receipt` with `--judge`): `verify` starts done-done's own judge, a fresh, tools-off agent on your own plan or key (Claude Code, opencode, pi or Gemini CLI, or your own OpenAI API key), to say whether each capture is the right screen for the claim (and each text capture, such as a log, JSON or CLI output, the right output), and a wrong one fails. You choose the judge (`done-done init --judge <agent> --judge-model <model>`, or pick it from the list `verify` shows in a terminal); done-done never picks one, and it is never the agent and model that did the work. `--no-judge` or `judge.enabled: false` skips it when you choose to, and `check` and `receipt` judge only with `--judge`.
 - 🎨 **Looks right**: `done-done design <screens...> [--mock <screen>=<mock>]` has the same judge look at each captured screen, alone or next to its approved mock, and fails it on stretched or squashed images, clipped or squashed text, overlap, elements off-screen, blank or black strips and broken layout, naming each defect and where it is ([how](docs/reference.md#design-check)).
-- 🧩 **Page is clean** (with a `dom` block): each captured screen also needs its page-check record. A page that overflows the viewport, logs a console error, has a failed request or shows squashed text fails, unless an allow list names it ([how](docs/reference.md#dom-assertions)).
+- 📐 **Fits the screen**: `done-done look <url>` opens a web page in headless Chrome at a 390x844 phone viewport, captures it, and fails the journey that calls it on squashed text, clipped text, elements cut off by an edge or a page wider than the screen, naming each element, with no model ([how](docs/reference.md#look-check)).
+- 🧩 **Page is clean** (with a `dom` block): each captured screen also needs its page-check record. A page that overflows the viewport, logs a console error, has a failed request or shows squashed, clipped or cut-off UI fails, unless an allow list names it ([how](docs/reference.md#dom-assertions)).
 - 🔒 **Safe in CI**: `--trusted-ref origin/main` reads the rules from your main branch, so a pull request can't loosen them.
 
 Every answer is an exit code: **0** pass, **1** fail (or overridden at the gate), **2** usage or config error, **3** can't tell either way, **4** a `verify`, `maintain` or `rerun` run is still running, or a `verify` run waits at its gate.
@@ -190,7 +191,7 @@ Another fleet works the same way: add the include text to whatever your workers 
 
 ## What's next
 
-So far: `init`, `doctor`, `run`, `check`, `receipt`, `verify` (by journey or by your coding agent, with a gate you answer with `respond`), the capture judge (on by default in `verify`), the `design` visual check and the opt-in session hooks for Claude Code, Codex, opencode, Gemini CLI and pi. Coming next: help writing the proof steps for your app.
+So far: `init`, `doctor`, `run`, `check`, `receipt`, `verify` (by journey or by your coding agent, with a gate you answer with `respond`), the capture judge (on by default in `verify`), the `design` visual check, the `look` step and the opt-in session hooks for Claude Code, Codex, opencode, Gemini CLI and pi. Coming next: help writing the proof steps for your app.
 
 ## Develop
 

@@ -33,7 +33,7 @@ What ships now:
 - **Fix loop.** `auto_fix.maintain` lets done-done fix verify skill drift, and `auto_fix.verify` lets it fix the product after a failed verify, with the same config shape as no-mistakes.
 - **Run-instance harness.** An `instance` block starts the app under test per run, on its own port, with its own HOME and XDG folders, and stops it at the end.
 - **Capture matrix.** One verify run captures every theme x width x form cell the repo asks for; each cell is captured or skipped with a reason.
-- **DOM assertions.** With a `dom` block, each captured screen's page-check record must be clean: no horizontal overflow, squashed text, or console error or failed request that an allow list does not name.
+- **DOM assertions.** With a `dom` block, each captured screen's page-check record must be clean: no horizontal overflow, squashed, clipped or cut-off UI, or console error or failed request that an allow list does not name.
 - **Base-ref before.** With `base_ref`, `verify` drives the base ref too and judges each head capture together with its base capture.
 - **Text evidence.** The judge reads text captures (logs, JSON, CLI output) as well as screens; see the [reference](docs/reference.md).
 

@@ -3,7 +3,7 @@
 // DONE_DONE_RUN_ID set by `done-done run e2e`. Follows the repo's own
 // integrations/firstmate/brief-include.md contract: init, run, check, receipt.
 // Writes e2e.log plus the fixture's captures into DONE_DONE_EVIDENCE_ROOT.
-// Pure node stdlib; exits nonzero on the first failure.
+// Node stdlib only, plus Chrome or Chromium on PATH for the look journeys; exits nonzero on the first failure.
 import { execFileSync, spawnSync } from 'node:child_process';
 import assert from 'node:assert/strict';
 import { copyFileSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';

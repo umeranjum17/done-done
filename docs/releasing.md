@@ -1,4 +1,4 @@
-# 0.3.1 patch release
+# 0.3.1 patch release 
 
 For `--citation-base` behavior and usage, see [Check a claim](reference.md#check-a-claim).
 

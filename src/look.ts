@@ -43,6 +43,9 @@ export async function look(url: string, capture: string, width: number, height: 
     let id = 0;
     const waiting = new Map<number, { done: (v: any) => void; fail: (e: Error) => void }>();
     const on = new Map<string, (p: any) => void>();
+    const died = (why: string) => { for (const w of waiting.values()) w.fail(new Error(why)); waiting.clear(); };
+    sock.onclose = () => died(`the Chrome DevTools connection closed before ${url} was captured`);
+    chrome.on('exit', (code) => died(`Chrome (${bin}) exited ${code} before ${url} was captured`));
     sock.onmessage = (m) => {
       const msg = JSON.parse(String(m.data));
       const w = waiting.get(msg.id);

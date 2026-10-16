@@ -39,7 +39,7 @@ export const SQUASHED_TEXT = `() => {
 // ponytail: the main frame only, and a transform or clip-path that hides part of a box is not seen; measure each frame
 // and clip-path when those show up.
 export const LOOK = `() => {
-  const vw = document.documentElement.clientWidth; const out = { clipped_text: [], cut_off: [] }; const cut = new Set();
+  const vw = document.documentElement.clientWidth; const vh = document.documentElement.clientHeight; const out = { clipped_text: [], cut_off: [] }; const cut = new Set();
   const name = (e) => e.tagName.toLowerCase() + (e.id ? '#' + e.id : e.classList[0] ? '.' + e.classList[0] : '');
   const own = (e) => [...e.childNodes].filter((n) => n.nodeType === 3 && n.data.trim()).map((n) => n.data).join(' ').replace(/\\s+/g, ' ').trim().slice(0, 40);
   const clips = (e) => { const out = []; for (let a = e; a && a !== document.body && a !== document.documentElement; a = a.parentElement) { const s = getComputedStyle(a); if (s.overflowX !== 'visible' || s.overflowY !== 'visible') { const r = a.getBoundingClientRect(); out.push({ a, s, l: r.left + a.clientLeft, t: r.top + a.clientTop, r: r.left + a.clientLeft + a.clientWidth, b: r.top + a.clientTop + a.clientHeight }); } } return out; };
@@ -53,11 +53,11 @@ export const LOOK = `() => {
     const text = own(e);
     const parent = [...cut].some((c) => c.contains(e));
     const edges = [box.l < -1 && 'left', box.r > vw + 1 && 'right', box.t < -1 && 'top'].filter(Boolean);
-    if (edges.length && box.r > 0 && box.l < vw && box.b > 0 && !parent) { cut.add(e); out.cut_off.push({ element: name(e), text, edges }); }
+    if (edges.length && box.r > 0 && box.l < vw && box.b > 0 && box.t < vh && !parent) { cut.add(e); out.cut_off.push({ element: name(e), text, edges }); }
     if (!text) continue;
     const t = { l: Infinity, t: Infinity, r: -Infinity, b: -Infinity };
     for (const n of e.childNodes) if (n.nodeType === 3 && n.data.trim()) { const g = document.createRange(); g.selectNodeContents(n); for (const q of g.getClientRects()) if (q.width) { t.l = Math.min(t.l, q.left); t.t = Math.min(t.t, q.top); t.r = Math.max(t.r, q.right); t.b = Math.max(t.b, q.bottom); } }
-    if (t.l === Infinity) continue;
+    if (t.l === Infinity || t.t >= vh || t.b <= 0) continue;
     for (const c of clips(e)) {
       if (c.r - c.l <= 1 || c.b - c.t <= 1 || !(t.r > c.l && t.l < c.r && t.b > c.t && t.t < c.b) || !['hidden', 'clip'].some((v) => v === c.s.overflowX || v === c.s.overflowY)) continue;
       const x = ['hidden', 'clip'].includes(c.s.overflowX) && c.s.textOverflow !== 'ellipsis' && (t.l < c.l - 1 || t.r > c.r + 1);

@@ -43,8 +43,9 @@ export async function look(url, capture, width, height) {
         let id = 0;
         const waiting = new Map();
         const on = new Map();
+        let failLoad;
         const died = (why) => { for (const w of waiting.values())
-            w.fail(new Error(why)); waiting.clear(); };
+            w.fail(new Error(why)); waiting.clear(); failLoad?.(new Error(why)); };
         sock.onclose = () => died(`the Chrome DevTools connection closed before ${url} was captured`);
         chrome.on('exit', (code) => died(`Chrome (${bin}) exited ${code} before ${url} was captured`));
         sock.onmessage = (m) => {
@@ -85,7 +86,7 @@ export async function look(url, capture, width, height) {
         for (const d of ['Page', 'Runtime', 'Network'])
             await send(`${d}.enable`);
         await send('Emulation.setDeviceMetricsOverride', { width, height, deviceScaleFactor: 1, mobile: true });
-        const loaded = within(WAIT, `${url} did not finish loading in ${WAIT / 1000}s`, (done) => on.set('Page.loadEventFired', () => done()));
+        const loaded = within(WAIT, `${url} did not finish loading in ${WAIT / 1000}s`, (done, fail) => { failLoad = fail; on.set('Page.loadEventFired', () => done()); });
         loaded.catch(() => { }); // a navigation error below is the cause to report, not this wait
         const nav = await send('Page.navigate', { url });
         if (nav.errorText)

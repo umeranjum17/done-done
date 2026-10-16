@@ -160,7 +160,7 @@ One verify run proves it did not change the inputs it reads (fixtures, data file
 
 ### DOM assertions
 
-A capture judge misses page-level defects. With a `dom` block, a run also fails when a captured screen's page overflows the viewport horizontally, logged a console error, had a failed request or shows squashed text:
+A capture judge misses page-level defects. With a `dom` block, a run also fails when a captured screen's page overflows the viewport horizontally, logged a console error, had a failed request or shows squashed, clipped or cut-off UI:
 
 ```yaml
 dom:

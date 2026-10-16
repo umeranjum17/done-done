@@ -11,26 +11,64 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+        with:
+          fetch-depth: 2
+      # Docs-only PRs skip the heavy steps but the job still runs and ends
+      # green, so the required check reports. Never use paths-ignore here:
+      # a required check that never starts blocks the PR forever.
+      - id: changes
+        run: |
+          docs_only=true
+          for f in $(git diff --name-only HEAD^1 HEAD); do
+            case "$f" in
+              src/*|test/*|journeys/*|skills/*|integrations/*|dist/*|.github/*) docs_only=false ;;
+              docs/*|*.md|LICENSE) ;;
+              *) docs_only=false ;;
+            esac
+          done
+          echo "docs_only=$docs_only" | tee -a "$GITHUB_OUTPUT"
+      - if: steps.changes.outputs.docs_only != 'true'
+        uses: actions/setup-node@v4
         with:
           node-version: 24
           cache: npm
-      - run: npm ci
-      - run: npm test
-      - run: npm run build:skill -- --check
+      - if: steps.changes.outputs.docs_only != 'true'
+        run: npm ci
+      - if: steps.changes.outputs.docs_only != 'true'
+        run: npm test
+      - if: steps.changes.outputs.docs_only != 'true'
+        run: npm run build:skill -- --check
   proof:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+        with:
+          fetch-depth: 2
+      # Same docs-only gate as the test job.
+      - id: changes
+        run: |
+          docs_only=true
+          for f in $(git diff --name-only HEAD^1 HEAD); do
+            case "$f" in
+              src/*|test/*|journeys/*|skills/*|integrations/*|dist/*|.github/*) docs_only=false ;;
+              docs/*|*.md|LICENSE) ;;
+              *) docs_only=false ;;
+            esac
+          done
+          echo "docs_only=$docs_only" | tee -a "$GITHUB_OUTPUT"
+      - if: steps.changes.outputs.docs_only != 'true'
+        uses: actions/setup-node@v4
         with:
           node-version: 24
           cache: npm
-      - run: npm ci
-      - run: npx tsc
+      - if: steps.changes.outputs.docs_only != 'true'
+        run: npm ci
+      - if: steps.changes.outputs.docs_only != 'true'
+        run: npx tsc
       # The merge gate: the repo proves itself with its own tool. The e2e
       # journey drives the built CLI against a throwaway fixture repo
       # (doctor, run, check, receipt), then verify checks that evidence
       # and records the receipt for HEAD. --no-judge keeps it deterministic;
       # --claim-id ci names the claim on CI's detached HEAD.
-      - run: node dist/cli.js verify e2e --foreground --no-judge --claim-id ci --outcome "the done-done CLI proves a fixture repo end to end"
+      - if: steps.changes.outputs.docs_only != 'true'
+        run: node dist/cli.js verify e2e --foreground --no-judge --claim-id ci --outcome "the done-done CLI proves a fixture repo end to end"

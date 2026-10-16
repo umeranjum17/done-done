@@ -1,0 +1,19 @@
+# no-mistakes repository config for done-done. test.instructions is honored
+# only from the default-branch copy of this file.
+test:
+  instructions: |
+    Run only the tests for the parts this change touches, plus one user
+    journey. CI runs the full suite (npm test and the e2e proof) on every PR:
+    do not run it again here.
+
+    Changed-part tests, chosen from the diff against the base branch:
+      - build first: `npx tsc`
+      - src/cli.ts, src/ checks, run, receipt or config code:
+        `node --test test/cli.test.mjs`
+      - README.md, docs/reference.md, skills/ or src/skill.ts (documented
+        commands and the skill): `node --test test/conformance.test.mjs` and
+        `npm run build:skill -- --check`
+      - other Markdown or LICENSE only: no tests
+    Name the tests you ran and the tests you skipped, with the reason.
+
+    The one user journey: `node dist/cli.js verify e2e --foreground --no-judge`

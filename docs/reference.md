@@ -182,11 +182,11 @@ With your browser tool, for example chrome-devtools-axi: `overflow` and `overflo
 
 ### Look check
 
-`done-done look` is the look step a journey calls on a web page. It opens the page in headless Chrome at a phone viewport, measures the look defects in the DOM, writes the screenshot with its page-check record next to it, and exits 1 on any hit, naming the element, the kind and its text. No judge and no model: the same page gives the same answer.
+`done-done look` is the look step a journey calls on a web page. It opens the page in headless Chrome at a 390x844 phone viewport (a mobile device at 1x scale), measures the look defects in the DOM, writes the screenshot with its page-check record next to it, and exits 1 on any hit, naming the element, the kind and its text. No judge and no model: the same page gives the same answer.
 
 ```sh
 done-done look http://127.0.0.1:3000/inbox --out "$DONE_DONE_EVIDENCE_ROOT/inbox.png"
-done-done look ./public/inbox.html --viewport 1280x800      # a path on disk opens as its file:// URL
+done-done look ./public/inbox.html                     # a path on disk opens as its file:// URL
 ```
 
 A journey in `.done-done.yaml` that calls it (one command per screen, `&&` between them, so the first hit stops the journey):
@@ -212,7 +212,6 @@ journeys:
 
   Something entirely outside its container or the viewport is hidden on purpose (a closed drawer, a visually hidden label) and is not a hit; a cut element's children are not listed again. Content in a scrolling container (`overflow: auto` or `scroll`, such as a carousel) scrolls into view and is not clipped.
 - **What it writes.** `--out <file.png>` (default `look.png` in `$DONE_DONE_EVIDENCE_ROOT` inside a journey, else in the current folder) gets the viewport screenshot, exactly the viewport size in pixels, and `<file>.dom.json` next to it the page-check record of [DOM assertions](#dom-assertions), with the page's console errors and failed requests too. look itself fails only on the four kinds above; with a `dom` block, verify's check also reads the record and applies its allow lists to console errors and failed requests.
-- **Viewport.** `--viewport <width>x<height>` in CSS pixels, default `390x844` (a phone), as a mobile device at 1x scale. Run it once per width your change touches, with a different `--out` each.
 - **Chrome.** look starts its own headless Chrome or Chromium (`google-chrome`, `google-chrome-stable`, `chromium` or `chromium-browser` on PATH, or `DONE_DONE_CHROME` naming the binary) with a throwaway profile, and removes both when it ends. It runs Chrome without its sandbox so it starts in containers and CI, so point it at your own app, not untrusted sites. No Chrome is a usage error (exit 2) that says how to install or point to one; a page that does not load (its network error, or no load event within 30 seconds) is exit 2 with the cause.
 - **Limits.** Only the main frame is measured, not an embedded frame; a transform or `clip-path` that hides part of a box is not seen; nothing is clicked or scrolled first, so drive the page to the state to check (a URL per state) before you call look. Look at the capture too: a defect the DOM cannot see (a stretched image, a colour) is the [design check](#design-check)'s.
 

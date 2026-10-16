@@ -111,7 +111,6 @@ const FLAGS = {
     '--reason "<why>"': 'why (required for approve and skip); kept in the run and its receipt with who answered',
     '--limit <n>': 'how many past runs to list (default all)',
     '--out <file.png>': 'where look writes the screenshot; its page-check record goes next to it as <file>.dom.json (default: look.png in $DONE_DONE_EVIDENCE_ROOT inside a journey, else in the current folder)',
-    '--viewport <width>x<height>': 'the CSS pixel viewport look opens the page at (default 390x844)',
     '--agent <agent>': 'the coding agent done-done starts (claude, codex, opencode, pi, gemini or acp:<target>), saved as agent in ~/.done-done/config.yaml; without it, init asks in a terminal',
     '--model <model>': 'with --agent: that agent\'s model, saved as agent_config.<agent>.model (opencode: provider/model)',
     '--judge <agent>': `the judge done-done starts (${JUDGES.join(' or ')}), saved as judge.route in ~/.done-done/config.yaml; never the agent and model that did the work; without it, init asks in a terminal`,
@@ -192,8 +191,8 @@ const COMMANDS = {
   passed, 1 a screen failed, 3 none failed but one is unsure`],
     },
     look: {
-        usage: [['done-done look <url> [--out <file.png>] [--viewport <width>x<height>]', 'open a page in headless Chrome at a phone viewport, capture it with its page-check record, and fail on any squashed, clipped or cut-off UI']],
-        flags: ['--out <file.png>', '--viewport <width>x<height>'],
+        usage: [['done-done look <url> [--out <file.png>]', 'open a page in headless Chrome at a phone viewport, capture it with its page-check record, and fail on any squashed, clipped or cut-off UI']],
+        flags: ['--out <file.png>'],
         more: [`look: one deterministic step a journey calls as its command or inside its script; no judge, no model. It measures horizontal
   overflow, squashed text, text clipped by its container and elements cut off by the left, right or top edge, writes the
   screenshot and its .dom.json record, and exits 1 naming each element, kind and text, 0 when there is none. A hit always
@@ -3330,31 +3329,28 @@ async function cmdDoctor(argv) {
 }
 // The design check: every named screen, and each --mock screen, judged for visual defects.
 async function cmdLook(argv) {
-    const { values, positionals } = parseArgs({ args: argv, options: { out: { type: 'string' }, viewport: { type: 'string' } }, allowPositionals: true });
+    const { values, positionals } = parseArgs({ args: argv, options: { out: { type: 'string' } }, allowPositionals: true });
     if (positionals.length !== 1)
         throw new UsageError('look needs one page URL', 'Re-run with the page to check: done-done look <url>');
     // A path to a page on disk opens as its file:// URL.
     const url = !/^[a-z][\w+.-]*:/i.test(positionals[0]) && existsSync(positionals[0]) ? pathToFileURL(resolve(positionals[0])).href : positionals[0];
-    const size = /^(\d+)x(\d+)$/.exec(values.viewport ?? '390x844');
-    if (!size || +size[1] < 1 || +size[2] < 1)
-        throw new UsageError(`--viewport ${values.viewport} must be <width>x<height> in CSS pixels, such as 390x844`);
     const capture = resolve(values.out ?? join(process.env.DONE_DONE_EVIDENCE_ROOT || '.', 'look.png'));
     if (!capture.endsWith('.png'))
         throw new UsageError(`--out ${values.out} must be a .png file`);
     mkdirSync(dirname(capture), { recursive: true });
-    const record = await look(url, capture, +size[1], +size[2]);
+    const record = await look(url, capture, 390, 844);
     const hits = lookIssues(record);
     const shown = cap(hits);
     emit({
         command: 'look',
         result: hits.length ? 'fail' : 'pass',
         url,
-        viewport: `${size[1]}x${size[2]}`,
+        viewport: '390x844',
         capture,
         record: domRecord(capture),
         hits: shown.items,
         ...(shown.omitted && { hits_omitted: shown.omitted }),
-        help: hits.length ? [`Fix each element named above so it fits the ${size[1]} px wide screen, then re-run: done-done look ${quote(positionals[0])}${values.viewport ? ` --viewport ${values.viewport}` : ''}${values.out ? ` --out ${quote(values.out)}` : ''}`] : ['No squashed, clipped or cut-off UI on this page; look at the capture to check the rest'],
+        help: hits.length ? [`Fix each element named above so it fits the 390 px wide screen, then re-run: done-done look ${quote(positionals[0])}${values.out ? ` --out ${quote(values.out)}` : ''}`] : ['No squashed, clipped or cut-off UI on this page; look at the capture to check the rest'],
     });
     return hits.length ? FAIL : PASS;
 }

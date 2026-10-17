@@ -3289,7 +3289,7 @@ async function cmdDoctor(argv) {
             check: 'judge_choice',
             status: apartOk ? 'ok' : 'warning',
             detail: `${choice.route} (model ${choice.model}; from config) judges the author ${choice.author.agent} (model ${choice.author.model || 'none'}): ${apart}${accepted}`,
-            fix: apartOk ? '' : `Ask the user whether to judge with another agent (${JUDGES.join(' or ')}) and save it: done-done init --judge <agent> --judge-model <model>`,
+            fix: apartOk ? '' : `Ask the user whether to judge with another agent or model (${JUDGES.join(' or ')}) and save it: done-done init --judge <agent> --judge-model <model>`,
         });
     }
     if (values.probe && !agent)

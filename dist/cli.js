@@ -69,11 +69,12 @@ const MAINTAIN_TEXT = `maintain reads the verify skill and the source; HEAD, git
   untouched; exit 0), or blocked (ask-user findings, a guard, or every attempt used, with the findings that remain; no branch)`;
 const DOCTOR_TEXT = `doctor changes nothing except the --probe call record (the agent itself may keep its own session files) and exits 0 when every required item is ok, 2 otherwise.
   required: git (inside a repository), config (a valid .done-done.yaml), evidence_root (writable), agent (the agent the user
-  set and its model; missing when none is set, with the command that saves the user's choice), judge (below).
+  set and its model; missing when none is set, with the command that saves the user's choice), judge (the judge route is ready:
+  for claude-code an executable claude binary, a sign-in folder and the judge kit, for answerer:<agent> that agent's CLI and the
+  kit, for openai:key OPENAI_API_KEY and the kit; doctor does not call the model; missing when none is set, with the command
+  that saves the user's choice).
   also listed: verify_skill (.agents/skills/verify-<app>/), agent_settings (agent, model, effort,
-  args, path and agent_timeout, each with the file it came from: the global config, .done-done.yaml or default); judge (the judge route is ready: for claude-code an
-  executable claude binary, a sign-in folder and the judge kit, for answerer:<agent> that agent's CLI and the kit, for openai:key
-  OPENAI_API_KEY and the kit; doctor does not call the model; missing when none is set, with the command that saves the user's choice),
+  args, path and agent_timeout, each with the file it came from: the global config, .done-done.yaml or default),
   judge_choice (the judge, and how far it is from the author: another agent, another model, or session-only), ffprobe (video evidence only).
   --probe also asks the agent one JSON-schema question (one call at the agent's model: its cheap default where it has one, else its own; set agent_config.<agent>.model to choose; its record goes to
   $DONE_DONE_HOME/agents/) and then requires a valid answer.

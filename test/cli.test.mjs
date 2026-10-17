@@ -3419,7 +3419,7 @@ test('doctor finds agent, judge and ffprobe binaries from PATH; a missing ffprob
   assert.deepEqual([same.checks[7].status, same.checks[7].detail], ['ok', 'claude-code (model claude-haiku-5-5; from config) judges the author claude (model claude-haiku-5-5): the author\'s agent and model in a fresh session (session-only independence)']);
 });
 
-test('with no agent installed, the judge is still kept apart from the author the user set: doctor names it, the agent row still names the first agent', () => {
+test('with no agent installed, a judge of another agent than the author is ok: doctor names it, the agent row still names the first agent', () => {
   const { repo, env } = setup();
   const claudeHome = join(env.DONE_DONE_HOME, 'claude');
   mkdirSync(claudeHome, { recursive: true });

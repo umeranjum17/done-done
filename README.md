@@ -121,7 +121,7 @@ git add .done-done.yaml
 git commit -m "Add done-done"
 ```
 
-A `run -- <command>` whose command matches no recorded journey still runs, but its result hints that the recipe is not in the repo. For a proof you drive by hand or by your agent instead of a journey, `done-done run --open` prints a run id and a folder to capture into, and `done-done run --close <run-id>` seals it ([how](docs/reference.md#run-instance-harness)).
+A `run -- <command>` whose command matches no recorded journey still runs, but its result hints that the recipe is not in the repo. For a proof you drive by hand or by your agent instead of a journey, `done-done run --open` prints a run id and a folder to capture into, and `done-done run --close <run-id>` seals it ([how](docs/reference.md#run-a-journey)).
 
 At any point, `done-done doctor` checks the setup and changes nothing except the `--probe` call record. Each item reports `ok`, `warning` or `missing` with the exact fix command; an agent you have not set yet is `missing`, with the command that saves your choice. `done-done doctor --probe` also asks the agent one question to prove it answers. The items are listed in the [reference](docs/reference.md#check-the-setup).
 

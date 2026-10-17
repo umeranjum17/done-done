@@ -3865,6 +3865,17 @@ const attached = argv.filter((a) => a.startsWith('@')).map((a) => readFileSync(a
 appendFileSync(${JSON.stringify(log)}, JSON.stringify({ agent: 'pi', argv, stdin, attached, cwd: process.cwd() }) + '\\n');
 const n = readFileSync(${JSON.stringify(log)}, 'utf8').trim().split('\\n').length;
 const text = ${JSON.stringify(mode)} === 'bad' || (${JSON.stringify(mode)} === 'retry' && n === 1) ? 'not json at all' : ${JSON.stringify(fenced)};
+// hang: says why on stderr, then goes silent. silent: says why on stderr and exits with no answer.
+// limit: a 429 it keeps retrying, with a line every second.
+if (${JSON.stringify(mode)} === 'limit') {
+  process.stderr.write('Error: 429 weekly usage limit reached, resets at 2026-10-18T00:00:00Z\\n');
+  setInterval(() => process.stderr.write('retrying in 60s\\n'), 1000);
+}
+if (${JSON.stringify(mode)} === 'hang' || ${JSON.stringify(mode)} === 'silent') {
+  process.stderr.write('Warning: Extension package pi-hermes-memory failed to load\\n');
+  if (${JSON.stringify(mode)} === 'silent') process.exit(0);
+  setInterval(() => {}, 1000);
+}
 for (const t of ['session', 'agent_start', 'turn_start']) console.log(JSON.stringify({ type: t }));
 console.log(JSON.stringify({ type: 'message_end', message: { role: 'assistant', content: [{ type: 'text', text }] } }));
 console.log(JSON.stringify({ type: 'agent_end' }));
@@ -3947,6 +3958,27 @@ test('pi is asked again when its answer is not valid JSON, then fails after thre
   assert.equal(failed.code, 2, failed.out);
   assert.match(toon(failed).checks.find((x) => x.check === 'probe').detail, /did not answer with valid JSON after 3 tries/);
   assert.equal(bad.calls().length, 3, 'at most three tries');
+  // A pi that says why on stderr and then goes silent: the probe stops after its idle bound, not the agent_timeout, and quotes the stderr in its reason and its fix line.
+  const hung = stubPiGemini(env, '{"ok":true}', 'hang');
+  const started = Date.now();
+  const stuck = doctorIn(repo, hung.env, 'doctor', '--probe');
+  const stuckProbe = toon(stuck).checks.find((x) => x.check === 'probe');
+  assert.equal(stuck.code, 2, stuck.out);
+  assert.ok(Date.now() - started < 90_000, 'a silent agent is stopped in seconds, not after its agent_timeout');
+  assert.equal(hung.calls().length, 1, 'an idle stop is not asked again');
+  assert.match(stuckProbe.detail, /^pi did not answer: pi printed nothing for 30s; pi stderr: Warning: Extension package pi-hermes-memory failed to load; record /);
+  assert.match(stuckProbe.fix, /^pi stderr: Warning: Extension package pi-hermes-memory failed to load\. Check that pi is signed in/);
+  // A pi that exits with no answer and says why on stderr: the reason quotes that stderr.
+  const quiet = stubPiGemini(env, '{"ok":true}', 'silent');
+  const exited = toon(doctorIn(repo, quiet.env, 'doctor', '--probe')).checks.find((x) => x.check === 'probe');
+  assert.match(exited.detail, /did not answer with valid JSON after 3 tries: no JSON object in the answer: ; pi stderr: Warning: Extension package pi-hermes-memory failed to load; record /);
+  // A 429 the CLI keeps retrying: the probe stops at its first line and names the limit and its reset time, not after the retries.
+  const limited = stubPiGemini(env, '{"ok":true}', 'limit');
+  const started2 = Date.now();
+  const capped = doctorIn(repo, limited.env, 'doctor', '--probe');
+  assert.equal(capped.code, 2, capped.out);
+  assert.ok(Date.now() - started2 < 20_000, 'a rate limit stops the call at once, not after its retries');
+  assert.match(toon(capped).checks.find((x) => x.check === 'probe').detail, /^pi did not answer: pi hit a rate limit and stopped: Error: 429 weekly usage limit reached, resets at 2026-10-18T00:00:00Z; record /);
 });
 
 test('doctor --probe asks gemini with the prompt on stdin, and reports a signed-out gemini with a sign-in fix', () => {

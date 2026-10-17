@@ -17,10 +17,10 @@ ref=$(git symbolic-ref -q --short refs/remotes/origin/HEAD) ||
 git cat-file -e "$ref:.done-done.yaml" 2>/dev/null ||
   echo "merge-gate: no .done-done.yaml at $ref, so done-done uses its default rules; merge the config to $ref first" >&2
 if [ "$pr" = - ]; then
-  done-done check --from "${FM_HOME:?merge-gate: FM_HOME is not set}/data/$id/checks.md" --trusted-ref "$ref" --judge
+  done-done check --from "${FM_HOME:?merge-gate: FM_HOME is not set}/data/$id/checks.md" --trusted-ref "$ref"
 else
   pr_head=$(gh pr view "$pr" --json headRefOid --jq .headRefOid)
   [ "$pr_head" = "$head" ] || { echo "merge-gate: $pr is at $pr_head, not $head; prove and receipt the PR's head" >&2; exit 1; }
-  done-done check --from "$pr" --trusted-ref "$ref" --judge
+  done-done check --from "$pr" --trusted-ref "$ref"
 fi
 done-done receipt --verify "$head"

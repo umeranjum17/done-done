@@ -16,4 +16,5 @@ test:
       - other Markdown or LICENSE only: no tests
     Name the tests you ran and the tests you skipped, with the reason.
 
-    The one user journey: `node dist/cli.js verify e2e --foreground --no-judge`
+    The one user journey: `node dist/cli.js run e2e` (it records the run; done-done
+    gives no verdict without a judge, and the e2e fixture judges with a stub)

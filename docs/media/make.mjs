@@ -23,6 +23,12 @@ const env = {
 mkdirSync(join(repo, 'src'), { recursive: true });
 mkdirSync(join(home, 'bin'));
 writeFileSync(join(home, 'bin', 'done-done'), `#!/bin/sh\nexec "${process.execPath}" "${CLI}" "$@"\n`, { mode: 0o755 });
+// done-done gives no result without its judge. The demo's judge is a stub (no model runs) that says the screen shows the
+// outcome, set as the user would set one, through agent_path_override.
+const answer = JSON.stringify({ relevance: { probabilities: { correct: 0.95, wrong: 0.03, unclear: 0.02 }, rationale: 'The screen shows the synced note.', personReason: 'The screen shows the synced note.' } });
+writeFileSync(join(home, 'bin', 'demo-judge'), `#!${process.execPath}\nrequire('node:fs').readFileSync(0, 'utf8');\nprocess.stdout.write(JSON.stringify({ response: ${JSON.stringify(answer)} }));\n`, { mode: 0o755 });
+mkdirSync(env.DONE_DONE_HOME);
+writeFileSync(join(env.DONE_DONE_HOME, 'config.yaml'), `judge:\n  route: answerer:gemini\n  model: demo-judge\nagent_path_override: { gemini: ${JSON.stringify(join(home, 'bin', 'demo-judge'))} }\n`);
 writeFileSync(join(repo, 'src', 'sync.js'), 'export const sync = () => "ok";\n');
 const yaml = 'app: notes\njourneys:\n  sync:\n    command: node capture.mjs\n';
 writeFileSync(join(repo, '.done-done.yaml'), yaml);
@@ -86,7 +92,7 @@ const PROMPT = '~/notes $ ';
 // One output line -> [class, text] spans.
 function spans(line) {
   let m;
-  if ((m = line.match(/^(result: )(pass.*)$/))) return [['d', m[1]], ['p b', m[2]]];
+  if ((m = line.match(/^(result: )(pass.*|recorded.*)$/))) return [['d', m[1]], ['p b', m[2]]];
   if ((m = line.match(/^(result: )(fail.*|inconclusive.*)$/))) return [['d', m[1]], ['f b', m[2]]];
   if ((m = line.match(/^(error: )(.*)$/))) return [['f b', m[1]], ['', m[2]]];
   if ((m = line.match(/^(\s*)(fail|inconclusive),(.*)$/))) return [['', m[1] + m[2]], ['f b', m[3]]];

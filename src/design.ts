@@ -143,8 +143,8 @@ function image(c: Capture): { mime: string; bytes: Buffer } | string {
 
 // records: where each answerer call leaves its record (design-<stamp>-<n>-<request>.agent.json), never the prompt.
 // The judge's answer is cached in the run store per exact input (screen and mock bytes, questions, route and model), so
-// the same input gets the same verdict on every run: one request per new input, none for a repeat. An answer that never
-// came or cannot be read is not kept.
+// the same input gets the same verdict on every run: one request per new input, none for a repeat. A judge that does not
+// answer stops the command with its cause.
 export async function design(cfg: Config, choice: JudgeChoice, screens: Screen[], records: string): Promise<Judged[]> {
   const dir = join(home(), 'runs', cfg.app, 'design');
   const stamp = new Date().toISOString().replace(/[:.]/g, '-');
@@ -158,7 +158,7 @@ export async function design(cfg: Config, choice: JudgeChoice, screens: Screen[]
       out.push({ ...row, verdict: 'fail', defects: [], reason: `${s.name}: ${s.media.why}` });
       continue;
     }
-    // A measured strip fails the screen even when the judge cannot be asked or does not answer.
+    // A measured strip fails the screen even when the judge cannot be sent it.
     const strips = blankStrips(s);
     const defects = strips.defects;
     let reason: string | undefined;
@@ -176,14 +176,11 @@ export async function design(cfg: Config, choice: JudgeChoice, screens: Screen[]
         call = `${records}/design-${stamp}-${n + 1}`;
         if (!backends.has(withMock)) backends.set(withMock, await backend(cfg, choice, (request) => `${call}-${request}.agent.json`, questions(withMock), ASK_ATTEMPTS));
         const answers = await askJudge(cfg, backends.get(withMock)!, choice, { screen: withMock ? 'a screenshot next to its approved mock' : 'a screenshot' }, questions(withMock), { screen: shot, ...(mock && { mock }) });
-        if (typeof answers === 'string') reason = answers;
-        else {
-          judge = {
-            defects: Object.entries(answers).filter(([, a]) => a.answer === 'defect').map(([kind, a]) => ({ kind, where: (a.personReason || a.rationale || 'not named').slice(0, 200) })),
-            unsure: Object.entries(answers).filter(([, a]) => a.abstained).map(([kind]) => kind),
-          };
-          writeCache(dir, key, { ...judge, route: choice.route, model: choice.model });
-        }
+        judge = {
+          defects: Object.entries(answers).filter(([, a]) => a.answer === 'defect').map(([kind, a]) => ({ kind, where: (a.personReason || a.rationale || 'not named').slice(0, 200) })),
+          unsure: Object.entries(answers).filter(([, a]) => a.abstained).map(([kind]) => kind),
+        };
+        writeCache(dir, key, { ...judge, route: choice.route, model: choice.model });
       }
       if (judge) {
         defects.push(...judge.defects);

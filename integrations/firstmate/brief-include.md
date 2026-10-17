@@ -23,7 +23,9 @@ wherever this text or the skill says `done-done`. If done-done cannot run, repor
    Put it at the end of the PR body. With no PR, put it in `checks.md` in your task's data folder outside the
    worktree (`<firstmate home>/data/<task-id>/checks.md`).
 4. From the repo root, `done-done check --from <the PR URL or that checks.md>` must exit 0. Then run
-   `done-done receipt --from <the same>` to record the pass for your head commit.
+   `done-done receipt --from <the same>` to record the pass for your head commit. Both start done-done's judge,
+   which reads each capture; there is no pass without it. If they say no judge is set, ask the user which judge and
+   model to use and run the command it prints. If the judge fails, report its error; never call the task done.
 5. The evidence and the receipt live outside the repo (`~/.done-done/evidence/<app>`), so they outlive the
    worktree. Only if the repo's `.done-done.yaml` sets `evidence.root` inside the repo, copy the receipt file
    `receipt` printed and every cited file to `proof/` in your task's data folder before teardown.

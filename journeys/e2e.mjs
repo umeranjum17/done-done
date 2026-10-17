@@ -60,11 +60,19 @@ try {
   const dd = (...args) => drive(0, ...args);
   const sh = (...a) => execFileSync('git', a, { cwd: repo, env, encoding: 'utf8' });
 
-  // Fixture repo: minimal app with its own journeys, judge off (deterministic). The look journeys call the look step on a
-  // phone screen with a clipped card title and on the same screen fixed.
+  // Fixture repo: minimal app with its own journeys. done-done gives no result without its judge, so the fixture's judge is a
+  // stub (deterministic, never a model) that says each capture shows the outcome, and its agent a stub doctor finds but no
+  // step here starts. The look journeys call the look step on a phone screen with a clipped card title and on the same
+  // screen fixed.
   // The committed recipe names the CLI and the fixture pages through env, so it holds no path of this checkout.
   const look = (page) => `node "\${DONE_DONE_TEST_CLI:?}" look "\${DONE_DONE_LOOK_FIXTURES:?}/${page}.html" --out "$DONE_DONE_EVIDENCE_ROOT/${page}.png"`;
-  writeFileSync(join(repo, '.done-done.yaml'), `app: fixture\njudge:\n  enabled: false\njourneys:\n  shots:\n    command: node make-shots.mjs \${RUN_ID}\n${['clipped', 'fixed'].map((p) => `  look-${p}:\n    command: ${JSON.stringify(look(p))}\n`).join('')}`);
+  const stub = (name, body) => (writeFileSync(join(tmp, name), `#!${process.execPath}\n${body}\n`, { mode: 0o755 }), join(tmp, name));
+  const answer = JSON.stringify({ relevance: { probabilities: { correct: 0.95, wrong: 0.03, unclear: 0.02 }, rationale: 'It shows the outcome.', personReason: 'It shows the outcome.' } });
+  const judge = stub('judge-gemini', `require('node:fs').readFileSync(0, 'utf8');\nprocess.stdout.write(JSON.stringify({ response: ${JSON.stringify(answer)} }));`);
+  const agent = stub('agent-opencode', 'process.exit(1);');
+  mkdirSync(home, { recursive: true });
+  writeFileSync(join(home, 'config.yaml'), `agent: opencode\nagent_config:\n  opencode: { model: stub/agent }\njudge:\n  route: answerer:gemini\n  model: stub-judge\nagent_path_override: { opencode: ${JSON.stringify(agent)}, gemini: ${JSON.stringify(judge)} }\n`);
+  writeFileSync(join(repo, '.done-done.yaml'), `app: fixture\njourneys:\n  shots:\n    command: node make-shots.mjs \${RUN_ID}\n${['clipped', 'fixed'].map((p) => `  look-${p}:\n    command: ${JSON.stringify(look(p))}\n`).join('')}`);
   // The screen is committed beside the recipe and named relative to it, so the fixture holds no absolute path.
   writeFileSync(join(repo, 'screen.png'), png(3));
   writeFileSync(join(repo, 'make-shots.mjs'),
@@ -99,9 +107,9 @@ try {
   };
   follow(selected);
   dd('check', '--citation-base', repo, '--outcome', 'fixture home renders', shot);
-  drive(1, 'check', '--judge', '--citation-base', base, '--outcome', 'fixture home renders', 'missing.png');
+  drive(1, 'check', '--citation-base', base, '--outcome', 'fixture home renders', 'missing.png');
   writeFileSync(join(base, 'stray.log'), 'unrecorded output\n');
-  drive(3, 'check', '--judge', '--citation-base', base, '--outcome', 'fixture home renders', 'stray.log');
+  drive(3, 'check', '--citation-base', base, '--outcome', 'fixture home renders', 'stray.log');
   const body = join(tmp, 'checks.md');
   writeFileSync(body, '## Checks\noutcome: fixture home renders\nrepro: n/a: no bug\nproof: no verify skill - done-done run shots\nevidence: home.png\n');
   // Untracked counterfactual output must not change the caller's tracked identity.

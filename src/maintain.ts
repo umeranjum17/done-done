@@ -321,10 +321,9 @@ async function pass<S>(run: Pick<MaintainRun, 'repo' | 'findings' | 'git_status'
   // Only claude reads the repo with its own tools: its read tools refuse paths outside it, while the other agents'
   // tools cannot be trusted that way, so they get the cited source from plain code.
   const toolless = agent.agent !== 'claude';
-  const toollessReason = agent.agent === 'gemini' ? 'gemini cannot read tool-less yet, since its none mode is read-only plan mode, not tool-free' : editOnlyReason(agent.agent);
-  const toollessBlock = agent.path && toollessReason ? `source-wave: ${toollessReason}; use claude, opencode, pi or acp` : '';
-  if (toollessBlock) add({ kind: 'coverage', file: rel(featDir), what: toollessBlock });
-  const agentBlock = !agent.path ? `source-wave: no agent done-done can start (${notStartable(agent.agent, agent.override)}); run done-done doctor` : toollessBlock;
+  // maintain checks this before the run starts; an agent that went away since still ends the run blocked.
+  const agentBlock = readerProblem(agent);
+  if (agentBlock && agent.path) add({ kind: 'coverage', file: rel(featDir), what: agentBlock });
   let calls = 0;
   const record = (name: string) => join(dir, 'agents', `${prefix}${++calls}-${name}.json`);
   const read = agentBlock ? [] : features.slice(0, MAX_CALLS - 1);
@@ -424,6 +423,13 @@ Recently changed files (git log since ${CHURN_SINCE}, most recent first${churnAl
   return counted.length ? { result: 'drift', reason: `${counted.length} findings`, sources } : { result: 'clean' };
 }
 
+// Why the agent the user set cannot read the source for maintain, or '' when it can.
+export function readerProblem(agent: ReturnType<typeof selectAgent>): string {
+  if (!agent.path) return `source-wave: no agent done-done can start (${notStartable(agent.agent, agent.override)}); run done-done doctor`;
+  const why = agent.agent === 'gemini' ? 'gemini cannot read tool-less yet, since its none mode is read-only plan mode, not tool-free' : editOnlyReason(agent.agent);
+  return why ? `source-wave: ${why}; use claude, opencode, pi or acp` : '';
+}
+
 // Triage: the judge (the user's, never the author or the fixer) answers each finding's question; only the `fix` answer,
 // given with sureness, leaves the finding to the fixer. Any other answer, or an unsure one, asks the user, with the judge's reason.
 export type Triage = { question: string; options: Record<string, string>; fix: string };
@@ -440,12 +446,11 @@ const excerpt = (repo: string, tracked: string[], s: Source | undefined) => {
   return text.split('\n').slice(Math.max(0, s.line - 1 - EXCERPT_LINES), s.line + EXCERPT_LINES).map((l, i) => `${Math.max(1, s.line - EXCERPT_LINES) + i}: ${l}`).join('\n');
 };
 
-// Triage (see Triage): the findings the judge does not answer `fix` for, each marked ask-user; or why the judge did not answer.
-export async function triage(cfg: Config, choice: JudgeChoice, findings: Finding[], flow: Triage, state: unknown, record: string): Promise<Finding[] | string> {
+// Triage (see Triage): the findings the judge does not answer `fix` for, each marked ask-user. A judge that does not answer throws.
+export async function triage(cfg: Config, choice: JudgeChoice, findings: Finding[], flow: Triage, state: unknown, record: string): Promise<Finding[]> {
   if (!findings.length) return [];
   const questions: Record<string, Question> = Object.fromEntries(findings.map((f) => [f.id, { kind: 'choice', instructions: `Finding ${f.id} ${flow.question}`, options: flow.options, floor: 0.8, personReason: true }]));
   const answers = await askJudge(cfg, await backend(cfg, choice, () => record, questions, TRIAGE_ATTEMPTS), choice, state, questions, {});
-  if (typeof answers === 'string') return answers;
   return findings.flatMap((f) => {
     const a = answers[f.id];
     if (!a.abstained && a.answer === flow.fix) return [];
@@ -465,7 +470,7 @@ const SKILL_TRIAGE: Triage = {
   },
   fix: 'skill',
 };
-async function triageDrift(cfg: Config, choice: JudgeChoice, repo: string, findings: Finding[], sources: Map<string, Source>, record: string): Promise<Finding[] | string> {
+async function triageDrift(cfg: Config, choice: JudgeChoice, repo: string, findings: Finding[], sources: Map<string, Source>, record: string): Promise<Finding[]> {
   const drift = findings.filter((f) => f.kind === 'drift');
   if (!drift.length) return [];
   const tracked = git(repo, 'ls-files', '-z').split('\0').filter(Boolean);
@@ -537,7 +542,7 @@ async function fix<S>(run: MaintainRun, dir: string, cfg: Config, h: Harness<S>,
     return { result: 'blocked', reason: `dirty: uncommitted changes to tracked files (${named(dirty)}); commit them, or set auto_fix: { maintain: 0 }, then run again` };
   }
   const agent = selectAgent(cfg);
-  const choice = selectJudge(cfg, agent, true);
+  const choice = selectJudge(cfg, agent);
   const checkout = repoState(repo);
   const wt = join(dir, 'fix');
   const scratch = join(dir, 'tmp');
@@ -550,8 +555,7 @@ async function fix<S>(run: MaintainRun, dir: string, cfg: Config, h: Harness<S>,
       const asks = await triageDrift(cfg, choice, wt, open, sources, join(dir, 'agents', `triage-${k}.json`));
       judged.push({ attempt: k, ask_user: asks });
       h.log('triage', { judge: { route: choice.route, model: choice.model, independence: choice.independence }, rounds: judged });
-      h.set(step, typeof asks === 'string' ? 'failed' : 'completed');
-      if (typeof asks === 'string') return { result: 'blocked', reason: `triage: ${asks}` };
+      h.set(step, 'completed');
       if (asks.length) {
         run.findings = open.map((f) => asks.find((a) => a.id === f.id) ?? f);
         return { result: 'blocked', reason: `ask-user: the judge did not call ${asks.length} ${asks.length === 1 ? 'finding' : 'findings'} (${asks.map((a) => a.id).join(', ')}) a skill that is out of date, so the user decides` };

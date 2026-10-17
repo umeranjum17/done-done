@@ -12,19 +12,19 @@ text{font:16px ui-monospace,SFMono-Regular,'SF Mono',Menlo,Consolas,'Liberation 
 <clipPath id="body"><rect x="1" y="41" width="503" height="436"/></clipPath>
 <g clip-path="url(#body)"><text xml:space="preserve" x="22" y="72" textLength="268.8" lengthAdjust="spacing"><tspan class="c">~/notes $ </tspan><tspan class="b">done-done run sync</tspan></text>
 <text xml:space="preserve" x="22" y="96" textLength="115.2" lengthAdjust="spacing"><tspan class="d">command: </tspan>run</text>
-<text xml:space="preserve" x="22" y="120" textLength="115.2" lengthAdjust="spacing"><tspan class="d">result: </tspan><tspan class="p b">pass</tspan></text>
-<text xml:space="preserve" x="22" y="144" textLength="384.0" lengthAdjust="spacing"><tspan class="d">run_id: </tspan>20261013T161405Z-1cb99c01-0f4d05</text>
-<text xml:space="preserve" x="22" y="168" textLength="460.8" lengthAdjust="spacing"><tspan class="d">commit: </tspan>1cb99c0116e4e573148cc37a6135bb75f5cbba00</text>
+<text xml:space="preserve" x="22" y="120" textLength="153.6" lengthAdjust="spacing"><tspan class="d">result: </tspan><tspan class="p b">recorded</tspan></text>
+<text xml:space="preserve" x="22" y="144" textLength="384.0" lengthAdjust="spacing"><tspan class="d">run_id: </tspan>20261017T141004Z-b9d3f9df-ef58e3</text>
+<text xml:space="preserve" x="22" y="168" textLength="460.8" lengthAdjust="spacing"><tspan class="d">commit: </tspan>b9d3f9dfe2fe843806f203255ca55d217486c2ed</text>
 <text xml:space="preserve" x="22" y="192" textLength="115.2" lengthAdjust="spacing"><tspan class="d">dirty: </tspan>false</text>
 <text xml:space="preserve" x="22" y="216" textLength="76.8" lengthAdjust="spacing"><tspan class="d">files: </tspan>1</text>
 <text xml:space="preserve" x="22" y="240" textLength="451.2" lengthAdjust="spacing"><tspan class="d">record: </tspan>~/.done-done/evidence/notes/.done-done/</text>
-<text xml:space="preserve" x="22" y="264" textLength="441.6" lengthAdjust="spacing">    runs/20261013T161405Z-1cb99c01-0f4d05.json</text>
+<text xml:space="preserve" x="22" y="264" textLength="441.6" lengthAdjust="spacing">    runs/20261017T141004Z-b9d3f9df-ef58e3.json</text>
 <text xml:space="preserve" x="22" y="288" textLength="393.6" lengthAdjust="spacing"><tspan class="d">evidence[1]: </tspan>~/.done-done/evidence/notes/</text>
-<text xml:space="preserve" x="22" y="312" textLength="441.6" lengthAdjust="spacing">    20261013T161405Z-1cb99c01-0f4d05/after.png</text>
+<text xml:space="preserve" x="22" y="312" textLength="441.6" lengthAdjust="spacing">    20261017T141004Z-b9d3f9df-ef58e3/after.png</text>
 <text xml:space="preserve" x="22" y="336" textLength="412.8" lengthAdjust="spacing"><tspan class="d">help[1]: </tspan>"Check this proof: done-done check</text>
 <text xml:space="preserve" x="22" y="360" textLength="364.8" lengthAdjust="spacing">    --outcome \"&lt;what you proved&gt;\" ~/</text>
 <text xml:space="preserve" x="22" y="384" textLength="288.0" lengthAdjust="spacing">    .done-done/evidence/notes/</text>
-<text xml:space="preserve" x="22" y="408" textLength="451.2" lengthAdjust="spacing">    20261013T161405Z-1cb99c01-0f4d05/after.png"</text>
+<text xml:space="preserve" x="22" y="408" textLength="451.2" lengthAdjust="spacing">    20261017T141004Z-b9d3f9df-ef58e3/after.png"</text>
 <text xml:space="preserve" x="22" y="432" textLength="451.2" lengthAdjust="spacing">  synced a note on two devices, saved after.png</text>
 <text xml:space="preserve" x="22" y="456" textLength="57.6" lengthAdjust="spacing"><tspan class="d">exit 0</tspan></text></g>
 </svg>

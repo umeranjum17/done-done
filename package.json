@@ -10,13 +10,11 @@
   "keywords": ["axi", "done", "proof", "evidence", "screenshot", "verification", "cli", "agent"],
   "bin": { "done-done-axi": "dist/cli.js", "done-done": "dist/cli.js" },
   "files": ["dist", "!dist/skill.js", "skills", "docs", "integrations"],
-  "engines": { "node": ">=22.5" },
+  "engines": { "node": ">=22.18" },
   "scripts": {
     "build:skill": "tsc && node dist/skill.js",
     "test": "tsc && node --test && test -z \"$(git status --porcelain --untracked-files=all -- dist)\""
   },
-  "dependencies": { "@toon-format/toon": "^4.4.0", "jpeg-js": "^0.4.4", "yaml": "^2.9.1" },
-  "peerDependencies": { "@byokit/decide": "^0.8.0" },
-  "peerDependenciesMeta": { "@byokit/decide": { "optional": true } },
-  "devDependencies": { "@byokit/decide": "^0.8.0", "@types/node": "^26.6.5", "typescript": "^7.0.2" }
+  "dependencies": { "@byokit/decide": "^0.8.0", "@toon-format/toon": "^4.4.0", "jpeg-js": "^0.4.4", "yaml": "^2.9.1" },
+  "devDependencies": { "@types/node": "^26.6.5", "typescript": "^7.0.2" }
 }

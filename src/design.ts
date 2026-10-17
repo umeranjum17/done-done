@@ -7,7 +7,7 @@ import { askJudge, backend, type Capture, type Judge, prepare, readCache, screen
 import { decodePixels } from './media.js';
 
 // The design check: one judge request per screen, alone or next to its approved mock, with one question per defect
-// kind. It goes through the same BYOKit routes and judge choice as the relevance judge, so the judge is never the author.
+// kind. It goes through the same BYOKit routes and judge choice as the relevance judge: any judge the user set runs, the author's own too.
 // A blank strip along an edge is also measured from the pixels, since that is a fact a cheap model can explain away.
 
 export type Screen = Capture & { mock?: Capture };

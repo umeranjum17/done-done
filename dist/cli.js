@@ -170,7 +170,7 @@ const COMMANDS = {
     verify: {
         usage: [
             ['done-done verify [<journey>] --outcome "<what a user can now do>" [--claim-id <id>]', 'drive the journey in a run that outlives this command, check its evidence, judge each capture and record a receipt'],
-            ['done-done verify --outcome "<claim>" [--feature <name>]', 'with no journey, the author agent drives a verify skill feature and the judge (never the author) judges its captures'],
+            ['done-done verify --outcome "<claim>" [--feature <name>]', 'with no journey, the author agent drives a verify skill feature and the judge the user set judges its captures'],
             ['done-done verify [<journey>] --outcome "<claim>" --no-wait | --wait | --foreground', 'return at once, wait until the run ends or waits at its gate (default), or run in this process (CI)'],
         ],
         flags: ['--outcome "<what a user can now do>"', '--feature <name>', '--claim-id <id>', '--wait', '--no-wait', '--foreground'],
@@ -184,7 +184,7 @@ const COMMANDS = {
     design: {
         usage: [['done-done design <screens...> [--mock <screen>=<mock>]', 'a judge looks at each PNG/JPEG screen, alone or next to its mock, and fails it on visual defects']],
         flags: ['--mock <screen>=<mock>'],
-        more: [`design: one judge request per screen (the judge the user set, never the author); it fails a screen on any defect it names:
+        more: [`design: one judge request per screen (the judge the user set); it fails a screen on any defect it names:
   ${Object.keys(KINDS).join(', ')}; capture each variant (dark, small width, large font) as its own screen; exit 0 every screen
   passed, 1 a screen failed, 3 none failed but one is unsure`],
     },
@@ -1960,8 +1960,8 @@ async function cmdVerify(argv) {
         throw new UsageError('HEAD is detached, so no branch names this claim; pass --claim-id <id>');
     refuseParked(cfg, repo, values['claim-id'] ?? branch);
     const drive = journey === null ? await agentDrive(repo, cfg, values.feature) : undefined;
-    // verify always starts done-done's own judge, never the author. No judge set, or one config forbids (the author's own agent
-    // and model), is a usage error now, not a failed run later.
+    // verify always runs the judge the user set, the author's own agent and model included; the judge is settled here, so a
+    // run never fails later for one it never had.
     await preflightVerify(cfg, journey === null);
     const id = newRunId(git(repo, 'rev-parse', 'HEAD'));
     const dir = join(runsRoot(cfg.app), id);
@@ -2002,7 +2002,7 @@ async function cmdMaintain(argv) {
     const why = readerProblem(selectAgent(cfg));
     if (why)
         throw new UsageError(`maintain: ${why.replace(/^source-wave: /, '')}`, 'Install the agent or ask the user for another and save it: done-done init --agent <agent>');
-    // auto_fix: the agent the user set fixes the skill and the judge the user set (never that agent and model) triages, so both are set now.
+    // auto_fix: the agent the user set fixes the skill and the judge the user set triages, so both are set now.
     if (cfg.auto_fix.maintain) {
         if (cfg.agent.startsWith('acp:'))
             throw new UsageError(`${cfg.agent} cannot fix the verify skill: done-done runs ACP agents with every tool denied`, `Set auto_fix.maintain: 0 to report only, or set agent: to one of ${AGENTS.join(', ')}`);

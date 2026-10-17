@@ -430,7 +430,7 @@ export function readerProblem(agent: ReturnType<typeof selectAgent>): string {
   return why ? `source-wave: ${why}; use claude, opencode, pi or acp` : '';
 }
 
-// Triage: the judge (the user's, never the author or the fixer) answers each finding's question; only the `fix` answer,
+// Triage: the judge the user set answers each finding's question; only the `fix` answer,
 // given with sureness, leaves the finding to the fixer. Any other answer, or an unsure one, asks the user, with the judge's reason.
 export type Triage = { question: string; options: Record<string, string>; fix: string };
 const TRIAGE_ATTEMPTS = 3;

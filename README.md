@@ -121,7 +121,7 @@ git add .done-done.yaml
 git commit -m "Add done-done"
 ```
 
-A `run -- <command>` whose command matches no recorded journey still runs, but its result hints that the recipe is not in the repo.
+A `run -- <command>` whose command matches no recorded journey still runs, but its result hints that the recipe is not in the repo. For a proof you drive by hand or by your agent instead of a journey, `done-done run --open` prints a run id and a folder to capture into, and `done-done run --close <run-id>` seals it ([how](docs/reference.md#run-a-journey)).
 
 At any point, `done-done doctor` checks the setup and changes nothing except the `--probe` call record. Each item reports `ok`, `warning` or `missing` with the exact fix command; an agent you have not set yet is `missing`, with the command that saves your choice. `done-done doctor --probe` also asks the agent one question to prove it answers. The items are listed in the [reference](docs/reference.md#check-the-setup).
 
@@ -146,6 +146,8 @@ done-done receipt --verify "$(git rev-parse HEAD)"
 No journey yet? `done-done verify --outcome "<what a user can now do>"` has your coding agent drive one feature of the verify skill the way a user does (`--feature <name>` picks it). A judge that is not the author's own agent and model then checks the captures. When it says a capture is wrong or unclear, or a capture it cannot read (a video or other file) is not judged, the run waits at its gate (exit 4) until you answer with `done-done respond --action approve|skip --reason "<why>"` or `--action fix`. Until then, a new `verify` or `rerun` of the same claim in that checkout is refused, so nothing goes around the gate. Approve and skip are logged with who and why, and they end the run `overridden`, never `pass`, so `receipt --verify` still refuses it ([details](docs/reference.md#drive-by-agent)).
 
 With `auto_fix: { verify: <n> }` (0, the default, reports only), a failed verify is fixed with your own agent: your judge first sorts each wrong screen (a product bug to fix, or a question that waits at the gate for you), then your agent fixes the product in a done-done worktree with your ignored files copied in, and verify runs again there, up to n times. A pass ends `changed`, with the fix on a `done-done/verify-<run-id>` branch and your branch untouched ([details](docs/reference.md#fix-the-product)).
+
+While a `verify` or `maintain` run goes, `done-done status` shows its steps and next move, `done-done attach` streams its events, and `done-done logs --step <name>` shows one step's log. `done-done rerun` runs a failed verify run again from the failed step, `done-done abort` stops a live run, `done-done signoff` writes a verify run's sign-off message, and `done-done history` lists past runs.
 
 Run `done-done` with no arguments to see the current config and the next step.
 
@@ -186,12 +188,12 @@ Another fleet works the same way: add the include text to whatever your workers 
 ## Learn more
 
 - [Vision](VISION.md): the three-tool family, the rules they share, and where done-done goes next.
-- [Full reference](docs/reference.md): every `init`, `doctor`, `run`, `check` and `receipt` option, the Checks block rules, each file check, and both config files.
+- [Full reference](docs/reference.md): every command and option, the Checks block rules, each file check, and both config files.
 - [Report a problem or ask a question](https://github.com/umeranjum17/done-done-axi/issues)
 
 ## What's next
 
-So far: `init`, `doctor`, `run`, `check`, `receipt`, `verify` (by journey or by your coding agent, with a gate you answer with `respond`), the capture judge (on by default in `verify`), the `design` visual check, the `look` step and the opt-in session hooks for Claude Code, Codex, opencode, Gemini CLI and pi. Coming next: help writing the proof steps for your app.
+So far: `init`, `doctor`, `run` (including `--open` and `--close`), `check`, `receipt`, `verify` (by journey or by your coding agent, with a gate you answer with `respond`), `maintain`, the capture judge (on by default in `verify`), the `design` visual check, the `look` step, the run tools (`status`, `attach`, `logs`, `rerun`, `abort`, `signoff`, `history`) and the opt-in session hooks for Claude Code, Codex, opencode, Gemini CLI and pi. Coming next: help writing the proof steps for your app.
 
 ## Develop
 

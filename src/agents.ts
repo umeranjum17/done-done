@@ -1,7 +1,7 @@
 import { spawn, spawnSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
-import { dirname, isAbsolute, join } from 'node:path';
+import { dirname, extname, isAbsolute, join } from 'node:path';
 import { stripVTControlCharacters } from 'node:util';
 import { AGENTS, ANSWERER_JUDGES, CHEAP, type Config, EFFORT_FLAGS, KEY_ROUTES, parseDuration, UsageError } from './config.js';
 import { isExecutable, onPath } from './judge.js';
@@ -71,7 +71,8 @@ class ProviderError extends Error {
 // editOnly: the agent cannot run a tool-less call, so only an edit step may start it; the reason is what the caller shows.
 // editNote: what an edit step's prompt adds about how this agent's own shell runs commands.
 // streams: the CLI writes its events as it works, so silence means it is stuck (AGENT_IDLE_MS applies).
-type Adapter = { argv: (c: AgentCall, dir: string) => string[]; answer: (stdout: string, c: AgentCall) => unknown; file?: boolean; streams?: boolean; hint?: string; editOnly?: string; editNote?: string; env?: (c: AgentCall) => Record<string, string>; files?: (c: AgentCall) => Record<string, string>; reject?: (stderr: string) => string };
+// stdin: what the CLI reads, given the prompt text; the prompt itself when absent.
+type Adapter = { argv: (c: AgentCall, dir: string) => string[]; answer: (stdout: string, c: AgentCall) => unknown; file?: boolean; streams?: boolean; hint?: string; editOnly?: string; editNote?: string; env?: (c: AgentCall) => Record<string, string>; files?: (c: AgentCall) => Record<string, string>; reject?: (stderr: string) => string; stdin?: (c: AgentCall, prompt: string) => string };
 
 // The answer object in an agent's free text: the first top-level '{'..'}' span that parses to an object with every
 // required key, skipping braces and quotes in narration. With no such span, the last span that parsed is returned, so
@@ -130,12 +131,18 @@ const PI_TOOL_LESS = ['--no-tools', '--no-extensions', '--no-skills', '--no-prom
 const ADAPTERS: Record<string, Adapter> = {
   // claude -p: --json-schema puts the validated object in structured_output; --tools '' turns every tool off.
   // An edit step accepts edits only in cwd and --add-dir folders, and may run commands (the drive launches the app).
+  // A tool-less call runs with --safe-mode too (no CLAUDE.md, hooks, plugins or MCP servers) and with the user's own sign-in.
+  // A call with images sends them as stream-json content blocks, as claude's SDK does, and its result is the last event.
   claude: {
-    argv: (c) => ['-p', '--output-format', 'json', '--json-schema', JSON.stringify(c.schema), '--model', c.model, '--no-session-persistence',
+    argv: (c) => ['-p', '--output-format', c.images?.length ? 'stream-json' : 'json', ...(c.images?.length ? ['--verbose', '--input-format', 'stream-json'] : []),
+      '--json-schema', JSON.stringify(c.schema), '--model', c.model, '--no-session-persistence',
       ...(c.tools === 'edit' ? ['--permission-mode', 'acceptEdits', '--allowedTools', 'Bash', ...(c.dirs ?? []).flatMap((d) => ['--add-dir', d])] : ['--tools', c.tools === 'read' ? 'Read,Grep,Glob' : '']),
-      ...(c.tools === 'edit' ? [] : ['--setting-sources', '']), ...(c.tools === 'read' ? ['--strict-mcp-config'] : [])],
-    answer: (out) => {
-      const r = JSON.parse(out);
+      ...(c.tools === 'edit' ? [] : ['--setting-sources', '']), ...(c.tools === 'read' ? ['--strict-mcp-config'] : []), ...(c.tools === 'none' ? ['--safe-mode'] : [])],
+    stdin: (c, prompt) => (c.images?.length ? `${JSON.stringify({ type: 'user', session_id: '', parent_tool_use_id: null, message: { role: 'user', content: [
+      ...c.images.flatMap((i) => [{ type: 'text', text: `Image: ${i.name.replace(/\.[^.]+$/, '')}` }, { type: 'image', source: { type: 'base64', media_type: `image/${extname(i.name).slice(1)}`, data: i.bytes.toString('base64') } }]),
+      { type: 'text', text: prompt }] } })}\n` : prompt),
+    answer: (out, c) => {
+      const r = JSON.parse(c.images?.length ? out.trim().split('\n').at(-1)! : out);
       if (r.is_error) throw new ProviderError(String(r.result || r.subtype));
       return r.structured_output;
     },
@@ -310,13 +317,12 @@ export function agentPath(agent: string, cfg?: Pick<Config, 'acpx_path' | 'agent
 }
 
 // The judge: a fresh, tools-off, single-shot call through BYOKit, never the author's agent and model unless the user
-// accepts that. claude judges through the kit's claude-code route; any other agent whose CLI reads images with every
-// tool off, through the kit's answerer backend over that CLI; a key route (openai:key) through the kit's own backend on
-// the user's API key, with no agent CLI. independence: agent (another agent), model (the author's agent at
+// accepts that. claude and any other agent whose CLI reads images judge through the kit's answerer backend over that
+// CLI (claude with its normal sign-in); a key route (openai:key) through the kit's own backend on the user's API key,
+// with no agent CLI. independence: agent (another agent), model (the author's agent at
 // another model) or session-only (the author's agent and model in a fresh session).
 export type JudgeChoice = { route: string; agent: string; model: string; independence: 'agent' | 'model' | 'session-only'; author: { agent: string; model: string } };
 
-export const claudeBin = (cfg: Config) => agentPath('claude', cfg);
 export const routeOf = (agent: string) => (agent === 'claude' ? 'claude-code' : `answerer:${agent}`);
 export const JUDGES = AGENTS.filter((a) => a === 'claude' || ANSWERER_JUDGES.includes(a));
 // Like the agent, the judge is exactly the one the user set; with none, done-done asks the user (in a terminal) or
@@ -460,7 +466,8 @@ export async function askAgent(c: AgentCall): Promise<AgentAnswer> {
       const prompt = c.tools === 'edit' && adapter.editNote ? `${c.prompt}\n\n${adapter.editNote}` : c.prompt;
       const promptText = (attempts === 1 ? prompt : `${prompt}\n\nYour previous answer was not valid (${lastError}).`) + schemaTrailer;
       if (adapter.file) writeFileSync(join(dir, 'prompt.md'), promptText, { mode: 0o600 });
-      res = await start(bin, argv(dir), c, cwd, adapter.file ? '' : promptText, { ...process.env, ...c.env, ...adapter.env?.(c) }, adapter.streams ? c.idleMs ?? AGENT_IDLE_MS : 0);
+      const input = adapter.file ? '' : adapter.stdin ? adapter.stdin(c, promptText) : promptText;
+      res = await start(bin, argv(dir), c, cwd, input, { ...process.env, ...c.env, ...adapter.env?.(c) }, adapter.streams ? c.idleMs ?? AGENT_IDLE_MS : 0);
       if (res.error) throw res.error;
       // A permission the run refused explains a call with no answer; name it rather than the exit code text.
       const refused = adapter.reject?.(String(res.stderr ?? '')) ?? '';

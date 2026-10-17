@@ -75,7 +75,7 @@ const DOCTOR_TEXT = `doctor changes nothing except the --probe call record (the 
   optional: verify_skill (.agents/skills/verify-<app>/), agent (the agent the user set and its model; missing when none is
   set, with the command that saves the user's choice), agent_settings (agent, model, effort,
   args, path and agent_timeout, each with the file it came from: the global config, .done-done.yaml or default), judge (the judge route is ready: for claude-code an
-  executable claude binary, a sign-in folder and the judge kit, for answerer:<agent> that agent's CLI and the kit, for openai:key
+  executable claude binary and the judge kit (its sign-in is checked only when a capture is judged), for answerer:<agent> that agent's CLI and the kit, for openai:key
   OPENAI_API_KEY and the kit; doctor does not call the model; missing when none is set, with the command that saves the user's choice),
   judge_choice (the judge, and how far it is from the author: another agent, another model, or session-only), ffprobe (video evidence only).
   --probe also asks the agent one JSON-schema question (one call at the agent's model: its cheap default where it has one, else its own; set agent_config.<agent>.model to choose; its record goes to
@@ -85,7 +85,7 @@ const CONFIG_TEXT = `config: ~/.done-done/config.yaml (global; DONE_DONE_HOME mo
   agent (either file): claude, codex, opencode, pi, gemini or acp:<target>, set by the user (done-done init --agent); done-done never picks one.
   global only: agent_config.<agent>.{model,effort} (effort: minimal, low, medium, high, xhigh, max), agent_args_override.<agent>
   (extra flags), agent_path_override.<agent> (binary), acpx_path, agent_timeout (one agent call, default 30m; a streaming agent that prints nothing for 5m is stopped early),
-  evidence.local_root, judge.{route,model,allow_same,claude_code.config_dir} (the judge, set by the user with
+  evidence.local_root, judge.{route,model,allow_same} (the judge, set by the user with
   init --judge; never picked). done-done doctor shows where each agent setting came from.`;
 
 // One table drives `--help` and every `<command> --help`: each command's usage lines and the flags it takes.

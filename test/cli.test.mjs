@@ -49,7 +49,10 @@ function setup(projectYaml = JUDGED.replace('journeys:', 'judge:\n  enabled: fal
   const dir = mkdtempSync(join(tmpdir(), 'done-done-test-'));
   after(() => rmSync(dir, { recursive: true, force: true }));
   const repo = join(dir, 'repo');
-  const env = { ...process.env, DONE_DONE_HOME: join(dir, 'home'), GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@example.com', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@example.com' };
+  // The fixture never inherits the machine's git config or hooks: GIT_CONFIG_* env (it can set core.hooksPath) is dropped, and the global config is an empty file in the fixture.
+  writeFileSync(join(dir, 'gitconfig'), '');
+  const host = Object.fromEntries(Object.entries(process.env).filter(([k]) => !k.startsWith('GIT_CONFIG')));
+  const env = { ...host, GIT_CONFIG_GLOBAL: join(dir, 'gitconfig'), GIT_CONFIG_NOSYSTEM: '1', DONE_DONE_HOME: join(dir, 'home'), GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@example.com', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@example.com' };
   mkdirSync(join(repo, 'src'), { recursive: true });
   mkdirSync(join(repo, 'docs'));
   writeFileSync(join(repo, '.gitignore'), '.proof/\n');
@@ -147,7 +150,7 @@ test('evidence goes stale when HEAD moves past code, but not past ignored paths'
 });
 
 test('files outside any run record are inconclusive; a failed or dirty run fails', () => {
-  const { dir, repo, dd } = setup('app: notes\nevidence:\n  root: .proof\njourneys:\n  broken:\n    command: node make-shots.mjs ${RUN_ID} && exit 4\n');
+  const { dir, repo, dd } = setup('app: notes\nevidence:\n  root: .proof\njourneys:\n  broken:\n    command: node make-shots.mjs ${RUN_ID} && echo FAIL notes.test.js timed out && exit 4\n');
   const r = dd('check', '--outcome', 'hand made', join(dir, 'screen.png'));
   assert.equal(r.code, 3, r.out);
   assert.match(r.out, /not in any done-done run record/);
@@ -157,7 +160,8 @@ test('files outside any run record are inconclusive; a failed or dirty run fails
   const run = dd('run', 'broken');
   assert.equal(run.code, 1, run.out);
   assert.match(run.out, /exited 4/);
-  const id = toon(run).run_id;
+  assert.match(run.out, /reason: "the run command exited 4: FAIL notes\.test\.js timed out"/, 'the reason names the first failing line of the journey output');
+  const id = run.out.match(/run_id: (\S+)/)[1];
   assert.match(dd('check', '--outcome', 'broken run', `.proof/${id}/home.png`).out, /its run command exited 4/);
   writeFileSync(join(repo, 'src', 'app.js'), 'export const app = 3;\n');
   const dirty = dd('run', '--', 'node make-shots.mjs ${RUN_ID}');
@@ -387,6 +391,17 @@ test('check reads the same Checks block from a file or from stdin', () => {
   assert.equal(a.claim, b.claim);
   assert.equal(a.files, b.files);
   assert.deepEqual(a.evidence, b.evidence, 'stdin and file parse the same block');
+  // Evidence the PR names in another folder is not in this checkout: the help says so and shows --citation-base first.
+  writeFileSync(p, `# PR\n\n## Checks\noutcome: home and settings render\nrepro: n/a: no bug\nproof: no verify skill - \`done-done run shots\`\nevidence: elsewhere/home.png\n`);
+  const outside = json(dd('--json', 'check', '--from', p));
+  assert.equal(outside.result, 'fail');
+  assert.match(outside.help[0], /1 named file is not in this checkout\. .*done-done check --from .* --citation-base <dir>$/);
+  assert.equal(outside.help.some((h) => /Commit your change/.test(h)), false, 'a file outside the checkout is not a re-capture');
+  // Evidence the run should have written under the evidence root is a re-capture, not a citation base.
+  writeFileSync(p, `# PR\n\n## Checks\noutcome: home and settings render\nrepro: n/a: no bug\nproof: no verify skill - \`done-done run shots\`\nevidence: .proof/gone/home.png\n`);
+  const lost = json(dd('--json', 'check', '--from', p));
+  assert.match(lost.help.join('\n'), /Commit your change, re-capture with/);
+  assert.equal(lost.help.some((h) => /not in this checkout/.test(h)), false);
 });
 
 test('receipt records a passing check for the head, then verifies', () => {

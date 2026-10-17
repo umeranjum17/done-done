@@ -3096,8 +3096,8 @@ test('design judges a JPEG longer than the judge size, downscaled to a PNG', () 
   assert.deepEqual(calls[0].attached, ['PNG'], 'the judge is sent the downscaled screen');
 });
 
-// doctor: read-only health check. Required items (git, config, evidence root) gate
-// exit 0/2; the skill, agent, judge and ffprobe items are optional and never fail it.
+// doctor: read-only health check. Required items (git, config, evidence root, agent, judge) gate
+// exit 0/2; the verify skill, ffprobe and warning rows never fail it.
 // An isolated PATH holding only git plus the named stub binaries, so agent/judge/ffprobe
 // detection never depends on what the host happens to have installed.
 function pathEnv(env, bins) {
@@ -3116,10 +3116,12 @@ const doctorIn = (cwd, env, ...args) => {
 };
 
 test('doctor passes in a set-up repo and lists every check', () => {
-  const { dd, env } = setup();
+  const { repo, env } = setup();
   mkdirSync(env.DONE_DONE_HOME, { recursive: true });
   writeFileSync(join(env.DONE_DONE_HOME, 'config.yaml'), `agent: claude\n${judgeYaml(env)}`);
-  const r = dd('doctor');
+  // doctor requires the agent it is given, so the PATH is the isolated stub one: no host claude, judge, or ffprobe leaks in.
+  const stubs = pathEnv(env, ['claude']);
+  const r = doctorIn(repo, stubs, 'doctor');
   assert.equal(r.code, 0, r.out);
   const d = toon(r);
   assert.equal(d.result, 'pass');
@@ -3129,7 +3131,7 @@ test('doctor passes in a set-up repo and lists every check', () => {
   assert.equal(d.checks[3].status, 'missing', 'no verify skill yet, and that is optional');
   assert.match(d.checks[3].fix, /SKILL\.md/);
   assert.ok(d.help.length >= 1);
-  const j = json(dd('doctor', '--json'));
+  const j = json(doctorIn(repo, stubs, 'doctor', '--json'));
   assert.equal(j.result, 'pass');
   assert.equal(j.checks.length, 9);
 });

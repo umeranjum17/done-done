@@ -25,7 +25,7 @@ done-done is the one verify system for all projects. It does not accept "done" w
 What ships now:
 
 - **Proof per commit.** Each claim is proven at the exact commit. Each run keeps a run record.
-- **A judge that is never the author or the fixer.** The user picks the judge. done-done never picks one.
+- **The judge the user picks.** Any agent and model the user chooses runs, the author's own too (a fresh session of its own). done-done never picks one.
 - **A gate that asks the user.** When the judge says fail or unsure, the run stops and waits. The user answers with `respond`.
 - **Sign-off messages.** `signoff` writes a run's gate or evidence in the sign-off contract v1 shape and prints the post command; it never posts, and done-done works without sign-off (see the [reference](docs/reference.md)).
 - **Receipts.** A receipt records a passing check, the commit and the hash of each file. You can check it again later.

@@ -2646,7 +2646,7 @@ globalThis.fetch = async (url, init) => {
   writeFileSync(join(env.PATH, 'codex'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
   writeFileSync(join(t.env.DONE_DONE_HOME, 'config.yaml'), 'agent: codex\nagent_config:\n  codex:\n    model: vision-test-1\njudge:\n  route: openai:key\n  model: vision-test-1\n');
   const sameModel = toon(doctorIn(t.repo, { ...env, OPENAI_API_KEY: key }, 'doctor')).checks.find((c) => c.check === 'judge_choice');
-  assert.deepEqual([sameModel.status, sameModel.detail, sameModel.fix], ['missing', "judge: the judge openai:key (model vision-test-1) is the author's own agent and model (codex), and the judge is never the agent that did the work", 'Ask the user for another judge agent or model and save it: done-done init --judge <agent> --judge-model <model>; or set judge.allow_same: true in ~/.done-done/config.yaml to accept a fresh session of the same one']);
+  assert.deepEqual([sameModel.status, sameModel.detail, sameModel.fix], ['missing', "judge: the judge openai:key (model vision-test-1) is the author's own agent and model (codex), and the judge must differ from the author by agent or by model", 'done-done init --judge <agent> --judge-model <model>, with another agent or the same agent at another model; judge.allow_same: true in ~/.done-done/config.yaml is an opt-out only, for a fresh session of the same agent and model']);
 });
 
 // done-done never picks the judge: no auto pick, no PATH detection, no fallback. With none set, verify asks the user.
@@ -2714,7 +2714,8 @@ test('init --judge saves the user\'s judge, refuses one done-done cannot judge t
   assert.match(toon(bad).error, /^done-done cannot judge through acp:gemini; it judges through claude, opencode, pi, gemini$/);
   const same = t.dd('init', '--judge', 'opencode', '--judge-model', 'opencode-go/muse-spark-1.3-contributor');
   assert.equal(same.code, 2, same.out);
-  assert.match(toon(same).error, /^judge: the judge opencode \(model opencode-go\/muse-spark-1\.3-contributor\) is the author's own agent and model \(opencode\)/);
+  assert.match(toon(same).error, /^judge: the judge opencode \(model opencode-go\/muse-spark-1\.3-contributor\) is the author's own agent and model \(opencode\), and the judge must differ from the author by agent or by model$/);
+  assert.match(toon(same).help[0], /^done-done init --judge <agent> --judge-model <model>, with another agent or the same agent at another model; judge\.allow_same: true .* is an opt-out only/);
   assert.equal(parse(readFileSync(join(t.env.DONE_DONE_HOME, 'config.yaml'), 'utf8')).judge, undefined, 'a refused judge writes nothing');
   assert.equal(toon(t.dd('init', '--judge-model', 'x')).error, '--judge-model needs --judge');
   // The author's agent at another model is allowed, and saved as answerer:opencode.
@@ -3333,7 +3334,7 @@ test('doctor finds agent, judge and ffprobe binaries from PATH; missing optional
   assert.match(two.checks[4].detail, /^opencode .* at /);
   assert.equal(two.checks[7].status, 'missing', 'a judge that is the author\'s own agent and model is refused');
   assert.match(two.checks[7].detail, /^judge: the judge opencode \(model opencode-go\/muse-spark-1\.3-contributor\) is the author's own agent and model \(opencode\)/);
-  assert.match(two.checks[7].fix, /^Ask the user for another judge agent or model and save it: done-done init --judge <agent> --judge-model <model>/);
+  assert.match(two.checks[7].fix, /^done-done init --judge <agent> --judge-model <model>, with another agent or the same agent at another model; judge\.allow_same: true .* is an opt-out only/);
   agent('claude');
   const none = doctorIn(repo, pathEnv(env, []), 'doctor');
   assert.equal(none.code, 0, 'missing optionals still exit 0 when every required item is ok');

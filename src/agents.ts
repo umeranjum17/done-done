@@ -324,7 +324,7 @@ export function selectJudge(cfg: Config, found: { agent: string; model: string }
   if (fix && independence !== 'agent')
     throw new UsageError(`judge: the judge ${agent} (model ${model}) is the fixer's own agent (${found.agent}) at any model, and the judge is never the agent that did the work; judge.allow_same does not apply to auto_fix`, 'Ask the user for another judge agent and save it: done-done init --judge <agent> --judge-model <model>');
   if (independence === 'session-only' && !cfg.judge.allow_same)
-    throw new UsageError(`judge: the judge ${agent} (model ${model}) is the author's own agent and model (${found.agent}), and the judge is never the agent that did the work`, `Ask the user for another judge agent or model and save it: done-done init --judge <agent> --judge-model <model>; or set judge.allow_same: true in ~/.done-done/config.yaml to accept a fresh session of the same one`);
+    throw new UsageError(`judge: the judge ${agent} (model ${model}) is the author's own agent and model (${found.agent}), and the judge must differ from the author by agent or by model`, `done-done init --judge <agent> --judge-model <model>, with another agent or the same agent at another model; judge.allow_same: true in ~/.done-done/config.yaml is an opt-out only, for a fresh session of the same agent and model`);
   return { route, agent, model, independence, author: { agent: found.agent, model: found.model } };
 }
 

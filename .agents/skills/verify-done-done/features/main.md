@@ -6,6 +6,7 @@ Part of the done-done verification map; reached at what README.md says a user ru
 
 - Open/seal a native evidence run, check its captures, record a receipt and verify its caller HEAD.
 - The [`look` step](../../../../docs/reference.md#look-check) a journey calls: the e2e journey's fixture repo runs `look-clipped` on `test/fixtures/look/clipped.html` (a card title clipped by its box), which must fail the run naming `h3.card-title`, and `look-fixed` on `test/fixtures/look/fixed.html`, which must pass; both captures must be 390x844 and are copied to the outer run folder as `<run-id>.look-clipped.png` and `<run-id>.look-fixed.png`. Needs Chrome or Chromium on PATH. Open both captures: the clipped title shows one line, the fixed one shows all of it.
+- Judge setup: `init --judge` refuses the author's own agent and model and names the command for a judge that differs by agent or by model first; the judge row of `doctor` says the judge kit is needed and gives the `npx -y -p done-done-axi -p @byokit/decide@0.8.0 done-done-axi doctor` line. The integration tests in `test/cli.test.mjs` cover the refusal and the doctor fix text.
 - Check or receipt citations with [`--citation-base <dir>`](../../../../docs/reference.md#check-a-claim). The existing e2e journey covers a same-named wrong cwd file, omitted-flag compatibility, unchanged absolute citations, missing evidence rejection and unrecorded evidence rejection with `--judge`, plus execution of suggested receipt and remote gate commands.
 
 ## How to get to it (user POV)

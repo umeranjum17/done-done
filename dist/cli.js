@@ -359,7 +359,14 @@ function openRun(repo, cfg, journey, command, id) {
     mkdirSync(runDir(cfg, runId));
     return { schema: 1, run_id: runId, journey, command, ...h, started_at: new Date().toISOString(), ended_at: null, exit: null, files: [] };
 }
-function closeRun(repo, cfg, rec) {
+// The first line of a run's log that names a failure, trimmed: what a non-zero exit is about. Empty when none does.
+function firstFailure(log) {
+    if (!existsSync(log))
+        return '';
+    const line = readFileSync(log, 'utf8').split('\n').map((l) => l.replace(/\x1b\[[\d;]*m/g, '').trim()).find((l) => /\b(FAIL|FAILED|Error|failed|timed out)\b/.test(l));
+    return line ? line.slice(0, 200) : '';
+}
+function closeRun(repo, cfg, rec, log) {
     const now = head(repo);
     rec.files = captured(cfg, rec.run_id)
         .sort()
@@ -375,8 +382,10 @@ function closeRun(repo, cfg, rec) {
     let reason = '';
     if (now.commit !== rec.commit)
         reason = `HEAD moved from ${rec.commit} to ${now.commit} during the run; evidence is not tied to one commit`;
-    else if (rec.exit !== null && rec.exit !== 0)
-        reason = `the run command exited ${rec.exit}`;
+    else if (rec.exit !== null && rec.exit !== 0) {
+        const failure = log ? firstFailure(log) : '';
+        reason = `the run command exited ${rec.exit}${failure ? `: ${failure}` : ''}`;
+    }
     else if (!rec.files.length)
         reason = `the run wrote no files into its folder ${shown(repo, runDir(cfg, rec.run_id))}; the command gets it as $DONE_DONE_EVIDENCE_ROOT and its run id as $DONE_DONE_RUN_ID (or \${RUN_ID} in the command)`;
     const evidence = FULL ? rec.files.map((f) => ({ path: rel(f.path), sha256: f.sha256, bytes: f.bytes })) : rec.files.map((f) => rel(f.path));
@@ -491,14 +500,20 @@ async function cmdRun(argv) {
     const matrix = hasMatrix(cfg.matrix) ? splitMatrix(cfg.matrix) : null;
     const failed = [];
     rec.exit = 0;
+    // The run's log lives with its run store, never in the evidence folder the judge reads: a failure names its first failing line.
+    const logFile = join(runsRoot(cfg.app), rec.run_id, 'logs', 'run.log');
+    mkdirSync(dirname(logFile), { recursive: true });
     for (const cell of matrix?.required ?? [{}]) {
         // The journey's own stdout goes to our stderr, never our stdout: stdout carries only done-done's
         // result document (TOON or --json), so a noisy journey cannot break `run --json | JSON.parse`.
         const r = await new Promise((done) => {
-            spawn(expanded, {
-                cwd: repo, shell: true, stdio: ['inherit', process.stderr, 'inherit'],
+            const child = spawn(expanded, {
+                cwd: repo, shell: true, stdio: ['inherit', 'pipe', 'pipe'],
                 env: { ...process.env, DONE_DONE_RUN_ID: rec.run_id, DONE_DONE_EVIDENCE_ROOT: runDir(cfg, rec.run_id), ...inst?.env, ...(matrix ? cellEnv(cell) : {}) },
-            }).on('error', () => done(null)).on('close', done);
+            });
+            for (const out of [child.stdout, child.stderr])
+                out?.on('data', (b) => { process.stderr.write(b); appendFileSync(logFile, b); });
+            child.on('error', () => done(null)).on('close', done);
         });
         const code = r ?? 1;
         if (code !== 0) {
@@ -508,7 +523,7 @@ async function cmdRun(argv) {
         }
     }
     reap();
-    const sealed = closeRun(repo, cfg, rec);
+    const sealed = closeRun(repo, cfg, rec, logFile);
     if (matrix && failed.length)
         return emitted({ code: FAIL, result: { ...sealed.result, reason: `the run command failed for cell ${failed.join('; ')}` } });
     return emitted(sealed);
@@ -656,7 +671,8 @@ async function runCheck(argv, run) {
         }
         catch (e) {
             const atCwd = !isAbsolute(name) && resolve(name) !== path ? ` or ${resolve(name)}` : '';
-            findings.push({ level: 'fail', why: `${name}: no such file (looked for ${path}${atCwd}${e.code ? `, ${e.code}` : ''})` });
+            const missing = e.code !== 'ENOENT' ? undefined : under(cfg.evidence.root, path) === null ? 'checkout' : 'run';
+            findings.push({ level: 'fail', why: `${name}: no such file (looked for ${path}${atCwd}${e.code ? `, ${e.code}` : ''})`, missing });
             continue;
         }
         const v = checkMedia(path, bytes);
@@ -930,7 +946,7 @@ function staleness(repo, cfg, from, to) {
 }
 // Quote an argument only when a shell would split it.
 const arg = (a) => (/^[\w./@:+-]+$/.test(a) ? a : `'${a.replaceAll("'", `'\\''`)}'`);
-function checkHelp(code, files, { cfg, repo, claim, source, citationBase, notProven, judgeLevel }) {
+function checkHelp(code, findings, files, { cfg, repo, claim, source, citationBase, notProven, judgeLevel }) {
     if (notProven)
         return ['Capture real proof and replace "not proven:", or set checks.not_proven: allow and re-check from a trusted ref'];
     if (judgeLevel === 'fail' && code === FAIL)
@@ -948,7 +964,18 @@ function checkHelp(code, files, { cfg, repo, claim, source, citationBase, notPro
     const capture = captureHint(cfg);
     if (code === INCONCLUSIVE)
         return [`Capture this proof through a run so it is tied to a commit, then re-run this check: ${capture}`];
-    return [`Commit your change, re-capture with ${capture}, then check the new files`];
+    // A named file outside this checkout is not lost: point at the folder that holds it first. Re-capture is for proof the run should have written here.
+    const help = [];
+    const absent = findings.filter((f) => f.missing === 'checkout').length;
+    if (absent) {
+        const form = source ? `done-done check --from ${arg(source)} --citation-base <dir>` : 'done-done check --outcome <claim> <files...> --citation-base <dir>';
+        help.push(citationBase === undefined
+            ? `${absent} named file${absent > 1 ? 's are' : ' is'} not in this checkout. If the evidence is in another folder, check against it: ${form}`
+            : `${absent} named file${absent > 1 ? 's are' : ' is'} not under --citation-base ${arg(citationBase)} either: check the paths in the Checks block`);
+    }
+    if (findings.some((f) => f.level === 'fail' && f.missing !== 'checkout'))
+        help.push(`Commit your change, re-capture with ${capture}, then check the new files`);
+    return help;
 }
 function report(findings, files, ctx, note = '') {
     const code = findings.some((f) => f.level === 'fail') ? FAIL : findings.length ? INCONCLUSIVE : PASS;
@@ -976,7 +1003,7 @@ function report(findings, files, ctx, note = '') {
         result.findings = rows.items;
     if (rows.omitted)
         result.findings_omitted = rows.omitted;
-    result.help = checkHelp(code, files, ctx);
+    result.help = checkHelp(code, findings, files, ctx);
     return { code, result };
 }
 const CLI_PATH = fileURLToPath(import.meta.url);

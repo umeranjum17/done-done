@@ -1,15 +1,15 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="505" height="598" viewBox="0 0 505 598" role="img" aria-label="Weak proof is blocked">
+<svg xmlns="http://www.w3.org/2000/svg" width="505" height="670" viewBox="0 0 505 670" role="img" aria-label="Weak proof is blocked">
 <title>Weak proof is blocked</title>
 <style>
 text{font:16px ui-monospace,SFMono-Regular,'SF Mono',Menlo,Consolas,'Liberation Mono',monospace;fill:#e6edf3;white-space:pre}
 .d{fill:#8b949e}.c{fill:#d2a8ff}.p{fill:#3fb950}.f{fill:#ff7b72}.b{font-weight:600}
 .t{font-size:14px;font-weight:600;fill:#8b949e}
 </style>
-<rect x="0.5" y="0.5" width="504" height="597" rx="10" fill="#161b22" stroke="#30363d"/>
+<rect x="0.5" y="0.5" width="504" height="669" rx="10" fill="#161b22" stroke="#30363d"/>
 <path d="M0.5 40V10.5a10 10 0 0 1 10-10h484a10 10 0 0 1 10 10V40z" fill="#21262d" stroke="#30363d"/>
 <circle cx="20" cy="20" r="6" fill="#ff5f57"/><circle cx="40" cy="20" r="6" fill="#febc2e"/><circle cx="60" cy="20" r="6" fill="#28c840"/>
 <text class="t" x="252.5" y="25" text-anchor="middle">Weak proof is blocked</text>
-<clipPath id="body"><rect x="1" y="41" width="503" height="556"/></clipPath>
+<clipPath id="body"><rect x="1" y="41" width="503" height="628"/></clipPath>
 <g clip-path="url(#body)"><text xml:space="preserve" x="22" y="72" textLength="412.8" lengthAdjust="spacing"><tspan class="c">~/notes $ </tspan><tspan class="b">done-done check --from pr-body.md</tspan></text>
 <text xml:space="preserve" x="22" y="96" textLength="134.4" lengthAdjust="spacing"><tspan class="d">command: </tspan>check</text>
 <text xml:space="preserve" x="22" y="120" textLength="115.2" lengthAdjust="spacing"><tspan class="d">result: </tspan><tspan class="f b">fail</tspan></text>
@@ -17,19 +17,22 @@ text{font:16px ui-monospace,SFMono-Regular,'SF Mono',Menlo,Consolas,'Liberation 
 <text xml:space="preserve" x="22" y="168" textLength="172.8" lengthAdjust="spacing"><tspan class="d">source: </tspan>pr-body.md</text>
 <text xml:space="preserve" x="22" y="192" textLength="76.8" lengthAdjust="spacing"><tspan class="d">files: </tspan>3</text>
 <text xml:space="preserve" x="22" y="216" textLength="393.6" lengthAdjust="spacing"><tspan class="d">evidence[3]: </tspan>~/.done-done/evidence/notes/</text>
-<text xml:space="preserve" x="22" y="240" textLength="355.2" lengthAdjust="spacing">    20261013T161405Z-1cb99c01-0f4d05/</text>
+<text xml:space="preserve" x="22" y="240" textLength="355.2" lengthAdjust="spacing">    20261017T141004Z-b9d3f9df-ef58e3/</text>
 <text xml:space="preserve" x="22" y="264" textLength="316.8" lengthAdjust="spacing">    after.png,empty.png,blank.png</text>
-<text xml:space="preserve" x="22" y="288" textLength="220.8" lengthAdjust="spacing">findings[3]{level,why}:</text>
-<text xml:space="preserve" x="22" y="312" textLength="336.0" lengthAdjust="spacing">  fail<tspan class="f b">"~/.done-done/evidence/notes/</tspan></text>
-<text xml:space="preserve" x="22" y="336" textLength="451.2" lengthAdjust="spacing">    <tspan class="f b">20261013T161405Z-1cb99c01-0f4d05/after.png:</tspan></text>
-<text xml:space="preserve" x="22" y="360" textLength="460.8" lengthAdjust="spacing">    <tspan class="f b">evidence is for commit 1cb99c0116e4, HEAD is</tspan></text>
-<text xml:space="preserve" x="22" y="384" textLength="422.4" lengthAdjust="spacing">    <tspan class="f b">900978bad80e (changed: src/sync.js) (run</tspan></text>
-<text xml:space="preserve" x="22" y="408" textLength="364.8" lengthAdjust="spacing">    <tspan class="f b">20261013T161405Z-1cb99c01-0f4d05)"</tspan></text>
-<text xml:space="preserve" x="22" y="432" textLength="326.4" lengthAdjust="spacing">  fail<tspan class="f b">"empty.png: empty (0 bytes)"</tspan></text>
-<text xml:space="preserve" x="22" y="456" textLength="364.8" lengthAdjust="spacing">  fail<tspan class="f b">"blank.png: png is a blank frame</tspan></text>
-<text xml:space="preserve" x="22" y="480" textLength="288.0" lengthAdjust="spacing">    <tspan class="f b">(luminance spread 0.0000)"</tspan></text>
-<text xml:space="preserve" x="22" y="504" textLength="432.0" lengthAdjust="spacing"><tspan class="d">help[1]: </tspan>"Commit your change, re-capture with</text>
-<text xml:space="preserve" x="22" y="528" textLength="403.2" lengthAdjust="spacing">    done-done run sync, then check the new</text>
-<text xml:space="preserve" x="22" y="552" textLength="96.0" lengthAdjust="spacing">    files"</text>
-<text xml:space="preserve" x="22" y="576" textLength="57.6" lengthAdjust="spacing"><tspan class="d">exit 1</tspan></text></g>
+<text xml:space="preserve" x="22" y="288" textLength="57.6" lengthAdjust="spacing">judge:</text>
+<text xml:space="preserve" x="22" y="312" textLength="412.8" lengthAdjust="spacing">  skipped: "the check already failed, so no</text>
+<text xml:space="preserve" x="22" y="336" textLength="220.8" lengthAdjust="spacing">    capture was judged"</text>
+<text xml:space="preserve" x="22" y="360" textLength="220.8" lengthAdjust="spacing">findings[3]{level,why}:</text>
+<text xml:space="preserve" x="22" y="384" textLength="336.0" lengthAdjust="spacing">  fail<tspan class="f b">"~/.done-done/evidence/notes/</tspan></text>
+<text xml:space="preserve" x="22" y="408" textLength="451.2" lengthAdjust="spacing">    <tspan class="f b">20261017T141004Z-b9d3f9df-ef58e3/after.png:</tspan></text>
+<text xml:space="preserve" x="22" y="432" textLength="460.8" lengthAdjust="spacing">    <tspan class="f b">evidence is for commit b9d3f9dfe2fe, HEAD is</tspan></text>
+<text xml:space="preserve" x="22" y="456" textLength="422.4" lengthAdjust="spacing">    <tspan class="f b">d6caeb3f7674 (changed: src/sync.js) (run</tspan></text>
+<text xml:space="preserve" x="22" y="480" textLength="364.8" lengthAdjust="spacing">    <tspan class="f b">20261017T141004Z-b9d3f9df-ef58e3)"</tspan></text>
+<text xml:space="preserve" x="22" y="504" textLength="326.4" lengthAdjust="spacing">  fail<tspan class="f b">"empty.png: empty (0 bytes)"</tspan></text>
+<text xml:space="preserve" x="22" y="528" textLength="364.8" lengthAdjust="spacing">  fail<tspan class="f b">"blank.png: png is a blank frame</tspan></text>
+<text xml:space="preserve" x="22" y="552" textLength="288.0" lengthAdjust="spacing">    <tspan class="f b">(luminance spread 0.0000)"</tspan></text>
+<text xml:space="preserve" x="22" y="576" textLength="432.0" lengthAdjust="spacing"><tspan class="d">help[1]: </tspan>"Commit your change, re-capture with</text>
+<text xml:space="preserve" x="22" y="600" textLength="403.2" lengthAdjust="spacing">    done-done run sync, then check the new</text>
+<text xml:space="preserve" x="22" y="624" textLength="96.0" lengthAdjust="spacing">    files"</text>
+<text xml:space="preserve" x="22" y="648" textLength="57.6" lengthAdjust="spacing"><tspan class="d">exit 1</tspan></text></g>
 </svg>

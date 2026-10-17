@@ -303,9 +303,9 @@ export const routeOf = (agent) => (agent === 'claude' ? 'claude-code' : `answere
 export const JUDGES = AGENTS.filter((a) => a === 'claude' || ANSWERER_JUDGES.includes(a));
 // Like the agent, the judge is exactly the one the user set; with none, done-done asks the user (in a terminal) or
 // stops with this error, so a calling agent asks its user rather than picking one.
-export const noJudge = () => askError('judge', JUDGES.join(', '), 'never pick one for them, and never the agent that did the work', `done-done init --judge <agent> --judge-model <model>, e.g. done-done init --judge opencode --judge-model ${CHEAP.opencode.model}`);
-// fix: the judge on a fix path (auto_fix) is never the fixer's own agent, at any model, and judge.allow_same does not apply.
-export function selectJudge(cfg, found, fix = false) {
+export const noJudge = () => askError('judge', JUDGES.join(', '), 'never pick one for them', `done-done init --judge <agent> --judge-model <model>, e.g. done-done init --judge opencode --judge-model ${CHEAP.opencode.model}`);
+// The user's judge may be any agent and model they choose, the author's own too: it judges in a fresh session.
+export function selectJudge(cfg, found) {
     const route = cfg.judge.route;
     if (!route)
         throw noJudge();
@@ -321,10 +321,6 @@ export function selectJudge(cfg, found, fix = false) {
     const independence = keyed
         ? found.model && model === found.model ? 'session-only' : 'agent'
         : agent !== knownAgentOf(found.agent) ? 'agent' : found.model && model !== found.model ? 'model' : 'session-only';
-    if (fix && independence !== 'agent')
-        throw new UsageError(`judge: the judge ${agent} (model ${model}) is the fixer's own agent (${found.agent}) at any model, and the judge is never the agent that did the work; judge.allow_same does not apply to auto_fix`, 'Ask the user for another judge agent and save it: done-done init --judge <agent> --judge-model <model>');
-    if (independence === 'session-only' && !cfg.judge.allow_same)
-        throw new UsageError(`judge: the judge ${agent} (model ${model}) is the author's own agent and model (${found.agent}), and the judge must differ from the author by agent or by model`, `done-done init --judge <agent> --judge-model <model>, with another agent or the same agent at another model; judge.allow_same: true in ~/.done-done/config.yaml is an opt-out only, for a fresh session of the same agent and model`);
     return { route, agent, model, independence, author: { agent: found.agent, model: found.model } };
 }
 const DRAIN_MS = 500;

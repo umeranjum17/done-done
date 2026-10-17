@@ -1,22 +1,22 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="505" height="502" viewBox="0 0 505 502" role="img" aria-label="Fresh proof passes">
+<svg xmlns="http://www.w3.org/2000/svg" width="505" height="814" viewBox="0 0 505 814" role="img" aria-label="Fresh proof passes">
 <title>Fresh proof passes</title>
 <style>
 text{font:16px ui-monospace,SFMono-Regular,'SF Mono',Menlo,Consolas,'Liberation Mono',monospace;fill:#1f2328;white-space:pre}
 .d{fill:#59636e}.c{fill:#8250df}.p{fill:#1a7f37}.f{fill:#cf222e}.b{font-weight:600}
 .t{font-size:14px;font-weight:600;fill:#59636e}
 </style>
-<rect x="0.5" y="0.5" width="504" height="501" rx="10" fill="#f6f8fa" stroke="#d0d7de"/>
+<rect x="0.5" y="0.5" width="504" height="813" rx="10" fill="#f6f8fa" stroke="#d0d7de"/>
 <path d="M0.5 40V10.5a10 10 0 0 1 10-10h484a10 10 0 0 1 10 10V40z" fill="#eaeef2" stroke="#d0d7de"/>
 <circle cx="20" cy="20" r="6" fill="#ff5f57"/><circle cx="40" cy="20" r="6" fill="#febc2e"/><circle cx="60" cy="20" r="6" fill="#28c840"/>
 <text class="t" x="252.5" y="25" text-anchor="middle">Fresh proof passes</text>
-<clipPath id="body"><rect x="1" y="41" width="503" height="460"/></clipPath>
+<clipPath id="body"><rect x="1" y="41" width="503" height="772"/></clipPath>
 <g clip-path="url(#body)"><text xml:space="preserve" x="22" y="72" textLength="230.4" lengthAdjust="spacing"><tspan class="c">~/notes $ </tspan><tspan class="b">cat pr-body.md</tspan></text>
 <text xml:space="preserve" x="22" y="96" textLength="86.4" lengthAdjust="spacing">## Checks</text>
 <text xml:space="preserve" x="22" y="120" textLength="374.4" lengthAdjust="spacing"><tspan class="d">outcome: </tspan>notes sync between two devices</text>
 <text xml:space="preserve" x="22" y="144" textLength="172.8" lengthAdjust="spacing"><tspan class="d">repro: </tspan>n/a: no bug</text>
 <text xml:space="preserve" x="22" y="168" textLength="412.8" lengthAdjust="spacing"><tspan class="d">proof: </tspan>no verify skill - done-done run sync</text>
 <text xml:space="preserve" x="22" y="192" textLength="364.8" lengthAdjust="spacing"><tspan class="d">evidence: </tspan>~/.done-done/evidence/notes/</text>
-<text xml:space="preserve" x="22" y="216" textLength="441.6" lengthAdjust="spacing">    20261013T161405Z-1cb99c01-0f4d05/after.png</text>
+<text xml:space="preserve" x="22" y="216" textLength="441.6" lengthAdjust="spacing">    20261017T141004Z-b9d3f9df-ef58e3/after.png</text>
 <text xml:space="preserve" x="22" y="240" textLength="412.8" lengthAdjust="spacing"><tspan class="c">~/notes $ </tspan><tspan class="b">done-done check --from pr-body.md</tspan></text>
 <text xml:space="preserve" x="22" y="264" textLength="134.4" lengthAdjust="spacing"><tspan class="d">command: </tspan>check</text>
 <text xml:space="preserve" x="22" y="288" textLength="115.2" lengthAdjust="spacing"><tspan class="d">result: </tspan><tspan class="p b">pass</tspan></text>
@@ -24,8 +24,21 @@ text{font:16px ui-monospace,SFMono-Regular,'SF Mono',Menlo,Consolas,'Liberation 
 <text xml:space="preserve" x="22" y="336" textLength="172.8" lengthAdjust="spacing"><tspan class="d">source: </tspan>pr-body.md</text>
 <text xml:space="preserve" x="22" y="360" textLength="76.8" lengthAdjust="spacing"><tspan class="d">files: </tspan>1</text>
 <text xml:space="preserve" x="22" y="384" textLength="393.6" lengthAdjust="spacing"><tspan class="d">evidence[1]: </tspan>~/.done-done/evidence/notes/</text>
-<text xml:space="preserve" x="22" y="408" textLength="441.6" lengthAdjust="spacing">    20261013T161405Z-1cb99c01-0f4d05/after.png</text>
-<text xml:space="preserve" x="22" y="432" textLength="441.6" lengthAdjust="spacing"><tspan class="d">help[1]: </tspan>"Record this pass for HEAD: done-done</text>
-<text xml:space="preserve" x="22" y="456" textLength="288.0" lengthAdjust="spacing">    receipt --from pr-body.md"</text>
-<text xml:space="preserve" x="22" y="480" textLength="57.6" lengthAdjust="spacing"><tspan class="d">exit 0</tspan></text></g>
+<text xml:space="preserve" x="22" y="408" textLength="441.6" lengthAdjust="spacing">    20261017T141004Z-b9d3f9df-ef58e3/after.png</text>
+<text xml:space="preserve" x="22" y="432" textLength="57.6" lengthAdjust="spacing">judge:</text>
+<text xml:space="preserve" x="22" y="456" textLength="249.6" lengthAdjust="spacing">  route: "answerer:gemini"</text>
+<text xml:space="preserve" x="22" y="480" textLength="182.4" lengthAdjust="spacing">  model: demo-judge</text>
+<text xml:space="preserve" x="22" y="504" textLength="201.6" lengthAdjust="spacing">  independence: agent</text>
+<text xml:space="preserve" x="22" y="528" textLength="211.2" lengthAdjust="spacing">  author: no agent set</text>
+<text xml:space="preserve" x="22" y="552" textLength="384.0" lengthAdjust="spacing">  judged[1]{path,verdict,reason,cached}:</text>
+<text xml:space="preserve" x="22" y="576" textLength="307.2" lengthAdjust="spacing">    ~/.done-done/evidence/notes/</text>
+<text xml:space="preserve" x="22" y="600" textLength="355.2" lengthAdjust="spacing">    20261017T141004Z-b9d3f9df-ef58e3/</text>
+<text xml:space="preserve" x="22" y="624" textLength="441.6" lengthAdjust="spacing">    after.png,pass,The screen shows the synced</text>
+<text xml:space="preserve" x="22" y="648" textLength="144.0" lengthAdjust="spacing">    note.,false</text>
+<text xml:space="preserve" x="22" y="672" textLength="451.2" lengthAdjust="spacing">  note: "PNG and JPEG screens and text captures</text>
+<text xml:space="preserve" x="22" y="696" textLength="441.6" lengthAdjust="spacing">    (logs, JSON, CLI output) are judged; video</text>
+<text xml:space="preserve" x="22" y="720" textLength="268.8" lengthAdjust="spacing">    and other files are not"</text>
+<text xml:space="preserve" x="22" y="744" textLength="441.6" lengthAdjust="spacing"><tspan class="d">help[1]: </tspan>"Record this pass for HEAD: done-done</text>
+<text xml:space="preserve" x="22" y="768" textLength="288.0" lengthAdjust="spacing">    receipt --from pr-body.md"</text>
+<text xml:space="preserve" x="22" y="792" textLength="57.6" lengthAdjust="spacing"><tspan class="d">exit 0</tspan></text></g>
 </svg>

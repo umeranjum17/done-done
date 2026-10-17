@@ -31,8 +31,18 @@ const screen = () => {
   return Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), chunk('IHDR', ihdr), chunk('IDAT', deflateSync(raw)), chunk('IEND', Buffer.alloc(0))]);
 };
 
-// A clean install: a bare git repo, a throwaway HOME (never the user's logins), judge off.
-function cleanRepo(yaml = 'app: notes\nevidence:\n  root: .proof\njudge:\n  enabled: false\njourneys:\n  smoke:\n    command: node make-shots.mjs ${RUN_ID}\n') {
+// done-done gives no result without its judge, so the user's judge here is a stub (never a model): a gemini stub through
+// agent_path_override that says each capture shows the outcome.
+function stubJudge(dir) {
+  const bin = join(dir, 'judge-gemini');
+  const answer = JSON.stringify({ relevance: { probabilities: { correct: 0.95, wrong: 0.03, unclear: 0.02 }, rationale: 'It shows the outcome.', personReason: 'It shows the outcome.' } });
+  writeFileSync(bin, `#!${process.execPath}\nrequire('node:fs').readFileSync(0, 'utf8');\nprocess.stdout.write(JSON.stringify({ response: ${JSON.stringify(answer)} }));\n`, { mode: 0o755 });
+  mkdirSync(join(dir, 'home'), { recursive: true });
+  writeFileSync(join(dir, 'home', 'config.yaml'), `judge:\n  route: answerer:gemini\n  model: stub-judge\nagent_path_override: { gemini: ${JSON.stringify(bin)} }\n`);
+}
+
+// A clean install: a bare git repo, a throwaway HOME (never the user's logins), and the user's judge set.
+function cleanRepo(yaml = 'app: notes\nevidence:\n  root: .proof\njourneys:\n  smoke:\n    command: node make-shots.mjs ${RUN_ID}\n') {
   const dir = mkdtempSync(join(tmpdir(), 'dd-conformance-'));
   after(() => rmSync(dir, { recursive: true, force: true }));
   const repo = join(dir, 'repo');
@@ -41,6 +51,7 @@ function cleanRepo(yaml = 'app: notes\nevidence:\n  root: .proof\njudge:\n  enab
   writeFileSync(join(repo, '.done-done.yaml'), yaml);
   writeFileSync(join(repo, 'src', 'app.js'), 'export const app = 1;\n');
   writeFileSync(join(dir, 'screen.png'), screen());
+  stubJudge(dir);
   writeFileSync(join(repo, 'make-shots.mjs'),
     `import { copyFileSync, mkdirSync } from 'node:fs';\nconst out = '.proof/' + process.argv[2];\nmkdirSync(out, { recursive: true });\ncopyFileSync(${JSON.stringify(join(dir, 'screen.png'))}, out + '/home.png');\n`);
   const sh = (...a) => execFileSync('git', a, { cwd: repo, env, stdio: 'pipe' });
@@ -84,6 +95,8 @@ test('the README manual-CLI worked example runs as written: init, journey, run, 
     return { code: r.status, out: r.stdout + r.stderr, stdout: r.stdout };
   };
   assert.equal(dd('init', '--journey', 'smoke', '--', 'npm test > $DONE_DONE_EVIDENCE_ROOT/${RUN_ID}.log').code, 2, 'init records the journey and stops at the agent ask');
+  // The user's answer to the judge ask, saved in the global config.
+  stubJudge(dir);
   writeFileSync(join(repo, 'package.json'), JSON.stringify({ scripts: { test: 'node -e "console.log(\'ok\')"' } }));
   sh('add', '-A');
   sh('commit', '-qm', 'Add done-done');

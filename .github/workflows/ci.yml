@@ -65,10 +65,10 @@ jobs:
         run: npm ci
       - if: steps.changes.outputs.docs_only != 'true'
         run: npx tsc
-      # The merge gate: the repo proves itself with its own tool. The e2e
-      # journey drives the built CLI against a throwaway fixture repo
-      # (doctor, run, check, receipt), then verify checks that evidence
-      # and records the receipt for HEAD. --no-judge keeps it deterministic;
-      # --claim-id ci names the claim on CI's detached HEAD.
+      # The repo drives itself with its own tool: the e2e journey runs the
+      # built CLI against a throwaway fixture repo (doctor, run, check,
+      # receipt, look) and fails on the first wrong exit. CI has no judge
+      # of its own, and done-done gives no verdict without one, so this
+      # records the run (result: recorded) and gives no receipt.
       - if: steps.changes.outputs.docs_only != 'true'
-        run: node dist/cli.js verify e2e --foreground --no-judge --claim-id ci --outcome "the done-done CLI proves a fixture repo end to end"
+        run: node dist/cli.js run e2e

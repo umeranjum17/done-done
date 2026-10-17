@@ -309,11 +309,10 @@ export function agentPath(agent: string, cfg?: Pick<Config, 'acpx_path' | 'agent
   return acpxRuns.get(acpx) ? acpx : '';
 }
 
-// The judge: a fresh, tools-off, single-shot call through BYOKit, never the author's agent and model unless the user
-// accepts that. claude judges through the kit's claude-code route; any other agent whose CLI reads images with every
+// The judge: a fresh, tools-off, single-shot call through BYOKit, exactly the one the user set. claude judges through the kit's claude-code route; any other agent whose CLI reads images with every
 // tool off, through the kit's answerer backend over that CLI; a key route (openai:key) through the kit's own backend on
-// the user's API key, with no agent CLI. independence: agent (another agent), model (the author's agent at
-// another model) or session-only (the author's agent and model in a fresh session).
+// the user's API key, with no agent CLI. independence is recorded, never enforced: agent (another agent), model (the
+// author's agent at another model) or session-only (the author's agent and model in a fresh session).
 export type JudgeChoice = { route: string; agent: string; model: string; independence: 'agent' | 'model' | 'session-only'; author: { agent: string; model: string } };
 
 export const claudeBin = (cfg: Config) => agentPath('claude', cfg);
@@ -322,10 +321,10 @@ export const JUDGES = AGENTS.filter((a) => a === 'claude' || ANSWERER_JUDGES.inc
 // Like the agent, the judge is exactly the one the user set; with none, done-done asks the user (in a terminal) or
 // stops with this error, so a calling agent asks its user rather than picking one.
 export const noJudge = () =>
-  askError('judge', JUDGES.join(', '), 'never pick one for them, and never the agent that did the work', `done-done init --judge <agent> --judge-model <model>, e.g. done-done init --judge opencode --judge-model ${CHEAP.opencode.model}`);
+  askError('judge', JUDGES.join(', '), 'never pick one for them', `done-done init --judge <agent> --judge-model <model>, e.g. done-done init --judge opencode --judge-model ${CHEAP.opencode.model}`);
 
-// fix: the judge on a fix path (auto_fix) is never the fixer's own agent, at any model, and judge.allow_same does not apply.
-export function selectJudge(cfg: Config, found: { agent: string; model: string }, fix = false): JudgeChoice {
+// The user's judge may be any agent and model they choose, the author's own too: it judges in a fresh session.
+export function selectJudge(cfg: Config, found: { agent: string; model: string }): JudgeChoice {
   const route = cfg.judge.route;
   if (!route) throw noJudge();
   // A key route judges on the user's own key at judge.model; an agent route judges through that agent at its model.
@@ -338,10 +337,6 @@ export function selectJudge(cfg: Config, found: { agent: string; model: string }
   const independence = keyed
     ? found.model && model === found.model ? 'session-only' : 'agent'
     : agent !== knownAgentOf(found.agent) ? 'agent' : found.model && model !== found.model ? 'model' : 'session-only';
-  if (fix && independence !== 'agent')
-    throw new UsageError(`judge: the judge ${agent} (model ${model}) is the fixer's own agent (${found.agent}) at any model, and the judge is never the agent that did the work; judge.allow_same does not apply to auto_fix`, 'Ask the user for another judge agent and save it: done-done init --judge <agent> --judge-model <model>');
-  if (independence === 'session-only' && !cfg.judge.allow_same)
-    throw new UsageError(`judge: the judge ${agent} (model ${model}) is the author's own agent and model (${found.agent}), and the judge must differ from the author by agent or by model`, `done-done init --judge <agent> --judge-model <model>, with another agent or the same agent at another model; judge.allow_same: true in ~/.done-done/config.yaml is an opt-out only, for a fresh session of the same agent and model`);
   return { route, agent, model, independence, author: { agent: found.agent, model: found.model } };
 }
 

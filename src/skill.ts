@@ -66,10 +66,11 @@ journeys:
 done-done starts a coding agent the user chose. When it says no agent is set, ask the user which agent
 (and model) to use and save their answer with the command it prints; never choose one for them.
 
-done-done runs its own agent: \`done-done verify\` drives the journey, then a judge the user chose, never
-the agent that did the work (never you), looks at each capture. That is on by default; skip it with
-\`--no-judge\` only when the user chooses to. When it says no judge is set, ask the user which judge (and
-model) to use and save their answer with the command it prints; never choose one for them.
+done-done runs its own agent: \`done-done verify\` drives the journey, then a judge the user chose, in a
+fresh session of its own, looks at each capture. \`check\` and \`receipt\` start the judge too,
+and nothing turns it off: there is no result without it. When it says no judge is set, ask the user which
+judge (and model) to use and save their answer with the command it prints; never choose one for them. When
+the judge fails, report its error to the user; never call the work proven without a judge pass.
 
 ## Request
 

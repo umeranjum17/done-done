@@ -13,7 +13,7 @@ import { ACPX_INSTALL, agentChoices, agentPath, agentRun, askAgent, editOnlyReas
 import { AGENTS, CHEAP, type Config, globalConfigText, home, inputPattern, isAgent, loadConfig, parseDuration, UsageError } from './config.js';
 import { backend, type Capture, judge, judgeable, type Judged, onPath, quote, screen } from './judge.js';
 import { startInstance, stopInstance } from './instance.js';
-import { attemptProblem, changedSince, commitFix, dirtyTracked, FIX_SCHEMA, type Finding as MaintainFinding, inWorktree, maintainSteps, type MaintainResult, named, pathspec, repoState, triage, type Triage } from './maintain.js';
+import { attemptProblem, changedSince, commitFix, dirtyTracked, FIX_SCHEMA, type Finding as MaintainFinding, inWorktree, maintainSteps, type MaintainResult, named, pathspec, readerProblem, repoState, triage, type Triage } from './maintain.js';
 import { cellEnv, cellName, cellSuffix, hasMatrix, matrixManifest, splitMatrix } from './matrix.js';
 import { design, KINDS } from './design.js';
 import { checkMedia } from './media.js';
@@ -40,7 +40,7 @@ const CHECKS_TEXT = `Checks block (--from): the newest "## Checks" heading, then
   evidence: <the evidence file paths, or "not proven: <cause>">`;
 const RUNS_TEXT = `runs: each verify or maintain run lives in $DONE_DONE_HOME/runs/<app>/<run-id> (run.json, events.jsonl, logs/<step>.log,
   agents/<n>-<name>.json for each agent call) and goes on when the command that started it ends;
-  verify steps: resolve, drive, check, judge (skipped with --no-judge), triage and fix (only with auto_fix.verify above 0), gate, receipt, report;
+  verify steps: resolve, drive, check, judge (always; skipped only after a failed check), triage and fix (only with auto_fix.verify above 0), gate, receipt, report;
   maintain steps: locate, hygiene, source-wave, reconcile, triage and fix (only with auto_fix.maintain above 0), report
   drive: the journey when there is one; else the author agent (agent: in config) drives one feature of the verify skill the way a user
   does and saves captures into the run's evidence folder; it may run commands and edit files only in the repo and that folder where
@@ -61,31 +61,32 @@ const MAINTAIN_TEXT = `maintain reads the verify skill and the source; HEAD, git
   source-wave: one fresh read-only reader per feature file at the configured agent (agent, agent_config) explains it from source
   reconcile: each file:line the skill or a reader cites must exist (a bare file name matches a tracked file); one tool-less call
   merges the recipes and names recently changed source (git log, 30 days) that no feature covers. Result: clean (exit 0),
-  drift with findings (exit 1), or blocked (no skill, a reader that did not answer, a repo that changed, or no agent: the
-  readers and the merge call do not run, the plain checks still do; exit 3)
+  drift with findings (exit 1), or blocked (no skill, a reader that did not answer, or a repo that changed; exit 3). maintain
+  never runs without its agent: none set, or one that cannot start or cannot read with its tools off, stops it first (exit 2)
   auto_fix: { maintain: <n> } (config, as no-mistakes; 0, the default, reports only) lets done-done fix drift up to n times:
-  triage: the judge the user set (never the agent that fixes) sorts each drift finding: the skill is out of date, or the product
+  triage: the judge the user set sorts each drift finding: the skill is out of date, or the product
   may be wrong; a product finding is ask-user, so the run ends blocked and the user decides (maintain never edits product code)
   fix: the agent the user set edits only the verify skill, in a done-done worktree at HEAD; a change outside the skill folder,
   a commit by the agent or a change to your checkout ends it blocked, and the worktree is dropped. maintain then runs again there.
   Result: changed (a clean re-run; one commit of the skill folder on a done-done/maintain-<run-id> branch, your branch and checkout
   untouched; exit 0), or blocked (ask-user findings, a guard, or every attempt used, with the findings that remain; no branch)`;
 const DOCTOR_TEXT = `doctor changes nothing except the --probe call record (the agent itself may keep its own session files) and exits 0 when every required item is ok, 2 otherwise.
-  required: git (inside a repository), config (a valid .done-done.yaml), evidence_root (writable).
-  optional: verify_skill (.agents/skills/verify-<app>/), agent (the agent the user set and its model; missing when none is
-  set, with the command that saves the user's choice), agent_settings (agent, model, effort,
-  args, path and agent_timeout, each with the file it came from: the global config, .done-done.yaml or default), judge (the judge route is ready: for claude-code an
-  executable claude binary, a sign-in folder and the judge kit, for answerer:<agent> that agent's CLI and the kit, for openai:key
-  OPENAI_API_KEY and the kit; doctor does not call the model; missing when none is set, with the command that saves the user's choice),
+  required: git (inside a repository), config (a valid .done-done.yaml), evidence_root (writable), agent (the agent the user
+  set and its model; missing when none is set, with the command that saves the user's choice), judge (the judge route is ready:
+  for claude-code an executable claude binary, a sign-in folder and the judge kit, for answerer:<agent> that agent's CLI and the
+  kit, for openai:key OPENAI_API_KEY and the kit; doctor does not call the model; missing when none is set, with the command
+  that saves the user's choice).
+  also listed: verify_skill (.agents/skills/verify-<app>/), agent_settings (agent, model, effort,
+  args, path and agent_timeout, each with the file it came from: the global config, .done-done.yaml or default),
   judge_choice (the judge, and how far it is from the author: another agent, another model, or session-only), ffprobe (video evidence only).
   --probe also asks the agent one JSON-schema question (one call at the agent's model: its cheap default where it has one, else its own; set agent_config.<agent>.model to choose; its record goes to
   $DONE_DONE_HOME/agents/) and then requires a valid answer.
-  doctor lists every check; --full changes nothing. Missing optionals never fail the run.`;
+  doctor lists every check; --full changes nothing. A missing verify_skill or ffprobe, or a warning, never fails it.`;
 const CONFIG_TEXT = `config: ~/.done-done/config.yaml (global; DONE_DONE_HOME moves it) and .done-done.yaml (the repo), repo over global.
   agent (either file): claude, codex, opencode, pi, gemini or acp:<target>, set by the user (done-done init --agent); done-done never picks one.
   global only: agent_config.<agent>.{model,effort} (effort: minimal, low, medium, high, xhigh, max), agent_args_override.<agent>
   (extra flags), agent_path_override.<agent> (binary), acpx_path, agent_timeout (one agent call, default 30m; a streaming agent that prints nothing for 5m is stopped early),
-  evidence.local_root, judge.{route,model,allow_same,claude_code.config_dir} (the judge, set by the user with
+  evidence.local_root, judge.{route,model,claude_code.config_dir} (the judge, set by the user with
   init --judge; never picked). done-done doctor shows where each agent setting came from.`;
 
 // One table drives `--help` and every `<command> --help`: each command's usage lines and the flags it takes.
@@ -99,8 +100,6 @@ const FLAGS: Record<string, string> = {
   '--trusted-ref <ref>': 'read .done-done.yaml from this git ref instead of the working tree (use in CI)',
   '--citation-base <dir>': 'resolve evidence citations against this directory (default: cwd); absolute citations stay unchanged; does not change repo, config or run storage',
   '--claim-id <id>': 'the claim the evidence proves; evidence already used for another claim id is reuse (default: the current branch, or the PR branch with --from <PR URL>; required on a detached HEAD)',
-  '--judge': 'the judge the user set (judge.route, never the agent and model that did the work) says whether each PNG/JPEG capture shows the outcome (verify does this by default; check and receipt only with --judge or judge.enabled: true)',
-  '--no-judge': 'skip the judge, only when the user chooses to (or judge.enabled: false in .done-done.yaml)',
   '--verify <head>': 'read-only: verify the receipt recorded for <head>',
   '--outcome "<what a user can now do>"': 'the outcome the run must prove',
   '--wait': 'wait until the run ends (the default)',
@@ -117,7 +116,7 @@ const FLAGS: Record<string, string> = {
   '--out <file.png>': 'where look writes the screenshot; its page-check record goes next to it as <file>.dom.json (default: look.png in $DONE_DONE_EVIDENCE_ROOT inside a journey, else in the current folder)',
   '--agent <agent>': 'the coding agent done-done starts (claude, codex, opencode, pi, gemini or acp:<target>), saved as agent in ~/.done-done/config.yaml; without it, init asks in a terminal',
   '--model <model>': 'with --agent: that agent\'s model, saved as agent_config.<agent>.model (opencode: provider/model)',
-  '--judge <agent>': `the judge done-done starts (${JUDGES.join(' or ')}), saved as judge.route in ~/.done-done/config.yaml; never the agent and model that did the work; without it, init asks in a terminal`,
+  '--judge <agent>': `the judge done-done starts (${JUDGES.join(' or ')}), saved as judge.route in ~/.done-done/config.yaml (any agent and model, the author's own too); without it, init asks in a terminal`,
   '--judge-model <model>': 'with --judge <agent>: the judge\'s model, saved as judge.model',
   '--hook <agent>': 'also add a SessionStart hook to .claude/settings.json (claude), .codex/hooks.json (codex) or .gemini/settings.json (gemini) that shows `done-done` to each session, or a plugin to .opencode/plugins (opencode) or an extension to .pi/extensions (pi) that adds it to the first message of each session (opt-in)',
 };
@@ -158,28 +157,28 @@ const COMMANDS: Record<string, { usage: [string, string][]; flags: string[]; mor
   },
   check: {
     usage: [
-      ['done-done check --outcome "<claim>" <files...> [--claim-id <id>] [--trusted-ref <ref>] [--citation-base <dir>] [--judge]', 'check evidence files against a claim'],
-      ['done-done check --from <file | - | PR URL> [--claim-id <id>] [--trusted-ref <ref>] [--citation-base <dir>] [--judge]', "check a claim's Checks block"],
+      ['done-done check --outcome "<claim>" <files...> [--claim-id <id>] [--trusted-ref <ref>] [--citation-base <dir>]', 'check evidence files against a claim'],
+      ['done-done check --from <file | - | PR URL> [--claim-id <id>] [--trusted-ref <ref>] [--citation-base <dir>]', "check a claim's Checks block"],
     ],
-    flags: ['--outcome "<claim>"', '--from <file | - | PR URL>', '--claim-id <id>', '--trusted-ref <ref>', '--citation-base <dir>', '--judge'],
+    flags: ['--outcome "<claim>"', '--from <file | - | PR URL>', '--claim-id <id>', '--trusted-ref <ref>', '--citation-base <dir>'],
     more: [CHECKS_TEXT],
   },
   receipt: {
     usage: [
-      ['done-done receipt --outcome "<claim>" <files...> [--claim-id <id>] [--trusted-ref <ref>] [--citation-base <dir>] [--judge]', 'record a passing check for HEAD'],
-      ['done-done receipt --from <file | - | PR URL> [--claim-id <id>] [--trusted-ref <ref>] [--citation-base <dir>] [--judge]', "record from a claim's Checks block"],
+      ['done-done receipt --outcome "<claim>" <files...> [--claim-id <id>] [--trusted-ref <ref>] [--citation-base <dir>]', 'record a passing check for HEAD'],
+      ['done-done receipt --from <file | - | PR URL> [--claim-id <id>] [--trusted-ref <ref>] [--citation-base <dir>]', "record from a claim's Checks block"],
       ['done-done receipt --verify <head>', 'read-only: verify a recorded receipt'],
     ],
-    flags: ['--outcome "<claim>"', '--from <file | - | PR URL>', '--claim-id <id>', '--trusted-ref <ref>', '--citation-base <dir>', '--judge', '--verify <head>'],
+    flags: ['--outcome "<claim>"', '--from <file | - | PR URL>', '--claim-id <id>', '--trusted-ref <ref>', '--citation-base <dir>', '--verify <head>'],
     more: [CHECKS_TEXT],
   },
   verify: {
     usage: [
-      ['done-done verify [<journey>] --outcome "<what a user can now do>" [--claim-id <id>] [--no-judge]', 'drive the journey in a run that outlives this command, check its evidence, judge each capture and record a receipt'],
-      ['done-done verify --outcome "<claim>" [--feature <name>]', 'with no journey, the author agent drives a verify skill feature and the judge (never the author) judges its captures'],
+      ['done-done verify [<journey>] --outcome "<what a user can now do>" [--claim-id <id>]', 'drive the journey in a run that outlives this command, check its evidence, judge each capture and record a receipt'],
+      ['done-done verify --outcome "<claim>" [--feature <name>]', 'with no journey, the author agent drives a verify skill feature and the judge the user set judges its captures'],
       ['done-done verify [<journey>] --outcome "<claim>" --no-wait | --wait | --foreground', 'return at once, wait until the run ends or waits at its gate (default), or run in this process (CI)'],
     ],
-    flags: ['--outcome "<what a user can now do>"', '--feature <name>', '--claim-id <id>', '--judge', '--no-judge', '--wait', '--no-wait', '--foreground'],
+    flags: ['--outcome "<what a user can now do>"', '--feature <name>', '--claim-id <id>', '--wait', '--no-wait', '--foreground'],
     more: [RUNS_TEXT],
   },
   maintain: {
@@ -190,7 +189,7 @@ const COMMANDS: Record<string, { usage: [string, string][]; flags: string[]; mor
   design: {
     usage: [['done-done design <screens...> [--mock <screen>=<mock>]', 'a judge looks at each PNG/JPEG screen, alone or next to its mock, and fails it on visual defects']],
     flags: ['--mock <screen>=<mock>'],
-    more: [`design: one judge request per screen (the judge the user set, never the author); it fails a screen on any defect it names:
+    more: [`design: one judge request per screen (the judge the user set); it fails a screen on any defect it names:
   ${Object.keys(KINDS).join(', ')}; capture each variant (dark, small width, large font) as its own screen; exit 0 every screen
   passed, 1 a screen failed, 3 none failed but one is unsure`],
   },
@@ -226,8 +225,8 @@ const COMMANDS: Record<string, { usage: [string, string][]; flags: string[]; mor
     more: [RUNS_TEXT],
   },
   rerun: {
-    usage: [['done-done rerun [--run <run-id>] [--wait | --no-wait] [--no-judge]', 'run again from the failed step, reusing steps whose inputs did not change; the judge runs as the source run did (--no-judge turns it off); wait (default) or return at once (exit 4)']],
-    flags: ['--run <run-id>', '--wait', '--no-wait', '--no-judge'],
+    usage: [['done-done rerun [--run <run-id>] [--wait | --no-wait]', 'run again from the failed step, reusing steps whose inputs did not change; the judge always runs; wait (default) or return at once (exit 4)']],
+    flags: ['--run <run-id>', '--wait', '--no-wait'],
     more: [RUNS_TEXT],
   },
   abort: {
@@ -256,12 +255,12 @@ usage:
 ${rows([['done-done', "show this repo's config state and the next step"], ...Object.values(COMMANDS).flatMap((c) => c.usage)], 46)}
 ${GLOBAL_TEXT}
 judge: done-done's own agent, a fresh one on your own plan through BYOKit, says whether each PNG/JPEG capture shows
-  the outcome; a wrong screen fails, an unsure answer is inconclusive. verify judges by default (judge.enabled: false turns
-  that off; --judge turns it on for one run); rerun repeats its source run's judge choice (--no-judge turns it off for a run);
-  check and receipt start no model unless --judge or judge.enabled: true. The judge is the one the user set (judge.route:
-  claude-code; answerer:<agent> through the CLI of opencode, pi or gemini with every tool off; or openai:key with judge.model
-  on your own OPENAI_API_KEY), never the agent and model that did the work; with none set, done-done asks in a terminal or
-  stops (exit 2) with the command that saves it.
+  the outcome; a wrong screen fails, an unsure answer is inconclusive. check, receipt, verify, rerun and design always start
+  it, and there is no way to turn it off: a pass needs a judge pass on at least one capture. The judge is the one the user set
+  (judge.route: claude-code; answerer:<agent> through the CLI of opencode, pi or gemini with every tool off; or openai:key with
+  judge.model on your own OPENAI_API_KEY), whichever agent and model the user picks; with none set, done-done asks in a
+  terminal or stops (exit 2) with the command that saves it. A judge that fails or does not answer stops the command with its
+  cause (exit 2), never a result.
 
 ${JOURNEYS_TEXT}
 ${CHECKS_TEXT}
@@ -429,7 +428,8 @@ function closeRun(repo: string, cfg: Config, rec: RunRecord, log?: string): { co
   const rows = cap(evidence);
   const result: Record<string, unknown> = {
     command: 'run',
-    result: reason ? 'fail' : 'pass',
+    // A capture that ran is recorded, never a pass: only the judged check decides whether it proves anything.
+    result: reason ? 'fail' : 'recorded',
     run_id: rec.run_id,
     commit: rec.commit,
     dirty: rec.dirty,
@@ -597,7 +597,7 @@ function loadRecords(cfg: Config): RunRecord[] {
   return readdirSync(dir).filter((n) => n.endsWith('.json')).map((n) => JSON.parse(readFileSync(join(dir, n), 'utf8')) as RunRecord).filter((r) => r.ended_at);
 }
 
-// The judge block a receipt keeps: who judged, how apart from the author, and each judged capture's verdict.
+// The judge block a receipt keeps: who judged, how apart from the author (recorded, never enforced), and each judged capture's verdict.
 type JudgeBlock = { route: string; model: string; independence: JudgeChoice['independence']; author: JudgeChoice['author']; verdicts: { path: string; sha256: string; verdict: string }[] };
 
 type CheckOutcome = {
@@ -613,11 +613,13 @@ type CheckOutcome = {
 };
 
 // Run a check and return its result without printing it, so `check` and `receipt` share one path.
+// The judge always runs: with no agent or judge set it asks (in a terminal) or stops before any result, and a judge that
+// does not answer stops it with its cause. The plain checks are steps of the judged result, never a result alone.
 // run: a verify run's folder (the judge's call records go to its agents/), its judge-step hook, and the checkout and config it checks.
-async function runCheck(argv: string[], run?: { dir: string; judge: boolean; judging: (code: number, findings: Finding[]) => void; author?: { agent: string; model: string }; repo: string; cfg: Config }): Promise<CheckOutcome> {
+async function runCheck(argv: string[], run?: { dir: string; judging: (code: number, findings: Finding[]) => void; author?: { agent: string; model: string }; repo: string; cfg: Config }): Promise<CheckOutcome> {
   const { values, positionals } = parseArgs({
     args: argv,
-    options: { outcome: { type: 'string' }, from: { type: 'string' }, 'claim-id': { type: 'string' }, 'trusted-ref': { type: 'string' }, 'citation-base': { type: 'string' }, judge: { type: 'boolean' } },
+    options: { outcome: { type: 'string' }, from: { type: 'string' }, 'claim-id': { type: 'string' }, 'trusted-ref': { type: 'string' }, 'citation-base': { type: 'string' } },
     allowPositionals: true,
   });
   if (values['citation-base']?.trim() === '') throw new UsageError('--citation-base needs a non-empty directory');
@@ -636,6 +638,8 @@ async function runCheck(argv: string[], run?: { dir: string; judge: boolean; jud
     }
   }
   const cfg = run?.cfg ?? loadConfig(repo, projectText);
+  // No result without the judge: with none set it asks the user, or stops with the command that saves one.
+  await withChoice('judge', cfg);
   const now = head(repo);
   const findings: Finding[] = [];
   let claim: Claim | undefined;
@@ -651,9 +655,8 @@ async function runCheck(argv: string[], run?: { dir: string; judge: boolean; jud
     claim = claimFromChecks(src.body, title, repo, cfg, findings);
   }
   if (claim?.notProven) {
-    const allowed = cfg.checks.not_proven === 'allow' && cfg.trusted;
-    const all = findings.concat(allowed ? [] : [{ level: 'inconclusive', why: `not proven: ${claim.notProven}` }]);
-    const rep = report(all, [], { cfg, repo, claim: claim.outcome, source: values.from, citationBase: values['citation-base'], notProven: true }, allowed ? 'not proven (allowed by trusted config)' : '');
+    const all = findings.concat([{ level: 'inconclusive', why: `not proven: ${claim.notProven}` }]);
+    const rep = report(all, [], { cfg, repo, claim: claim.outcome, source: values.from, citationBase: values['citation-base'], notProven: true });
     return { code: rep.code, result: rep.result, claim: claim?.outcome, files: [], cited: [], head: now, findings: all };
   }
   const files = (claim?.files ?? []).map((name) => values['citation-base'] === undefined ? name : resolve(values['citation-base'], name));
@@ -765,16 +768,12 @@ async function runCheck(argv: string[], run?: { dir: string; judge: boolean; jud
   let judged: Record<string, unknown> | undefined;
   let judgeBlock: JudgeBlock | undefined;
   let judgeLevel: Finding['level'] | undefined;
-  // A verify run judges as the run says; check and receipt only with --judge or judge.enabled: true.
-  if ((run ? run.judge : values.judge || cfg.judge.enabled === true) && claim) {
-    // A judge pass never overrides a failed deterministic check: on a fail, no capture is judged.
+  if (claim) {
+    // A judge pass never overrides a failed plain check: on a fail, no capture is judged.
     if (findings.some((f) => f.level === 'fail')) judged = { skipped: 'the check already failed, so no capture was judged' };
     else {
-      // Only a capture the judge reads needs the user's agent (the judge is kept apart from it).
-      if (captures.some(judgeable)) await withChoice('agent', cfg);
-      if (captures.some(judgeable)) await withChoice('judge', cfg);
-      if (captures.some(judgeable)) run?.judging(findings.length ? INCONCLUSIVE : PASS, [...findings]);
-      const j = await judge(cfg, () => selectJudge(cfg, run?.author ? agentRun(cfg, run.author.agent, run.author.model) : selectAgent(cfg)), claim.outcome, captures, run ? join(run.dir, 'agents') : join(home(), 'agents'));
+      run?.judging(findings.length ? INCONCLUSIVE : PASS, [...findings]);
+      const j = await judge(cfg, () => selectJudge(cfg, run?.author ? agentRun(cfg, run.author.agent, run.author.model) : cfg.agent ? selectAgent(cfg) : NO_AUTHOR), claim.outcome, captures, run ? join(run.dir, 'agents') : join(home(), 'agents'));
       // The judge's next step leads the help when its verdict decides the result.
       if (j.judged.some((r) => r.verdict === 'fail')) judgeLevel = 'fail';
       else if (!findings.length && j.judged.some((r) => r.verdict === 'unsure')) judgeLevel = 'inconclusive';
@@ -783,7 +782,7 @@ async function runCheck(argv: string[], run?: { dir: string; judge: boolean; jud
         findings.push({ level: r.verdict === 'fail' ? 'fail' : 'inconclusive', why: `${r.path}: judge says ${r.verdict !== 'fail' ? 'unsure' : shots.has(r.path) ? 'wrong screen' : 'wrong output'}: ${r.reason}`, file: r.path });
       const rows = cap<Judged>(j.judged);
       const { choice } = j;
-      judged = { ...(choice && { route: choice.route, model: choice.model, independence: choice.independence, author: `${choice.author.agent} (model ${choice.author.model || 'none'})` }), judged: rows.items.map(({ sha256, ...r }) => r) };
+      judged = { ...(choice && { route: choice.route, model: choice.model, independence: choice.independence, author: choice.author.agent ? `${choice.author.agent} (model ${choice.author.model || 'none'})` : 'no agent set' }), judged: rows.items.map(({ sha256, ...r }) => r) };
       if (choice && j.judged.length) {
         const byName = new Map(captures.map((c) => [c.name, receiptPath(repo, cfg, cite(c.name))]));
         judgeBlock = { route: choice.route, model: choice.model, independence: choice.independence, author: choice.author, verdicts: j.judged.map((r) => ({ path: byName.get(r.path)!, sha256: r.sha256, verdict: r.verdict })) };
@@ -791,6 +790,8 @@ async function runCheck(argv: string[], run?: { dir: string; judge: boolean; jud
       if (rows.omitted) judged.judged_omitted = rows.omitted;
       if (j.notJudged.length) judged.not_judged = j.notJudged;
       judged.note = 'PNG and JPEG screens and text captures (logs, JSON, CLI output) are judged; video and other files are not';
+      // A pass needs the judge to have read a capture: plain checks alone never pass.
+      if (!j.judged.length) findings.push({ level: 'inconclusive', why: 'the judge read no capture (it reads PNG and JPEG screens and text captures such as logs, JSON and CLI output), so nothing here shows the outcome' });
     }
   }
   const rep = report(findings, files, { cfg, repo, claim: claim?.outcome, source: values.from, citationBase: values['citation-base'], judge: judged, judgeLevel });
@@ -807,8 +808,8 @@ async function cmdCheck(argv: string[]): Promise<number> {
   return r.code;
 }
 
-// A receipt ties one passing check to one commit and to the sha256 of every file it cited.
-// Schema 2 adds the judge block, written when a judge passed the captures; a receipt without one stays schema 1.
+// A receipt ties one passing check to one commit, to the sha256 of every file it cited and to the judge that passed it
+// (schema 2). A schema 1 receipt, written by older builds without a judge, never verifies.
 // An overridden receipt (schema 2) records a judge that did not pass and who moved the run on anyway, and why.
 type Override = { action: 'approve' | 'skip'; by: string; reason: string; at: string };
 type Receipt = {
@@ -866,14 +867,15 @@ function verifyReceipt(repo: string, cfg: Config, headArg: string): { code: numb
   }
   if (!rec || typeof rec !== 'object' || (rec.schema !== 1 && rec.schema !== 2) || (rec.result !== 'pass' && rec.result !== 'overridden') || !Array.isArray(rec.files) || !rec.files.length) return fail(`receipt for ${short} is malformed`);
   if (!rec.files.every((f) => f && typeof f === 'object' && typeof f.path === 'string' && typeof f.sha256 === 'string')) return fail(`receipt for ${short} is malformed`);
-  // A schema 2 judge block must name its judge, and pass only captures this receipt cites. An overridden receipt keeps the
+  if (rec.schema === 1) return fail(`receipt for ${short} was recorded without the judge, so it proves nothing`);
+  // The judge block must name its judge, and pass only captures this receipt cites. An overridden receipt keeps the
   // verdicts that did not pass, or no block when the judge judged no capture.
   const j = rec.judge;
   const o = rec.override;
   const overridden = rec.result === 'overridden';
   const badJudge = !j || typeof j !== 'object' || typeof j.route !== 'string' || typeof j.model !== 'string' || !['agent', 'model', 'session-only'].includes(j.independence) || !Array.isArray(j.verdicts) || !j.verdicts.length
     || !j.verdicts.every((v) => v && (overridden ? ['pass', 'fail', 'unsure'] : ['pass']).includes(v.verdict) && rec.files.some((f) => f.path === v.path && f.sha256 === v.sha256));
-  if (overridden ? j !== undefined && badJudge : rec.schema === 2 && badJudge) return fail(`receipt for ${short} has a malformed judge block`);
+  if (overridden ? j !== undefined && badJudge : badJudge) return fail(`receipt for ${short} has a malformed judge block`);
   // A caller can move a run past its gate, but never turn it into a pass: an overridden receipt always fails here.
   if (overridden) {
     if (rec.schema !== 2 || !o || typeof o !== 'object' || !['approve', 'skip'].includes(o.action) || typeof o.by !== 'string' || typeof o.reason !== 'string' || !o.reason) return fail(`receipt for ${short} has a malformed override`);
@@ -900,7 +902,7 @@ function verifyReceipt(repo: string, cfg: Config, headArg: string): { code: numb
     }
   }
   if (bad.length) return fail(`cited evidence no longer matches the receipt: ${bad.join('; ')}`);
-  return { code: PASS, result: { command: 'receipt', result: 'pass', head: commit, tree: rec.tree, claim: rec.claim, files: rec.files.length, at: rec.at, schema: rec.schema, ...(rec.schema === 2 && { judge: j }), help: ['This receipt is valid for this head.'] } };
+  return { code: PASS, result: { command: 'receipt', result: 'pass', head: commit, tree: rec.tree, claim: rec.claim, files: rec.files.length, at: rec.at, schema: rec.schema, judge: j, help: ['This receipt is valid for this head.'] } };
 }
 
 async function cmdReceipt(argv: string[]): Promise<number> {
@@ -929,7 +931,7 @@ function recordReceipt(repo: string, cfg: Config, r: CheckOutcome): { code: numb
     return { code: FAIL, result: { command: 'receipt', result: 'fail', head: r.head.commit, claim: r.claim, reason: 'tracked files have uncommitted changes; commit or revert them, then re-run receipt', help: ['Commit the tracked changes, then: done-done receipt --from <file|->'] } };
   if (!r.cited.length)
     return { code: FAIL, result: { command: 'receipt', result: 'fail', head: r.head.commit, claim: r.claim, reason: 'the check cited no evidence files, so no receipt was written; a receipt must bind at least one cited evidence file', help: ['Cite real proof: done-done receipt --outcome "<claim>" <files...>'] } };
-  const rec: Receipt = { schema: r.judgeBlock ? 2 : 1, repo: cfg.app, head: r.head.commit, tree: r.head.tree, claim: r.claim ?? '', result: 'pass', at: new Date().toISOString(), files: r.cited, ...(r.judgeBlock && { judge: r.judgeBlock }) };
+  const rec: Receipt = { schema: 2, repo: cfg.app, head: r.head.commit, tree: r.head.tree, claim: r.claim ?? '', result: 'pass', at: new Date().toISOString(), files: r.cited, judge: r.judgeBlock };
   const path = writeReceipt(cfg, rec);
   const result = { command: 'receipt', result: 'pass', head: r.head.commit, tree: r.head.tree, claim: rec.claim, files: rec.files.length, receipt: shown(repo, path) };
   return { code: PASS, result: { ...result, ...(r.judge && { judge: r.judge }), help: [`Verify this receipt (CI or merge): done-done receipt --verify ${r.head.commit}`] } };
@@ -955,7 +957,7 @@ type ReportContext = { cfg: Config; repo: string; claim?: string; source?: strin
 const arg = (a: string) => (/^[\w./@:+-]+$/.test(a) ? a : `'${a.replaceAll("'", `'\\''`)}'`);
 
 function checkHelp(code: number, findings: Finding[], files: string[], { cfg, repo, claim, source, citationBase, notProven, judgeLevel }: ReportContext): string[] {
-  if (notProven) return ['Capture real proof and replace "not proven:", or set checks.not_proven: allow and re-check from a trusted ref'];
+  if (notProven) return ['Capture real proof, replace "not proven:" with its files, and re-run this check'];
   if (judgeLevel === 'fail' && code === FAIL) return [`Capture the screen the outcome describes, then re-run this check: ${captureHint(cfg)}`];
   if (judgeLevel && code === INCONCLUSIVE) return ['Look at the capture yourself, or capture a clearer screen of the outcome and re-run this check'];
   if (code === PASS) {
@@ -980,7 +982,7 @@ function checkHelp(code: number, findings: Finding[], files: string[], { cfg, re
   return help;
 }
 
-function report(findings: Finding[], files: string[], ctx: ReportContext, note = ''): { code: number; result: Record<string, unknown> } {
+function report(findings: Finding[], files: string[], ctx: ReportContext): { code: number; result: Record<string, unknown> } {
   const code = findings.some((f) => f.level === 'fail') ? FAIL : findings.length ? INCONCLUSIVE : PASS;
   const result: Record<string, unknown> = {
     command: 'check',
@@ -988,7 +990,6 @@ function report(findings: Finding[], files: string[], ctx: ReportContext, note =
   };
   if (ctx.claim) result.claim = ctx.claim;
   if (ctx.source) result.source = ctx.source;
-  if (note) result.note = note;
   if (files.length) {
     const ev = cap(files);
     result.files = files.length;
@@ -1012,7 +1013,7 @@ type Step = { name: string; status: StepState; started?: string; ended?: string;
 type Run = {
   // journey null: the author agent drives `feature` (features/<name>.md of the verify skill; unset until the agent picks one); a maintain run has no journey or claim.
   schema: 2; run_id: string; kind: 'verify' | 'maintain'; app: string; repo: string; journey?: string | null; feature?: string; author?: { agent: string; model: string };
-  claim?: string; claim_id: string | null; judge?: boolean; branch?: string; // the branch it started on, which names the claim when claim_id is null
+  claim?: string; claim_id: string | null; branch?: string; // the branch it started on, which names the claim when claim_id is null
   status: 'pending' | 'running' | 'awaiting_approval' | 'completed' | 'failed' | 'cancelled';
   runner?: { pid: number; started: string; heartbeat: string; journey_pgid?: number; instance_pgid?: number }; steps: Step[];
   result?: 'pass' | 'fail' | 'inconclusive' | 'overridden' | MaintainResult; reason?: string; findings?: MaintainFinding[]; unverified?: string[]; git_status?: string;
@@ -1311,7 +1312,7 @@ async function runSteps(dir: string): Promise<void> {
   // A fix's re-run (auto_fix.verify) is quiet: it leaves the run's steps as they are, and its step logs go to `quiet`.
   let quiet: Record<string, unknown> | null = null;
   const set = (s: Step, status: StepState, extra: Partial<Step> = {}) => quiet ?? setStep(dir, run, s, status, extra);
-  // A step that starts skips the earlier steps still pending (the judge when it is off, a fix that was not needed).
+  // A step that starts skips the earlier steps still pending (the judge after a failed check, a fix that was not needed).
   const begin = (name: string) => {
     for (const s of quiet ? [] : run.steps.slice(0, run.steps.findIndex((s) => s.name === name))) if (s.status === 'pending') s.status = 'skipped';
     return (set((step = run.steps.find((s) => s.name === name)!), 'running'), step);
@@ -1515,7 +1516,7 @@ async function runSteps(dir: string): Promise<void> {
         return { end: { result: 'fail', reason: `check: input guard: ${diffs.map((d) => d.why).join('; ')}` }, asks: [], fixable: [] };
       }
     }
-    // The check's own findings end the check step; the judge, when on and the check did not fail, is its own step.
+    // The check's own findings end the check step; the judge, when the check did not fail, is its own step.
     let checkFindings = 0;
     const judging = (code: number, findings: Finding[]) => {
       checkFindings = findings.length;
@@ -1524,7 +1525,7 @@ async function runSteps(dir: string): Promise<void> {
     };
     // A fix worktree is detached, so it checks for the claim id of the user's branch.
     const claimId = run.claim_id ?? (fix ? git(run.repo, 'branch', '--show-current') : null);
-    const checked = await runCheck(['--outcome', run.claim!, ...files, ...(claimId ? ['--claim-id', claimId] : [])], { dir, judge: !!run.judge, judging, author: run.author, repo: at, cfg });
+    const checked = await runCheck(['--outcome', run.claim!, ...files, ...(claimId ? ['--claim-id', claimId] : [])], { dir, judging, author: run.author, repo: at, cfg });
     const logged: Record<string, unknown> = { ...checked.result, findings: checked.findings };
     delete logged.findings_omitted;
     log('check', logged);
@@ -1534,14 +1535,11 @@ async function runSteps(dir: string): Promise<void> {
       log('judge', checked.judge!);
       set(step!, judgeFindings.length ? 'failed' : 'completed', { exit: judgeFindings.length ? checked.code : PASS, findings: judgeFindings });
     } else set(step!, checked.code === PASS ? 'completed' : 'failed', { exit: checked.code, findings: checked.findings });
-    // The gate: when the check itself is clean but the judge did not pass a capture (or judged none of an agent's), the run
-    // waits for the caller (respond), who can move it on but never make it a pass. The runner ends here.
-    const clean = judgeRan ? checkFindings === 0 : checked.code === PASS;
-    const notJudged = judgeRan && run.journey === null ? (checked.judge?.not_judged ?? []) as string[] : [];
-    const asks: Finding[] = !clean ? [] : judgeRan ? [...judgeFindings, ...notJudged.map((name): Finding => ({ level: 'inconclusive', why: `${name}: the judge did not read this capture, and an agent drive passes only with a judge pass on every capture` }))]
-      : run.journey !== null ? []
-      : run.judge ? [{ level: 'inconclusive', why: 'the judge judged no capture (only PNG, JPEG and text captures are judged), and an agent drive passes only with a judge pass' }]
-      : [{ level: 'inconclusive', why: 'the judge is off (--no-judge), and an agent drive passes only with a judge pass' }];
+    // The gate: when the check itself is clean but the judge did not pass a capture (or read none, or not all of an agent's),
+    // the run waits for the caller (respond), who can move it on but never make it a pass. The runner ends here.
+    const clean = judgeRan && checkFindings === 0;
+    const notJudged = clean && run.journey === null ? (checked.judge?.not_judged ?? []) as string[] : [];
+    const asks: Finding[] = !clean ? [] : [...judgeFindings, ...notJudged.map((name): Finding => ({ level: 'inconclusive', why: `${name}: the judge did not read this capture, and an agent drive passes only with a judge pass on every capture` }))];
     // With auto_fix.verify, screens the judge calls wrong (and nothing it was unsure of) are a product failure to fix.
     if (tries && asks.length && asks.every((f) => f.level === 'fail'))
       return { checked, end: { result: 'fail', reason: `judge: ${asks[0].why}` }, asks: [], fixable: wrongScreens(asks) };
@@ -1557,7 +1555,6 @@ async function runSteps(dir: string): Promise<void> {
     if (tries && p.end && p.fixable.length && journey?.spends) p.end = { ...p.end, reason: `${p.end.reason}; auto_fix.verify does not re-run a spends journey` };
     if (tries && p.end && p.fixable.length && !journey?.spends) {
       const sorted = await sortJudged(run, cfg, failures(p.fixable), join(dir, 'agents', 'triage.json'), h);
-      if (typeof sorted === 'string') return finish('blocked', `triage: ${sorted}`);
       if (sorted.length) p = { checked: p.checked, asks: sorted, fixable: [] };
       else {
         const dirty = dirtyTracked(run.repo);
@@ -1577,7 +1574,7 @@ async function runSteps(dir: string): Promise<void> {
       const wrong = p.asks.filter((f) => f.level === 'fail');
       if (tries && wrong.length && wrong.length < p.asks.length) {
         const sorted = await sortJudged(run, cfg, failures(wrongScreens(wrong)), join(dir, 'agents', `triage${fixed ? '-gate' : ''}.json`), h, true);
-        if (typeof sorted !== 'string') p.asks = [...sorted, ...p.asks.filter((f) => f.level !== 'fail')];
+        p.asks = [...sorted, ...p.asks.filter((f) => f.level !== 'fail')];
       }
       begin('gate');
       const findings: GateFinding[] = p.asks.map((f, i) => ({ id: `gate-${i + 1}`, severity: f.level === 'fail' ? 'error' : 'warning', what: f.why, action: 'ask-user' }));
@@ -1632,17 +1629,18 @@ const VERIFY_TRIAGE: Triage = {
   fix: 'fix',
 };
 
-// The judge the user set (never the fixer's agent) sorts the judge's failures before each fix: [] sends them all to the fixer;
-// with any ask (or unsure answer), or `park`, every judge failure goes to the gate with its class. A string: why the judge did not answer.
-async function sortJudged(run: Run, cfg: Config, open: MaintainFinding[], record: string, h: Harness, park = false): Promise<Finding[] | string> {
+// The judge the user set sorts the judge's failures before each fix: [] sends them all to the fixer;
+// with any ask (or unsure answer), or `park`, every judge failure goes to the gate with its class. A judge that does not
+// answer throws, so the run fails with the cause.
+async function sortJudged(run: Run, cfg: Config, open: MaintainFinding[], record: string, h: Harness, park = false): Promise<Finding[]> {
   const judged = open.filter((f) => f.kind === 'judge');
   if (!judged.length) return [];
   const step = h.begin('triage');
-  const choice = selectJudge(cfg, selectAgent(cfg), true);
+  const choice = selectJudge(cfg, selectAgent(cfg));
   const asks = await triage(cfg, choice, judged, VERIFY_TRIAGE, { app: cfg.app, outcome: run.claim, findings: judged }, record);
   h.log('triage', { judge: { route: choice.route, model: choice.model, independence: choice.independence }, ask_user: asks });
-  h.set(step, typeof asks === 'string' ? 'failed' : 'completed');
-  if (typeof asks === 'string' || !(asks.length || park)) return typeof asks === 'string' ? asks : [];
+  h.set(step, 'completed');
+  if (!(asks.length || park)) return [];
   return judged.map((f) => ({ level: 'fail', why: `${(asks.find((x) => x.id === f.id) ?? f).what}; triage: ${asks.some((x) => x.id === f.id) ? 'ask' : 'fix'}`, file: f.file }));
 }
 
@@ -1721,7 +1719,6 @@ Answer with summary (what you changed, in one line) and blocker ("" when you fix
       round.rerun = { result: next.end?.result ?? (next.asks.length ? 'gate' : 'pass'), reason: next.end?.reason, ...next.logs };
       if (next.end && !next.fixable.length) return blocked(`the re-run after attempt ${k} did not pass: ${next.end.reason}`, []);
       const sorted = next.end ? await sortJudged(run, cfg, failures(next.fixable), join(dir, 'agents', `triage-fix${k}.json`), h).catch((e) => { close('failed'); throw e; }) : [];
-      if (typeof sorted === 'string') return blocked(`triage: ${sorted}`, failures(next.fixable));
       if (!next.end || sorted.length) {
         run.fix.branch = `done-done/verify-${run.run_id}`;
         git(repo, 'branch', run.fix.branch, made.commit);
@@ -1779,8 +1776,7 @@ function showRun(dir: string, cfg: Config, command: string, gone = false): numbe
   // An overridden run is never a pass: it exits 1 like a fail.
   const code = status === 'pending' || status === 'running' || status === 'awaiting_approval' ? WAITING : status === 'cancelled' || status === 'failed' || run.result === 'fail' || run.result === 'overridden' || run.result === 'drift' || (run.kind === 'verify' && (run.result === 'changed' || run.result === 'blocked')) ? FAIL : run.result === 'inconclusive' || run.result === 'blocked' ? INCONCLUSIVE : PASS;
   const drive = run.journey ?? (run.feature ? `--feature ${arg(run.feature)}` : '');
-  const judgeFlag = run.judge === false && cfg.judge.enabled !== false ? ' --no-judge' : run.judge && cfg.judge.enabled === false ? ' --judge' : '';
-  const again = run.kind === 'maintain' ? 'done-done maintain' : `done-done verify ${drive ? `${drive} ` : ''}--outcome ${arg(run.claim!)}${run.claim_id ? ` --claim-id ${arg(run.claim_id)}` : ''}${judgeFlag}`;
+  const again = run.kind === 'maintain' ? 'done-done maintain' : `done-done verify ${drive ? `${drive} ` : ''}--outcome ${arg(run.claim!)}${run.claim_id ? ` --claim-id ${arg(run.claim_id)}` : ''}`;
   const findings = cap(run.findings ?? []);
   const ev = cap(rec ? evidenceOf(run.repo, cfg, rec) : []);
   const result: Record<string, unknown> = { command, run_id: run.run_id, kind: run.kind, status };
@@ -1844,11 +1840,11 @@ async function waitRun(dir: string, pid: number): Promise<void> {
   while (['pending', 'running'].includes(loadRun(dir).status) && alive(pid)) await new Promise((r) => setTimeout(r, 200));
 }
 
-// The judge a command will start: the user's agent and judge (asked for when unset), refused when it is the author.
-async function preflightJudge(cfg: Config, needsAgent = true, fix = false): Promise<JudgeChoice> {
+// The judge a command will start: the user's agent and judge, asked for when unset.
+async function preflightJudge(cfg: Config, needsAgent = true): Promise<JudgeChoice> {
   if (needsAgent) await withChoice('agent', cfg);
   await withChoice('judge', cfg);
-  return selectJudge(cfg, cfg.agent ? selectAgent(cfg) : NO_AUTHOR, fix);
+  return selectJudge(cfg, cfg.agent ? selectAgent(cfg) : NO_AUTHOR);
 }
 const NO_AUTHOR = { agent: '', model: '' };
 
@@ -1865,26 +1861,22 @@ function refuseParked(cfg: Config, repo: string, claim: string | undefined) {
   throw new UsageError(`run ${parked.join(', ')} waiting at its gate for the user's answer blocks this run, which would go around that gate`, `Show the user its findings and captures (done-done status --run ${id}), then answer with their choice: done-done respond --run ${id} --action approve|skip|fix [--reason "<why>"], or stop it: done-done abort --run ${id}`);
 }
 
-// Before a verify starts: its judge, and with auto_fix.verify an agent that can edit and a judge that is never that agent.
-async function preflightVerify(cfg: Config, judging: boolean): Promise<void> {
-  if (cfg.auto_fix.verify) {
-    await withChoice('agent', cfg);
-    if (cfg.agent.startsWith('acp:')) throw new UsageError(`${cfg.agent} cannot fix the product: done-done runs ACP agents with every tool denied`, `Set auto_fix.verify: 0 to report only, or set agent: to one of ${AGENTS.join(', ')}`);
-  }
-  if (!judging) return;
-  await preflightJudge(cfg, true, !!cfg.auto_fix.verify);
+// Before a verify starts: its judge, plus the agent when it drives (no journey) or fixes (auto_fix.verify, an agent that can edit).
+async function preflightVerify(cfg: Config, agentDrives: boolean): Promise<void> {
+  if (agentDrives || cfg.auto_fix.verify) await withChoice('agent', cfg);
+  if (cfg.auto_fix.verify && cfg.agent.startsWith('acp:')) throw new UsageError(`${cfg.agent} cannot fix the product: done-done runs ACP agents with every tool denied`, `Set auto_fix.verify: 0 to report only, or set agent: to one of ${AGENTS.join(', ')}`);
+  await preflightJudge(cfg, false);
 }
 
 async function cmdVerify(argv: string[]): Promise<number> {
   const { values, positionals } = parseArgs({
     args: argv,
-    options: { outcome: { type: 'string' }, feature: { type: 'string' }, 'claim-id': { type: 'string' }, judge: { type: 'boolean' }, 'no-judge': { type: 'boolean' }, wait: { type: 'boolean' }, 'no-wait': { type: 'boolean' }, foreground: { type: 'boolean' } },
+    options: { outcome: { type: 'string' }, feature: { type: 'string' }, 'claim-id': { type: 'string' }, wait: { type: 'boolean' }, 'no-wait': { type: 'boolean' }, foreground: { type: 'boolean' } },
     allowPositionals: true,
   });
   if (!values.outcome?.trim()) throw new UsageError('verify needs --outcome "<what a user can now do>"');
   if (positionals.length > 1) throw new UsageError('verify takes at most one journey name');
   if (positionals.length && values.feature !== undefined) throw new UsageError('pass a journey or --feature, not both: a journey drives by its command, --feature by the author agent');
-  if (values.judge && values['no-judge']) throw new UsageError('pass only one of --judge and --no-judge');
   if ([values.wait, values['no-wait'], values.foreground].filter(Boolean).length > 1) throw new UsageError('pass only one of --wait, --no-wait and --foreground');
   const repo = repoRoot();
   const cfg = loadConfig(repo);
@@ -1898,16 +1890,15 @@ async function cmdVerify(argv: string[]): Promise<number> {
   if (!values['claim-id'] && !branch) throw new UsageError('HEAD is detached, so no branch names this claim; pass --claim-id <id>');
   refuseParked(cfg, repo, values['claim-id'] ?? branch);
   const drive = journey === null ? await agentDrive(repo, cfg, values.feature) : undefined;
-  // verify starts done-done's own judge by default; --no-judge or judge.enabled: false turns it off. An agent drive is judged too, since the author never grades its own captures.
-  const judging = !values['no-judge'] && (!!drive || !!values.judge || cfg.judge.enabled !== false);
-  // No judge set, or one config forbids (the author's own agent and model), is a usage error now, not a failed run later.
-  await preflightVerify(cfg, judging);
+  // verify always runs the judge the user set, the author's own agent and model included; the judge is settled here, so a
+  // run never fails later for one it never had.
+  await preflightVerify(cfg, journey === null);
   const id = newRunId(git(repo, 'rev-parse', 'HEAD'));
   const dir = join(runsRoot(cfg.app), id);
   mkdirSync(join(dir, 'logs'), { recursive: true });
   const created = now();
   const run: Run = {
-    schema: 2, run_id: id, kind: 'verify', app: cfg.app, repo, journey, ...drive, claim: values.outcome, claim_id: values['claim-id'] ?? null, branch, judge: judging, status: 'pending',
+    schema: 2, run_id: id, kind: 'verify', app: cfg.app, repo, journey, ...drive, claim: values.outcome, claim_id: values['claim-id'] ?? null, branch, status: 'pending',
     steps: verifySteps(cfg).map((name) => ({ name, status: 'pending' })), created, updated: created,
     inputs: inputsOf(repo, cfg, journey, drive?.author),
   };
@@ -1937,10 +1928,13 @@ async function cmdMaintain(argv: string[]): Promise<number> {
   const repo = repoRoot();
   const cfg = loadConfig(repo);
   await withChoice('agent', cfg);
-  // auto_fix: the agent the user set fixes the skill and the judge the user set (never that agent and model) triages, so both are set now.
+  // maintain never reports without its agent: one that cannot start or cannot read stops it here, before any run.
+  const why = readerProblem(selectAgent(cfg));
+  if (why) throw new UsageError(`maintain: ${why.replace(/^source-wave: /, '')}`, 'Install the agent or ask the user for another and save it: done-done init --agent <agent>');
+  // auto_fix: the agent the user set fixes the skill and the judge the user set triages, so both are set now.
   if (cfg.auto_fix.maintain) {
     if (cfg.agent.startsWith('acp:')) throw new UsageError(`${cfg.agent} cannot fix the verify skill: done-done runs ACP agents with every tool denied`, `Set auto_fix.maintain: 0 to report only, or set agent: to one of ${AGENTS.join(', ')}`);
-    await preflightJudge(cfg, true, true);
+    await preflightJudge(cfg);
   }
   const id = newRunId(git(repo, 'rev-parse', 'HEAD'));
   const dir = join(runsRoot(cfg.app), id);
@@ -2027,7 +2021,7 @@ const drivesClean = (record: string | undefined, head: string | undefined) => {
 };
 
 async function cmdRerun(argv: string[]): Promise<number> {
-  const { values } = parseArgs({ args: argv, options: { run: { type: 'string' }, wait: { type: 'boolean' }, 'no-wait': { type: 'boolean' }, 'no-judge': { type: 'boolean' } } });
+  const { values } = parseArgs({ args: argv, options: { run: { type: 'string' }, wait: { type: 'boolean' }, 'no-wait': { type: 'boolean' } } });
   if (values.wait && values['no-wait']) throw new UsageError('pass only one of --wait and --no-wait');
   const repo = repoRoot();
   const cfg = loadConfig(repo);
@@ -2050,10 +2044,8 @@ async function cmdRerun(argv: string[]): Promise<number> {
   // A reused drive keeps the guard it ran under, so it is only reused when the watched inputs are the same ones.
   const driveReuse = same && drivesClean(src.record, src.inputs?.head) && JSON.stringify(src.guarded?.patterns ?? []) === JSON.stringify(srcCfg.inputs);
   const reused = (name: string) => (name === 'resolve' && same) || (name === 'drive' && driveReuse);
-  // A rerun judges as its source did; --no-judge turns it off for this run. A missing or forbidden judge is a usage
-  // error here too.
-  const judging = !values['no-judge'] && !!src.judge;
-  await preflightVerify(cfg, judging);
+  // A rerun always judges, whatever its source run did. A missing or forbidden judge is a usage error here too.
+  await preflightVerify(cfg, src.journey === null);
   const id = newRunId(git(repo, 'rev-parse', 'HEAD'));
   const dir = join(root, id);
   mkdirSync(join(dir, 'logs'), { recursive: true });
@@ -2062,7 +2054,7 @@ async function cmdRerun(argv: string[]): Promise<number> {
     return s && reused(name) && s.status === 'completed' ? { ...s } : { name, status: 'pending' as StepState };
   });
   const created = now();
-  const run: Run = { schema: 2, run_id: id, kind: src.kind, app: cfg.app, repo: src.repo, journey, ...drive, claim: src.claim, claim_id: src.claim_id, branch: src.branch, judge: judging, status: 'pending', inputs, steps, created, updated: created, ...(driveReuse && src.record && { record: src.record }), ...(driveReuse && src.guarded && { guarded: src.guarded }) };
+  const run: Run = { schema: 2, run_id: id, kind: src.kind, app: cfg.app, repo: src.repo, journey, ...drive, claim: src.claim, claim_id: src.claim_id, branch: src.branch, status: 'pending', inputs, steps, created, updated: created, ...(driveReuse && src.record && { record: src.record }), ...(driveReuse && src.guarded && { guarded: src.guarded }) };
   saveRun(dir, run);
   for (const s of steps) {
     const f = join(root, srcId, 'logs', `${s.name}.log`);
@@ -2749,8 +2741,7 @@ async function pick(kind: Kind, cfg: Config): Promise<Choice> {
   try {
     const menu = kind === 'agent' ? [...AGENTS, ACP_TARGET] : JUDGES;
     const label = (a: string) => (a === ACP_TARGET ? `${a} (an agent your acpx bridge starts)` : a);
-    const doer = cfg.agent ? `the one that did the work (${cfg.agent})` : 'the agent that does the work';
-    const head = kind === 'agent' ? 'done-done starts a coding agent you choose, and none is set. Agents:' : `done-done judges each capture with an agent you choose, never ${doer}, and none is set. Judges:`;
+    const head = kind === 'agent' ? 'done-done starts a coding agent you choose, and none is set. Agents:' : 'done-done judges each capture with an agent you choose, and none is set. Judges:';
     process.stderr.write(`${head}\n${menu.map((a, i) => `  ${i + 1}) ${label(a)}\n`).join('')}`);
     for (;;) {
       let agent = '';
@@ -2822,13 +2813,11 @@ async function withChoice(kind: Kind, cfg: Config): Promise<void> {
   }
 }
 
-// The user's judge choice, checked before anything is written: an agent that can judge, and never the author's own
-// agent and model (selectJudge refuses that pair) unless judge.allow_same.
+// The user's judge choice, checked before anything is written: an agent done-done can judge through, with a model.
 function checkJudge(cfg: Config, agent: string, model: string) {
   if (!JUDGES.includes(agent)) throw new UsageError(`done-done cannot judge through ${agent}; it judges through ${JUDGES.join(', ')}`, noJudge().help);
   if (agent === 'opencode' && model && !model.includes('/')) throw new UsageError(`--judge-model ${model}: an opencode model is provider/model, e.g. ${CHEAP.opencode.model}`);
   if (!model && !modelFor(cfg, agent)) throw new UsageError(`judge: ${agent} has no default model, so a judge needs one`, `Save the judge with its model: done-done init --judge ${agent} --judge-model <model>`);
-  if (cfg.agent) selectJudge({ ...cfg, judge: { ...cfg.judge, route: routeOf(agent), model } }, selectAgent(cfg));
 }
 
 const commitFirst = (skill: string) => `.done-done.yaml and ${skill} before your first capture: check refuses proof from a tree with uncommitted changes`;
@@ -2863,7 +2852,7 @@ async function cmdInit(argv: string[]): Promise<number> {
   // The agent: --agent, else with none set the user's pick in a terminal (asked before any write); never done-done's.
   const choice = values.agent !== undefined ? { agent: values.agent, model: values.model ?? '' } : !cfg.agent && interactive() ? await pick('agent', cfg) : undefined;
   if (choice) cfg.agent_config[choice.agent] = { ...cfg.agent_config[choice.agent], ...(choice.model && { model: choice.model }) };
-  // The judge likewise: --judge, else with none set the user's pick in a terminal; checked against the agent above.
+  // The judge likewise: --judge, else with none set the user's pick in a terminal; checked that done-done can judge through it.
   const judgeChoice = values.judge !== undefined ? { agent: values.judge, model: values['judge-model'] ?? (cfg.judge.route === routeOf(values.judge) ? cfg.judge.model : '') } :!cfg.judge.route && interactive() ? await pick('judge', { ...cfg, agent: choice?.agent ?? cfg.agent }) : undefined;
   if (judgeChoice) checkJudge({ ...cfg, agent: choice?.agent ?? cfg.agent }, judgeChoice.agent, judgeChoice.model);
   const writeAgent = (): { out: Record<string, string>; help: string[]; code: number } => {
@@ -2875,7 +2864,7 @@ async function cmdInit(argv: string[]): Promise<number> {
     if (cfg.agent) return { out: { agent: `unchanged (${cfg.agent})` }, help: [], code: PASS };
     return { out: { agent: 'not set' }, help: [`${noAgent().message}. ${noAgent().help}`], code: USAGE };
   };
-  // A judge not set is not an init failure: verify asks for it when it needs one.
+  // A judge not set is not an init failure, since init gives no result: every command that does asks for it first.
   const writeJudge = (): { out: Record<string, string>; help: string[] } =>
     judgeChoice ? { out: { judge: saveChoice('judge', judgeChoice) }, help: [] }
     : cfg.judge.route ? { out: { judge: `unchanged (${cfg.judge.route})` }, help: [] }
@@ -3034,8 +3023,8 @@ function agentSettings(cfg: Config, agent: string): string {
 }
 const modelPhrase = (agent: string, model: string) => (model ? `model ${model}` : `its own default model; set agent_config.${agent}.model to choose one`);
 
-// Is this repo worth driving: git, a valid config and a writable evidence root are
-// required; the verify skill, an agent CLI, the judge binary and ffprobe are optional.
+// Is this repo worth driving: git, a valid config, a writable evidence root, the agent and the judge are
+// required; the verify skill and ffprobe are listed but never fail it.
 // doctor changes nothing except the --probe call record (the agent itself may keep its own session files): a missing repo or config is a finding, never a crash.
 async function cmdDoctor(argv: string[]): Promise<number> {
   let values: { probe?: boolean };
@@ -3128,7 +3117,7 @@ async function cmdDoctor(argv: string[]): Promise<number> {
     // codex's sandbox covers its shell too, so a drive's recipe tool writes only where the drive may.
     if (agent.agent === 'codex') checks.push({ check: 'tool_gate', status: 'warning', detail: "codex's drive sandbox lets its commands write only the repo, the run's evidence and scratch folders, $TMPDIR and /tmp; a tool that writes elsewhere needs its folder added with agent_args_override.codex: [--add-dir, <folder>] (see docs/reference.md, Drive by agent)", fix: '' });
   }
-  // The judge the user set (judge.route), kept apart from the agent.
+  // The judge the user set (judge.route).
   let choice: JudgeChoice | undefined;
   let choiceError: UsageError | undefined;
   if (cfg)
@@ -3156,22 +3145,14 @@ async function cmdDoctor(argv: string[]): Promise<number> {
       ? { check: 'ffprobe', status: 'ok', detail: `found at ${ffprobe}`, fix: '' }
       : { check: 'ffprobe', status: 'missing', detail: 'no ffprobe on PATH; video evidence is unverified, never a pass', fix: 'Install ffprobe (ffmpeg) to verify video evidence' },
   );
-  // How far the judge is from the author, as selectJudge picks it: another agent is ok; the author's agent at another
-  // model or in a fresh session runs too, so it is a warning that never fails doctor.
+  // How far the judge is from the author: shown, never refused, since the user's choice runs whatever it is.
   if (!cfg || !agent) {
-    checks.push(unknownRow('judge_choice', cfg && agentCfg ? 'unknown until the agent is set, since the judge is kept apart from it' : undefined));
+    checks.push(unknownRow('judge_choice', cfg && agentCfg ? 'unknown until the agent is set' : undefined));
   } else if (!choice) {
     checks.push(choiceRow('judge_choice'));
   } else {
     const apart = { agent: 'a different agent from the author', model: 'the author\'s agent at a different model', 'session-only': 'the author\'s agent and model in a fresh session (session-only independence)' }[choice.independence];
-    const accepted = choice.independence === 'session-only' && cfg.judge.allow_same ? '; judge.allow_same accepts it' : '';
-    const apartOk = choice.independence === 'agent';
-    checks.push({
-      check: 'judge_choice',
-      status: apartOk ? 'ok' : 'warning',
-      detail: `${choice.route} (model ${choice.model}; from config) judges the author ${choice.author.agent} (model ${choice.author.model || 'none'}): ${apart}${accepted}`,
-      fix: apartOk ? '' : `Ask the user whether to judge with another agent or model (${JUDGES.join(' or ')}) and save it: done-done init --judge <agent> --judge-model <model>`,
-    });
+    checks.push({ check: 'judge_choice', status: 'ok', detail: `${choice.route} (model ${choice.model}; from config) judges the author ${choice.author.agent} (model ${choice.author.model || 'none'}): ${apart}`, fix: '' });
   }
   if (values.probe && !agent) checks.push(unknownRow('probe'));
   const toolless = agent?.path ? editOnlyReason(agent.agent) : '';
@@ -3187,7 +3168,7 @@ async function cmdDoctor(argv: string[]): Promise<number> {
     );
   }
   if (agent) checks.push({ check: 'agent_settings', status: 'ok', detail: agentSettings(agentCfg!, agent.agent), fix: '' });
-  const required = ['git', 'config', 'evidence_root', ...(values.probe ? ['probe'] : [])];
+  const required = ['git', 'config', 'evidence_root', 'agent', 'judge', ...(values.probe ? ['probe'] : [])];
   const missingRequired = checks.filter((c) => c.status === 'missing' && required.includes(c.check));
   const result: Record<string, unknown> = { command: 'doctor', result: missingRequired.length ? 'fail' : 'pass', checks };
   // Several missing items can share one fix (set up the config once); name each fix only once.
@@ -3221,7 +3202,8 @@ async function cmdLook(argv: string[]): Promise<number> {
   const shown = cap(hits);
   emit({
     command: 'look',
-    result: hits.length ? 'fail' : 'pass',
+    // look measures the layout; it gives no verdict on the outcome, which only the judged check does.
+    result: hits.length ? 'fail' : 'clean',
     url,
     viewport: '390x844',
     capture,

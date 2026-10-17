@@ -2,7 +2,7 @@ import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { accessSync, constants, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { basename, delimiter, isAbsolute, join } from 'node:path';
+import { delimiter, isAbsolute, join } from 'node:path';
 import { agentRun, askAgent, claudeBin, notStartable } from './agents.js';
 import { home, KEY_ROUTES, parseDuration, UsageError } from './config.js';
 import { downscaleToPng } from './media.js';
@@ -94,24 +94,13 @@ export function claudeLoggedIn(bin, configDir) {
         rmSync(scratch, { recursive: true, force: true });
     }
 }
-const KIT = '@byokit/decide@0.8.0';
 export const quote = (a) => (/^[\w@%+=:,./-]+$/.test(a) ? a : `'${a.replaceAll("'", `'\\''`)}'`);
-// The kit is an optional peer dependency, so a plain install stays small; it loads only when a capture needs judging.
+// The kit loads only when a capture is judged, so a command that judges nothing stays fast.
 async function kit() {
     const [major, minor] = process.versions.node.split('.').map(Number);
     if (major < 22 || (major === 22 && minor < 18))
         throw new UsageError(`judge: the judge needs Node 22.18 or later (this is ${process.versions.node})`, 'Install Node 22.18 or later, then re-run this command');
-    try {
-        return { ...(await import('@byokit/decide/claude-code')), ...(await import('@byokit/decide')) };
-    }
-    catch (e) {
-        if (e.code !== 'ERR_MODULE_NOT_FOUND')
-            throw e;
-        // A verify run's detached runner has no command of the user's to repeat, so it names the rerun of its run.
-        const [cmd, dir] = process.argv.slice(2);
-        const again = cmd === '__runner' ? ['rerun', '--run', basename(dir)] : process.argv.slice(2);
-        throw new UsageError(`judge: the judge needs the optional ${KIT} kit, which is not installed`, `${cmd === 'check' || cmd === 'receipt' ? 'Run this check' : 'Run it again'} with the kit: npx -y -p done-done-axi -p ${KIT} done-done-axi ${again.map(quote).join(' ')}`);
-    }
+    return { ...(await import('@byokit/decide/claude-code')), ...(await import('@byokit/decide')) };
 }
 // The backend for one judge choice. It checks everything that needs no model call, so doctor can use it too.
 // record: where the answerer writes its agent call record (the claude-code route starts no agent of ours);
@@ -186,21 +175,19 @@ export function prepare(c) {
     const small = downscaleToPng(c.bytes, c.media.type, MAX_SIDE);
     return small ? { mime: 'image/png', bytes: small } : `${c.media.type} is ${c.media.w}x${c.media.h} and cannot be downscaled (only 8-bit PNG and JPEG that are not extremely long are), so capture a PNG or JPEG at most ${MAX_SIDE}px on its long side`;
 }
-// One request about the named images: each question's answer after the floors, or why the judge did not answer.
+// One request about the named images: each question's answer after the floors. A judge that does not answer is an error
+// with its cause, never a verdict: the command stops with no result and no receipt.
 // An answer the kit cannot read (all-zero probabilities, an option left out) would abstain on every question as if the
-// judge were unsure, so it is asked once more, and one that still cannot be read is never kept.
-// A signed-out or non-subscription claude-code sign-in is a usage error, since no later request can do better.
+// judge were unsure, so it is asked once more, and one that still cannot be read is an error too.
 export async function askJudge(cfg, be, choice, state, questions, images) {
+    const again = 'Fix the cause above (done-done doctor checks the judge), then run this again';
+    let raw;
+    const unreadable = (r) => Object.entries(questions).filter(([k, q]) => /^(malformed|no answer)/.test(be.resolve(q, r[k]).reason ?? '')).map(([k]) => k);
     try {
         const ask = () => be.ask(state, questions, AbortSignal.timeout(parseDuration(cfg.agent_timeout)), Object.entries(images).map(([id, i]) => ({ id, mime: i.mime, dataUrl: `data:${i.mime};base64,${i.bytes.toString('base64')}` })));
-        const unreadable = (raw) => Object.entries(questions).filter(([k, q]) => /^(malformed|no answer)/.test(be.resolve(q, raw[k]).reason ?? '')).map(([k]) => k);
-        let raw = await ask();
+        raw = await ask();
         if (unreadable(raw).length)
             raw = await ask();
-        const bad = unreadable(raw);
-        if (bad.length)
-            return `the judge did not answer: no probabilities for ${bad.join(', ')} that are each 0 to 1 and sum to 1`;
-        return Object.fromEntries(Object.entries(questions).map(([k, q]) => [k, be.resolve(q, raw[k])]));
     }
     catch (e) {
         const code = e.code;
@@ -209,8 +196,12 @@ export async function askJudge(cfg, be, choice, state, questions, images) {
         if (choice.route === 'claude-code' && (code === 'subscription_required' || (code === 'process' && !be.signedIn())))
             throw new UsageError(`judge: ${why} (sign-in ${cfg.judge.claude_code.config_dir})`, `Sign in once with your Claude plan: ${be.signIn}`);
         const hint = code === 'process' ? ` (check judge.model ${choice.model} and your plan's usage limit)` : Object.hasOwn(KEY_ROUTES, choice.route) ? ` (check judge.model ${choice.model} and the key in ${KEY_ROUTES[choice.route]})` : '';
-        return `the judge did not answer: ${why}${hint}`;
+        throw new UsageError(`judge: the judge did not answer: ${why}${hint}`, again);
     }
+    const bad = unreadable(raw);
+    if (bad.length)
+        throw new UsageError(`judge: the judge did not answer: no probabilities for ${bad.join(', ')} that are each 0 to 1 and sum to 1`, again);
+    return Object.fromEntries(Object.entries(questions).map(([k, q]) => [k, be.resolve(q, raw[k])]));
 }
 export const screen = (c) => c.media.type === 'png' || c.media.type === 'jpeg';
 // The judge reads screens as images and text captures (logs, JSON, CLI output) as text; video and other files are not judged.
@@ -278,10 +269,6 @@ export async function judge(cfg, choose, outcome, captures, records) {
         const answers = 'text' in input
             ? await askJudge(cfg, be, choice, { outcome, ...(before && 'text' in before && { before: before.text }), capture: input.text }, { relevance: shape }, {})
             : await askJudge(cfg, be, choice, { outcome }, { relevance: shape }, before && 'mime' in before ? { before, capture: input } : { capture: input });
-        if (typeof answers === 'string') {
-            judged.push({ ...row, verdict: 'unsure', reason: answers, cached: false });
-            continue;
-        }
         const a = answers.relevance;
         const options = shape.options;
         const reason = a.personReason || a.rationale || options[String(a.answer)] || '';

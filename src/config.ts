@@ -40,8 +40,8 @@ export type Config = {
   secrets: Secrets;
   checks: { not_proven: 'inconclusive' | 'allow'; fix_title: string };
   // enabled: verify judges unless false (--judge turns it on for a run); check and receipt judge with --judge or true; rerun repeats its source run.
-  // route: claude-code, answerer:<agent> or openai:key, set by the user ('' until they do); model: '' for that agent's agent_config model; claude_code: that route's own config.
-  judge: { enabled?: boolean; route: string; model: string; allow_same: boolean; claude_code: { config_dir: string } };
+  // route: claude-code, answerer:<agent> or openai:key, set by the user ('' until they do); model: '' for that agent's agent_config model.
+  judge: { enabled?: boolean; route: string; model: string; allow_same: boolean };
   trusted: boolean; // project file came from --trusted-ref
   from: Record<string, 'global' | 'repo'>; // the file that set each key path; a key path not here is the built-in default
 };
@@ -78,7 +78,7 @@ export const EFFORT_FLAGS: Record<string, (level: string) => string[]> = {
 const AGENT_TIMEOUT = '30m';
 
 // Where each key may be set. Global-only keys describe the machine; repo-only keys describe the project; `any` may be in either.
-const KEYS: Record<string, { scope: 'global' | 'repo' | 'any'; type: 'string' | 'boolean' | 'string[]' | 'inputs' | 'journeys' | 'instance' | 'matrix' | 'dom' | 'agent' | 'agent_config' | 'route' | 'claude_code' | 'args' | 'paths' | 'bin' | 'duration' | 'auto_fix' | 'regexes' }> = {
+const KEYS: Record<string, { scope: 'global' | 'repo' | 'any'; type: 'string' | 'boolean' | 'string[]' | 'inputs' | 'journeys' | 'instance' | 'matrix' | 'dom' | 'agent' | 'agent_config' | 'route' | 'args' | 'paths' | 'bin' | 'duration' | 'auto_fix' | 'regexes' }> = {
   agent: { scope: 'any', type: 'agent' },
   auto_fix: { scope: 'any', type: 'auto_fix' },
   agent_config: { scope: 'global', type: 'agent_config' },
@@ -105,11 +105,10 @@ const KEYS: Record<string, { scope: 'global' | 'repo' | 'any'; type: 'string' | 
   'judge.enabled': { scope: 'repo', type: 'boolean' },
   'judge.model': { scope: 'global', type: 'string' },
   'judge.route': { scope: 'global', type: 'route' },
-  'judge.claude_code': { scope: 'global', type: 'claude_code' },
   'judge.allow_same': { scope: 'global', type: 'boolean' },
 };
 const SECTIONS = new Set(['evidence', 'secrets', 'checks', 'judge']);
-const MAPS = new Set(['auto_fix', 'agent_config', 'agent_args_override', 'agent_path_override', 'judge.claude_code']);
+const MAPS = new Set(['auto_fix', 'agent_config', 'agent_args_override', 'agent_path_override']);
 
 export const home = () => process.env.DONE_DONE_HOME || join(homedir(), '.done-done');
 
@@ -156,6 +155,8 @@ function apply(target: Config, text: string | undefined, file: string, scope: 'g
     throw new UsageError(`${file}: ${(e as Error).message.split('\n')[0]}`);
   }
   for (const [key, value] of flatten(doc, file)) {
+    // The claude judge runs the user's own claude sign-in now, so the folder key of older configs is only a leftover.
+    if (key === 'judge.claude_code') throw new UsageError(`${file}: judge.claude_code is gone, so delete it: the claude judge uses your own claude sign-in`, `Delete the judge.claude_code lines from ${file}`);
     const spec = KEYS[key];
     if (!spec) throw new UsageError(`${file}: unknown key ${key}`);
     if (spec.scope !== scope && spec.scope !== 'any') throw new UsageError(`${file}: ${key} may only be set in the ${spec.scope === 'global' ? 'global config' : 'project .done-done.yaml'}`);
@@ -166,7 +167,6 @@ function apply(target: Config, text: string | undefined, file: string, scope: 'g
       : spec.type === 'inputs' ? Array.isArray(value) && value.every((v) => typeof v === 'string' && inputPattern(v) !== '' && !isAbsolute(v) && !v.split('/').includes('..'))
       : spec.type === 'agent' ? isAgent(value)
       : spec.type === 'route' ? typeof value === 'string' && (value === 'claude-code' || Object.hasOwn(KEY_ROUTES, value) || ANSWERER_JUDGES.some((a) => value === `answerer:${a}`))
-      : spec.type === 'claude_code' ? isMap(value) && Object.entries(value).every(([k, v]) => k === 'config_dir' && typeof v === 'string')
       : spec.type === 'agent_config' ? isMap(value) && Object.entries(value).every(([a, c]) => isAgent(a) && isMap(c) && Object.entries(c).every(([k, m]) => ['model', 'effort'].includes(k) && typeof m === 'string'))
       : spec.type === 'args' ? isMap(value) && Object.entries(value).every(([a, v]) => AGENTS.includes(a) && Array.isArray(v) && v.every((x) => typeof x === 'string'))
       : spec.type === 'paths' ? isMap(value) && Object.entries(value).every(([a, v]) => AGENTS.includes(a) && isBin(v))
@@ -189,7 +189,6 @@ function apply(target: Config, text: string | undefined, file: string, scope: 'g
       regexes: key === 'secrets.allow' ? 'a list of valid regexes' : 'a map of <name>: <valid regex>',
       auto_fix: `a map of <step>: <attempts, 0 or more> for ${AUTO_FIX_STEPS.join(', ')}`,
       route: `claude-code (for claude), answerer:<agent> for one of ${ANSWERER_JUDGES.join(', ')}, or a key route (${Object.keys(KEY_ROUTES).join(', ')}); an acp:<target> agent cannot judge, since done-done cannot send it an image`,
-      claude_code: 'a map with config_dir, a string (the claude binary is agent_path_override.claude)',
       inputs: 'a list of repo-relative paths or globs, not absolute and with no .. segment',
     } as Record<string, string>;
     if (key === 'judge.route' && (value === 'auto' || value === '')) throw new UsageError(`${file}: judge.route ${value === '' ? 'must not be empty; to leave it unset, remove the key' : 'auto is gone: done-done never picks the judge, the user sets it'}`, `Delete the judge.route line in ${file}, then run: done-done init --judge <agent> --judge-model <model>`);
@@ -272,7 +271,7 @@ function defaultConfig(repo: string): Config {
     evidence: { local_root: join(home(), 'evidence'), root: '', allow_dirty: false, ignore_paths: [] },
     secrets: { patterns: {}, allow: [] },
     checks: { not_proven: 'inconclusive', fix_title: '^(fix|bugfix|hotfix)\\b' },
-    judge: { route: '', model: '', allow_same: false, claude_code: { config_dir: join(home(), 'claude') } },
+    judge: { route: '', model: '', allow_same: false },
     trusted: false,
     from: {},
   };
@@ -290,7 +289,6 @@ export function loadConfig(repo: string, projectText?: string | null): Config {
   const local = tilde(cfg.evidence.local_root);
   cfg.acpx_path = tilde(cfg.acpx_path);
   for (const a of Object.keys(cfg.agent_path_override)) cfg.agent_path_override[a] = tilde(cfg.agent_path_override[a]);
-  cfg.judge.claude_code.config_dir = tilde(cfg.judge.claude_code.config_dir);
   // A relative root is under the repo (and dies with the checkout); an absolute one is used as-is.
   cfg.evidence.root = cfg.evidence.root ? resolve(repo, cfg.evidence.root) : join(local, cfg.app);
   return cfg;
@@ -356,8 +354,5 @@ judge:
   model: ""
   # Accept a judge that is the author's own agent and model in a fresh session.
   allow_same: false
-  claude_code:
-    # The claude-code judge's own Claude sign-in folder, never your ~/.claude.
-    config_dir: ${short(join(home(), 'claude'))}
 `;
 }

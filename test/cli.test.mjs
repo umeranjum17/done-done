@@ -1937,43 +1937,54 @@ test('bare done-done in a repo with no config points at init', () => {
   assert.match(b.help[0], /done-done init/);
 });
 
-// The relevance judge, driven through BYOKit decide's claude-code backend against a local stub binary:
-// the stub answers `auth status` and the one headless request the kit sends, and logs what it was sent.
+// The relevance judge runs the user's own claude binary (agent_path_override.claude) with the user's sign-in. The stub
+// answers `auth status` and the one request the judge sends (stream-json with images, text without), and logs the HOME,
+// CLAUDE_CONFIG_DIR and argv it ran with, so a test can see what the judge was run with. Its state is in JUDGE_STUB.
 function judgeSetup(answer, { loggedIn = true, projectYaml = JUDGED } = {}) {
   const t = setup(projectYaml);
   // The config's author agent (opencode) must be installed on any host, so the receipt names it.
   t.env.PATH = `${pathEnv(t.env, ['opencode']).PATH}:${t.env.PATH}`;
-  const cfgDir = join(t.dir, 'judge-signin');
+  const stubDir = join(t.dir, 'judge-stub');
   const bin = join(t.dir, 'claude');
-  mkdirSync(cfgDir);
+  mkdirSync(stubDir);
+  t.env.JUDGE_STUB = stubDir;
   writeFileSync(
     bin,
     `#!${process.execPath}
 const { appendFileSync, readFileSync } = require('node:fs');
-const dir = process.env.CLAUDE_CONFIG_DIR;
+const dir = process.env.JUDGE_STUB;
 const stub = JSON.parse(readFileSync(dir + '/stub.json', 'utf8'));
 if (process.argv.includes('auth')) {
   process.stdout.write(JSON.stringify({ loggedIn: stub.loggedIn, authMethod: stub.loggedIn ? 'claude.ai' : 'none', apiProvider: 'firstParty' }));
   process.exit(stub.loggedIn ? 0 : 1);
 }
-const content = JSON.parse(readFileSync(0, 'utf8')).message.content;
+const raw = readFileSync(0, 'utf8');
+let content = [{ type: 'text', text: raw }];
+try {
+  content = JSON.parse(raw).message.content;
+} catch {}
 const images = content.filter((c) => c.type === 'image');
 const img = images[0] && Buffer.from(images[0].source.data, 'base64');
-appendFileSync(dir + '/calls.jsonl', JSON.stringify({ model: process.argv[process.argv.indexOf('--model') + 1], images: images.length, width: img?.readUInt32BE(16), prompt: content.at(-1).text }) + '\\n');
-const state = JSON.parse(content.at(-1).text).state;
+const prompt = content.at(-1).text;
+const begin = 'BEGIN DATA (JSON)\\n';
+const state = JSON.parse(prompt.slice(prompt.indexOf(begin) + begin.length, prompt.indexOf('\\nEND DATA'))).state;
+appendFileSync(dir + '/calls.jsonl', JSON.stringify({ home: process.env.HOME, configDir: process.env.CLAUDE_CONFIG_DIR ?? null, argv: process.argv.slice(2), model: process.argv[process.argv.indexOf('--model') + 1], images: images.length, width: img?.readUInt32BE(16), prompt, state }) + '\\n');
+if (!stub.loggedIn) process.exit(process.stdout.write(JSON.stringify({ type: 'result', subtype: 'success', is_error: true, result: 'Not logged in · Please run /login' })) && 1);
 const p = 'before' in state && state.before === state.capture ? { correct: 0.04, wrong: 0.93, unclear: 0.03 } : stub.answer;
 if (p === 'error') process.exit(process.stdout.write(JSON.stringify({ type: 'result', subtype: 'success', is_error: true, result: 'usage limit reached' })) && 0);
 const pick = Object.keys(p).sort((a, b) => p[b] - p[a])[0];
-process.stdout.write(JSON.stringify({ type: 'result', subtype: 'success', is_error: false, result: '', structured_output: { relevance: { probabilities: p, pick, personReason: stub.reason } } }));
+// stream-json prints one event per line, and the result is the last one.
+const streamed = process.argv.includes('stream-json') ? JSON.stringify({ type: 'system', subtype: 'init' }) + '\\n' : '';
+process.stdout.write(streamed + JSON.stringify({ type: 'result', subtype: 'success', is_error: false, result: '', structured_output: { relevance: { probabilities: p, pick, personReason: stub.reason } } }));
 `,
     { mode: 0o755 },
   );
-  const stub = (a, li = loggedIn) => writeFileSync(join(cfgDir, 'stub.json'), JSON.stringify({ loggedIn: li, answer: a, reason: 'The screen shows the notes list.' }));
+  const stub = (a, li = loggedIn) => writeFileSync(join(stubDir, 'stub.json'), JSON.stringify({ loggedIn: li, answer: a, reason: 'The screen shows the notes list.' }));
   stub(answer);
   mkdirSync(t.env.DONE_DONE_HOME, { recursive: true });
-  writeFileSync(join(t.env.DONE_DONE_HOME, 'config.yaml'), `agent: opencode\njudge:\n  route: claude-code\n  model: claude-test-1\n  claude_code: { config_dir: ${JSON.stringify(cfgDir)} }\nagent_path_override: { claude: ${JSON.stringify(bin)} }\n`);
-  const calls = () => (existsSync(join(cfgDir, 'calls.jsonl')) ? readFileSync(join(cfgDir, 'calls.jsonl'), 'utf8').trim().split('\n').map((l) => JSON.parse(l)) : []);
-  return { ...t, cfgDir, stub, calls };
+  writeFileSync(join(t.env.DONE_DONE_HOME, 'config.yaml'), `agent: opencode\njudge:\n  route: claude-code\n  model: claude-test-1\nagent_path_override: { claude: ${JSON.stringify(bin)} }\n`);
+  const calls = () => (existsSync(join(stubDir, 'calls.jsonl')) ? readFileSync(join(stubDir, 'calls.jsonl'), 'utf8').trim().split('\n').map((l) => JSON.parse(l)) : []);
+  return { ...t, stubDir, stub, calls };
 }
 const CORRECT = { correct: 0.95, wrong: 0.03, unclear: 0.02 };
 
@@ -2006,6 +2017,8 @@ test('judge pass exits 0, sends one downscaled image and the outcome only, and a
   assert.ok(calls.every((c) => c.images === 1 && c.model === 'claude-test-1'));
   assert.deepEqual(calls.map((c) => c.width), [200, 1000], 'a 2000px capture is downscaled to fit 1280px');
   assert.ok(calls.every((c) => c.prompt.includes('the notes list shows three notes') && !c.prompt.includes('.proof') && !c.prompt.includes(j.repo)), 'only the outcome line goes with the image');
+  assert.ok(calls.every((c) => c.home === j.env.HOME && c.configDir === (process.env.CLAUDE_CONFIG_DIR ?? null)), 'the judge runs your own claude: your HOME, and no sign-in folder of done-done\'s');
+  assert.ok(calls.every((c) => ['--safe-mode', '--no-session-persistence', '--tools', '--setting-sources', '--input-format'].every((f) => c.argv.includes(f))), 'a fresh, tools-off, non-persistent session with your settings out, the capture as stream-json');
   const again = j.dd('check', '--judge', '--outcome', 'the notes list shows three notes', ...cited);
   assert.equal(again.code, 0, again.out);
   assert.ok(toon(again).judge.judged.every((x) => x.cached === true && x.verdict === 'pass'));
@@ -2014,7 +2027,9 @@ test('judge pass exits 0, sends one downscaled image and the outcome only, and a
   const cache = readFileSync(join(cacheDir, readdirSync(cacheDir)[0]), 'utf8');
   assert.doesNotMatch(cache, /token|key|secret/i, 'the cache in the run store holds verdicts only');
   const agents = join(j.env.DONE_DONE_HOME, 'agents');
-  assert.deepEqual(existsSync(agents) ? readdirSync(agents).filter((n) => n.startsWith('judge-')) : [], [], 'the claude-code route starts no agent of ours, so it writes no call record');
+  const records = readdirSync(agents).filter((n) => n.startsWith('judge-'));
+  assert.equal(records.length, 2, 'the claude-code route writes a call record per request, as the other routes do');
+  assert.doesNotMatch(readFileSync(join(agents, records[0]), 'utf8'), /BEGIN DATA/, 'a call record never holds the prompt');
 });
 
 test('judge wrong screen fails with exit 1, unsure and low confidence are inconclusive with exit 3', () => {
@@ -2140,21 +2155,16 @@ test('a judge that judged no capture leaves a schema 1 receipt with no judge blo
   assert.equal(j.calls().length, 0, 'a file the judge does not read is never sent to the model');
 });
 
-test('judge with no sign-in is a config error naming the sign-in command, and writes no receipt', () => {
+test('judge with a claude that is not signed in is a config error naming your normal claude sign-in, and writes no receipt', () => {
   const j = judgeSetup(CORRECT, { loggedIn: false });
   const { files } = j.shots();
   const r = j.dd('receipt', '--judge', '--outcome', 'the notes list shows three notes', files[0]);
   assert.equal(r.code, 2, r.out);
   const e = toon(r);
-  assert.match(e.error, /^judge: /);
-  assert.ok(e.help[0].includes(`CLAUDE_CONFIG_DIR=${j.cfgDir}`) && e.help[0].includes('auth login'), e.help[0]);
+  assert.match(e.error, /^judge: claude is not signed in \(claude exited 1: Not logged in/);
+  assert.match(e.help[0], /^Sign in to Claude Code as you normally do: .+ auth login, then re-run this command$/);
   assert.equal(j.dd('receipt', '--verify', j.head()).code, 1, 'no receipt was written');
-  rmSync(j.cfgDir, { recursive: true });
-  const missing = j.dd('check', '--judge', '--outcome', 'the notes list shows three notes', files[0]);
-  assert.equal(missing.code, 2, missing.out);
-  assert.match(toon(missing).help[0], /mkdir -p .*auth login/);
-  assert.doesNotMatch(r.out + missing.out, /token|secret/i);
-  mkdirSync(j.cfgDir);
+  assert.doesNotMatch(r.out, /CLAUDE_CONFIG_DIR|token|secret/i, 'no sign-in folder of done-done\'s is named');
   j.stub(CORRECT, true);
   const ok = j.dd('receipt', '--judge', '--outcome', 'the notes list shows three notes', files[0]);
   assert.equal(ok.code, 0, ok.out);
@@ -3313,22 +3323,19 @@ test('the run error names agent_path_override only when the override is set and 
   assert.match(toon(doctorIn(repo, path, 'maintain', '--foreground')).reason, /\(agent_path_override\.pi .*gone\/pi is not an executable file\)/);
 });
 
-test('doctor reports the judge missing when claude has no sign-in, whichever binary agent_path_override names', () => {
+test('doctor reports the judge ok with a claude binary alone: its sign-in is checked only when a capture is judged', () => {
   const { repo, env, dd } = setup();
   mkdirSync(env.DONE_DONE_HOME, { recursive: true });
   writeFileSync(join(env.DONE_DONE_HOME, 'config.yaml'), 'agent: opencode\njudge:\n  route: claude-code\n');
-  const noSignIn = toon(doctorIn(repo, pathEnv(env, ['claude']), 'doctor'));
-  assert.equal(noSignIn.checks[5].status, 'missing', 'a claude binary alone with no sign-in is not a judge');
-  assert.match(noSignIn.checks[5].detail, /^judge: no Claude sign-in at /);
-  mkdirSync(env.DONE_DONE_HOME, { recursive: true });
+  const alone = toon(doctorIn(repo, pathEnv(env, ['claude']), 'doctor'));
+  assert.equal(alone.checks[5].status, 'ok');
+  assert.match(alone.checks[5].detail, /claude binary at .* and the judge kit are present \(login is checked only when a capture is judged\)/);
+  assert.doesNotMatch(JSON.stringify(alone.checks[5]), /auth login|CLAUDE_CONFIG_DIR/, 'no separate sign-in step is asked for');
   writeFileSync(join(env.DONE_DONE_HOME, 'config.yaml'), 'agent: opencode\njudge:\n  route: claude-code\nagent_path_override: { claude: claude }\n');
-  const relative = toon(doctorIn(repo, pathEnv(env, ['claude']), 'doctor'));
-  assert.equal(relative.checks[5].status, 'missing');
-  assert.match(relative.checks[5].detail, /^judge: no Claude sign-in at /);
   writeFileSync(join(env.DONE_DONE_HOME, 'config.yaml'), 'judge:\n  bin: /usr/bin/claude\n');
   assert.match(toon(dd('doctor')).checks[1].detail, /unknown key judge\.bin/, 'a key that never shipped is unknown');
-  writeFileSync(join(env.DONE_DONE_HOME, 'config.yaml'), 'judge:\n  claude_code: { bin: /usr/bin/claude }\n');
-  assert.match(toon(dd('doctor')).checks[1].detail, /the claude binary is agent_path_override\.claude/, 'the old key points at its replacement');
+  writeFileSync(join(env.DONE_DONE_HOME, 'config.yaml'), 'judge:\n  claude_code: { config_dir: /somewhere/claude }\n');
+  assert.match(toon(dd('doctor')).checks[1].detail, /judge\.claude_code is gone, so delete it/, 'the old folder key is one clear line, not a crash');
 });
 
 test('doctor reports the judge missing when agent_path_override.claude does not exist', () => {
@@ -3349,17 +3356,6 @@ test('doctor reports the judge missing when agent_path_override.claude is a dire
   const j = toon(doctorIn(repo, pathEnv(env, ['claude']), 'doctor'));
   assert.equal(j.checks[5].status, 'missing');
   assert.equal(j.checks[5].detail, `judge: agent_path_override.claude ${dirBin} is not an executable file`);
-});
-
-test('doctor reports the judge missing when its sign-in folder is a ~/.claude', () => {
-  const { repo, env } = setup();
-  const userHome = join(env.DONE_DONE_HOME, 'userhome');
-  const claudeDir = join(userHome, '.claude');
-  mkdirSync(claudeDir, { recursive: true });
-  writeFileSync(join(env.DONE_DONE_HOME, 'config.yaml'), `agent: claude\njudge:\n  route: claude-code\n  allow_same: true\n  claude_code: { config_dir: ${JSON.stringify(claudeDir)} }\n`);
-  const j = toon(doctorIn(repo, { ...pathEnv(env, ['claude']), HOME: userHome }, 'doctor'));
-  assert.equal(j.checks[5].status, 'missing');
-  assert.match(j.checks[5].fix, /not your ~\/\.claude/);
 });
 
 test('doctor finds agent, judge and ffprobe binaries from PATH; missing optionals never fail it', () => {
@@ -3414,11 +3410,10 @@ test('doctor finds agent, judge and ffprobe binaries from PATH; missing optional
 
 test('with no agent installed, the judge is still kept apart from the author the user set: doctor names it, the agent row still names the first agent', () => {
   const { repo, env } = setup();
-  const claudeHome = join(env.DONE_DONE_HOME, 'claude');
-  mkdirSync(claudeHome, { recursive: true });
+  mkdirSync(env.DONE_DONE_HOME, { recursive: true });
   const bin = join(env.DONE_DONE_HOME, 'claude-bin');
   writeFileSync(bin, '#!/bin/sh\necho \'{"loggedIn":true}\'\n', { mode: 0o755 });
-  writeFileSync(join(env.DONE_DONE_HOME, 'config.yaml'), `agent: opencode\njudge:\n  route: claude-code\n  claude_code: { config_dir: ${JSON.stringify(claudeHome)} }\nagent_path_override: { claude: ${JSON.stringify(bin)} }\n`);
+  writeFileSync(join(env.DONE_DONE_HOME, 'config.yaml'), `agent: opencode\njudge:\n  route: claude-code\nagent_path_override: { claude: ${JSON.stringify(bin)} }\n`);
   const d = toon(doctorIn(repo, pathEnv(env, []), 'doctor'));
   assert.match(d.checks[4].detail, /^opencode \(model opencode-go\/muse-spark-1\.3-contributor; from config\): opencode is not on PATH$/);
   assert.equal(d.checks[7].status, 'ok', 'a judge of another agent than the author is ok, installed or not');
@@ -5936,7 +5931,7 @@ test('base_ref judges a text capture against its base text: identical text fails
   assert.match(same.out, /count\.json: judge says wrong output/, 'the judge reads identical text as no change');
   assert.deepEqual(judgedOf(same).map((x) => x.verdict), ['fail']);
   assert.equal(j.dd('abort', '--run', toon(same).run_id).code, 0);
-  assert.equal(JSON.parse(j.calls().at(-1).prompt).state.before, '{"notes":3}\n', 'the request holds the base text as well as the capture');
+  assert.equal(j.calls().at(-1).state.before, '{"notes":3}\n', 'the request holds the base text as well as the capture');
   writeFileSync(join(j.repo, 'page.txt'), '{"notes":4}\n');
   j.sh('commit', '-qam', 'a fourth note');
   const changed = verify('a fourth note is saved');

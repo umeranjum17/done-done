@@ -1,7 +1,7 @@
 import { spawn, spawnSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
-import { dirname, isAbsolute, join } from 'node:path';
+import { dirname, extname, isAbsolute, join } from 'node:path';
 import { stripVTControlCharacters } from 'node:util';
 import { AGENTS, ANSWERER_JUDGES, CHEAP, EFFORT_FLAGS, KEY_ROUTES, parseDuration, UsageError } from './config.js';
 import { isExecutable, onPath } from './judge.js';
@@ -112,12 +112,19 @@ const PI_TOOL_LESS = ['--no-tools', '--no-extensions', '--no-skills', '--no-prom
 const ADAPTERS = {
     // claude -p: --json-schema puts the validated object in structured_output; --tools '' turns every tool off.
     // An edit step accepts edits only in cwd and --add-dir folders, and may run commands (the drive launches the app).
+    // A tool-less call runs with --safe-mode too (no CLAUDE.md, hooks, plugins or MCP servers) and with the user's own sign-in.
+    // A call with images sends them as stream-json content blocks, as claude's SDK does, and its result is the last event.
     claude: {
-        argv: (c) => ['-p', '--output-format', 'json', '--json-schema', JSON.stringify(c.schema), '--model', c.model, '--no-session-persistence',
+        argv: (c) => ['-p', '--output-format', c.images?.length ? 'stream-json' : 'json', ...(c.images?.length ? ['--verbose', '--input-format', 'stream-json'] : []),
+            '--json-schema', JSON.stringify(c.schema), '--model', c.model, '--no-session-persistence',
             ...(c.tools === 'edit' ? ['--permission-mode', 'acceptEdits', '--allowedTools', 'Bash', ...(c.dirs ?? []).flatMap((d) => ['--add-dir', d])] : ['--tools', c.tools === 'read' ? 'Read,Grep,Glob' : '']),
-            ...(c.tools === 'edit' ? [] : ['--setting-sources', '']), ...(c.tools === 'read' ? ['--strict-mcp-config'] : [])],
-        answer: (out) => {
-            const r = JSON.parse(out);
+            ...(c.tools === 'edit' ? [] : ['--setting-sources', '']), ...(c.tools === 'read' ? ['--strict-mcp-config'] : []), ...(c.tools === 'none' ? ['--safe-mode'] : [])],
+        stdin: (c, prompt) => (c.images?.length ? `${JSON.stringify({ type: 'user', session_id: '', parent_tool_use_id: null, message: { role: 'user', content: [
+                    ...c.images.flatMap((i) => [{ type: 'text', text: `Image: ${i.name.replace(/\.[^.]+$/, '')}` }, { type: 'image', source: { type: 'base64', media_type: `image/${extname(i.name).slice(1)}`, data: i.bytes.toString('base64') } }]),
+                    { type: 'text', text: prompt }
+                ] } })}\n` : prompt),
+        answer: (out, c) => {
+            const r = JSON.parse(c.images?.length ? out.trim().split('\n').at(-1) : out);
             if (r.is_error)
                 throw new ProviderError(String(r.result || r.subtype));
             return r.structured_output;
@@ -298,7 +305,6 @@ export function agentPath(agent, cfg) {
         acpxRuns.set(acpx, spawnSync(acpx, ['--version'], { stdio: 'ignore', timeout: 5_000 }).status === 0);
     return acpxRuns.get(acpx) ? acpx : '';
 }
-export const claudeBin = (cfg) => agentPath('claude', cfg);
 export const routeOf = (agent) => (agent === 'claude' ? 'claude-code' : `answerer:${agent}`);
 export const JUDGES = AGENTS.filter((a) => a === 'claude' || ANSWERER_JUDGES.includes(a));
 // Like the agent, the judge is exactly the one the user set; with none, done-done asks the user (in a terminal) or
@@ -454,7 +460,8 @@ export async function askAgent(c) {
             const promptText = (attempts === 1 ? prompt : `${prompt}\n\nYour previous answer was not valid (${lastError}).`) + schemaTrailer;
             if (adapter.file)
                 writeFileSync(join(dir, 'prompt.md'), promptText, { mode: 0o600 });
-            res = await start(bin, argv(dir), c, cwd, adapter.file ? '' : promptText, { ...process.env, ...c.env, ...adapter.env?.(c) }, adapter.streams ? c.idleMs ?? AGENT_IDLE_MS : 0);
+            const input = adapter.file ? '' : adapter.stdin ? adapter.stdin(c, promptText) : promptText;
+            res = await start(bin, argv(dir), c, cwd, input, { ...process.env, ...c.env, ...adapter.env?.(c) }, adapter.streams ? c.idleMs ?? AGENT_IDLE_MS : 0);
             if (res.error)
                 throw res.error;
             // A permission the run refused explains a call with no answer; name it rather than the exit code text.

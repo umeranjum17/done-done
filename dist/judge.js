@@ -1,9 +1,9 @@
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { accessSync, constants, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { accessSync, constants, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, delimiter, isAbsolute, join } from 'node:path';
-import { agentRun, askAgent, claudeBin, notStartable } from './agents.js';
+import { agentRun, askAgent, notStartable } from './agents.js';
 import { home, KEY_ROUTES, parseDuration, UsageError } from './config.js';
 import { downscaleToPng } from './media.js';
 const MAX_SIDE = 1280; // long edge sent to the model, in pixels
@@ -79,12 +79,12 @@ export function onPath(name) {
     }
     return '';
 }
-// Is claude signed in to this sign-in folder? Reads only the binary's non-secret auth status, as the kit does.
-// It runs in a scratch folder with a scratch HOME, so nothing else of the user's is read.
-export function claudeLoggedIn(bin, configDir) {
+// Is claude signed in, the user's own way? Reads only the binary's non-secret auth status, in a scratch folder, with the
+// user's own environment, as the judge's calls run.
+export function claudeLoggedIn(bin) {
     const scratch = mkdtempSync(join(tmpdir(), 'done-done-judge-'));
     try {
-        const r = spawnSync(bin, ['--safe-mode', '--setting-sources', '', 'auth', 'status'], { cwd: scratch, encoding: 'utf8', timeout: 30_000, env: { HOME: scratch, PATH: process.env.PATH, CLAUDE_CONFIG_DIR: configDir } });
+        const r = spawnSync(bin, ['--safe-mode', '--setting-sources', '', 'auth', 'status'], { cwd: scratch, encoding: 'utf8', timeout: 30_000 });
         return r.status === 0 && JSON.parse(r.stdout).loggedIn === true;
     }
     catch {
@@ -128,55 +128,34 @@ export async function backend(cfg, choice, record = () => '', questions = { rele
         const ask = openai({ model: choice.model, key, supportsImages: true, maxRetries: 0 }).ask;
         return { ask, resolve, lastError: () => '', signIn: '', signedIn: () => true, detail: `${name} is set and the judge kit is present` };
     }
-    const timeoutMs = parseDuration(cfg.agent_timeout);
     const override = cfg.agent_path_override[choice.agent];
-    if (choice.route !== 'claude-code') {
-        const run = agentRun(cfg, choice.agent, choice.model);
-        const bin = run.path;
-        if (!bin)
-            throw new UsageError(`judge: ${notStartable(choice.agent, override)}`, `Install ${choice.agent}, or ask the user for another judge and save it: done-done init --judge <agent> --judge-model <model>`);
-        const { answerer, resolve } = await kit();
-        let lastError = '';
-        // The kit hides a failed call's message from the verdict, so the real cause is kept here for the result.
-        let requests = 0;
-        const ask = answerer({
-            name: choice.route,
-            leaves: true,
-            supportsImages: true,
-            ask: async (prompt, _signal, images) => {
-                lastError = '';
-                requests++;
-                const attached = images.map((img) => ({ name: `${img.id}.${img.mime.split('/')[1]}`, bytes: Buffer.from(img.dataUrl.slice(img.dataUrl.indexOf(',') + 1), 'base64') }));
-                // A tool-less call runs in its own scratch folder, so the CLI sees the attached capture and nothing else.
-                const a = await askAgent({ ...run, prompt, schema: answerSchema(questions), cwd: tmpdir(), tools: 'none', attempts, record: record(requests), images: attached });
-                lastError = a.ok ? '' : a.error ?? 'no answer';
-                if (!a.ok)
-                    throw new Error(lastError);
-                return JSON.stringify(a.answer);
-            },
-        }).ask;
-        return { ask, resolve, lastError: () => lastError, signIn: '', signedIn: () => true, detail: `${choice.agent} at ${bin} and the judge kit are present; it judges with every tool off` };
-    }
-    const bin = claudeBin(cfg);
-    const dir = cfg.judge.claude_code.config_dir;
-    const signIn = `CLAUDE_CONFIG_DIR=${dir} ${bin || 'claude'} auth login`;
-    const where = '~/.done-done/config.yaml';
+    const run = agentRun(cfg, choice.agent, choice.model);
+    const bin = run.path;
+    const claude = choice.agent === 'claude';
     if (!bin)
-        throw new UsageError(`judge: ${notStartable('claude', override)}`, override ? `Fix agent_path_override.claude in ${where}, or install Claude Code` : 'Install Claude Code, or set agent_path_override.claude to its absolute path');
-    if (!isAbsolute(dir))
-        throw new UsageError(`judge: judge.claude_code.config_dir must be an absolute path (got ${dir})`, `Fix judge.claude_code.config_dir in ${where}`);
-    if (!existsSync(dir))
-        throw new UsageError(`judge: no Claude sign-in at ${dir}`, `Sign in once with your Claude plan: mkdir -p ${dir} && ${signIn}`);
-    const { claudeCode, resolve } = await kit();
-    // The real folder, so a link to ~/.claude is refused here as a config error, not later per capture.
-    const real = realpathSync(dir);
-    try {
-        const ask = claudeCode({ bin, configDir: real, model: choice.model, timeoutMs }).ask;
-        return { ask, resolve, lastError: () => '', signIn, signedIn: () => claudeLoggedIn(bin, real), detail: `claude binary at ${bin}, a sign-in folder and the judge kit are present (login is checked only when a capture is judged)` };
-    }
-    catch (e) {
-        throw new UsageError(`judge: ${e.message} (claude ${bin}, judge.claude_code.config_dir ${dir})`, 'Set judge.claude_code.config_dir to a folder of its own, not your ~/.claude');
-    }
+        throw new UsageError(`judge: ${notStartable(choice.agent, override)}`, claude ? (override ? 'Fix agent_path_override.claude in ~/.done-done/config.yaml, or install Claude Code' : 'Install Claude Code, or set agent_path_override.claude to its absolute path') : `Install ${choice.agent}, or ask the user for another judge and save it: done-done init --judge <agent> --judge-model <model>`);
+    const { answerer, resolve } = await kit();
+    let lastError = '';
+    // The kit hides a failed call's message from the verdict, so the real cause is kept here for the result.
+    let requests = 0;
+    const ask = answerer({
+        name: choice.route,
+        leaves: true,
+        supportsImages: true,
+        ask: async (prompt, _signal, images) => {
+            lastError = '';
+            requests++;
+            const attached = images.map((img) => ({ name: `${img.id}.${img.mime.split('/')[1]}`, bytes: Buffer.from(img.dataUrl.slice(img.dataUrl.indexOf(',') + 1), 'base64') }));
+            // A tool-less call runs in its own scratch folder, so the CLI sees the attached capture and nothing else.
+            const a = await askAgent({ ...run, prompt, schema: answerSchema(questions), cwd: tmpdir(), tools: 'none', attempts, record: record(requests), images: attached });
+            lastError = a.ok ? '' : a.error ?? 'no answer';
+            if (!a.ok)
+                throw new Error(lastError);
+            return JSON.stringify(a.answer);
+        },
+    }).ask;
+    // claude runs with the user's own sign-in, so it is checked only when a call fails.
+    return { ask, resolve, lastError: () => lastError, signIn: claude ? `${bin} auth login` : '', signedIn: () => !claude || claudeLoggedIn(bin), detail: claude ? `claude binary at ${bin} and the judge kit are present (login is checked only when a capture is judged)` : `${choice.agent} at ${bin} and the judge kit are present; it judges with every tool off` };
 }
 // The image to send: the original when it already fits, else a downscaled PNG; a reason when neither works.
 export function prepare(c) {
@@ -189,7 +168,7 @@ export function prepare(c) {
 // One request about the named images: each question's answer after the floors, or why the judge did not answer.
 // An answer the kit cannot read (all-zero probabilities, an option left out) would abstain on every question as if the
 // judge were unsure, so it is asked once more, and one that still cannot be read is never kept.
-// A signed-out or non-subscription claude-code sign-in is a usage error, since no later request can do better.
+// A signed-out claude is a usage error, since no later request can do better.
 export async function askJudge(cfg, be, choice, state, questions, images) {
     try {
         const ask = () => be.ask(state, questions, AbortSignal.timeout(parseDuration(cfg.agent_timeout)), Object.entries(images).map(([id, i]) => ({ id, mime: i.mime, dataUrl: `data:${i.mime};base64,${i.bytes.toString('base64')}` })));
@@ -203,12 +182,11 @@ export async function askJudge(cfg, be, choice, state, questions, images) {
         return Object.fromEntries(Object.entries(questions).map(([k, q]) => [k, be.resolve(q, raw[k])]));
     }
     catch (e) {
-        const code = e.code;
         const why = be.lastError() || e.message;
-        // The kit reports a signed-out binary, a bad model id and a used-up plan all as 'process', so ask the binary which.
-        if (choice.route === 'claude-code' && (code === 'subscription_required' || (code === 'process' && !be.signedIn())))
-            throw new UsageError(`judge: ${why} (sign-in ${cfg.judge.claude_code.config_dir})`, `Sign in once with your Claude plan: ${be.signIn}`);
-        const hint = code === 'process' ? ` (check judge.model ${choice.model} and your plan's usage limit)` : Object.hasOwn(KEY_ROUTES, choice.route) ? ` (check judge.model ${choice.model} and the key in ${KEY_ROUTES[choice.route]})` : '';
+        // A failed claude call is a signed-out claude or a bad model, a used-up plan or a limit: ask the binary which.
+        if (choice.route === 'claude-code' && !be.signedIn())
+            throw new UsageError(`judge: claude is not signed in (${why})`, `Sign in to Claude Code as you normally do: ${be.signIn}, then re-run this command`);
+        const hint = choice.route === 'claude-code' ? ` (check judge.model ${choice.model} and your plan's usage limit)` : Object.hasOwn(KEY_ROUTES, choice.route) ? ` (check judge.model ${choice.model} and the key in ${KEY_ROUTES[choice.route]})` : '';
         return `the judge did not answer: ${why}${hint}`;
     }
 }

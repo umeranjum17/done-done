@@ -70,11 +70,10 @@ const KEYS = {
     'judge.enabled': { scope: 'repo', type: 'boolean' },
     'judge.model': { scope: 'global', type: 'string' },
     'judge.route': { scope: 'global', type: 'route' },
-    'judge.claude_code': { scope: 'global', type: 'claude_code' },
     'judge.allow_same': { scope: 'global', type: 'boolean' },
 };
 const SECTIONS = new Set(['evidence', 'secrets', 'checks', 'judge']);
-const MAPS = new Set(['auto_fix', 'agent_config', 'agent_args_override', 'agent_path_override', 'judge.claude_code']);
+const MAPS = new Set(['auto_fix', 'agent_config', 'agent_args_override', 'agent_path_override']);
 export const home = () => process.env.DONE_DONE_HOME || join(homedir(), '.done-done');
 // A duration such as 90s, 30m or 1h, in milliseconds; null when the text is not one or is not a delay a timer can run.
 export const parseDuration = (text) => {
@@ -129,6 +128,9 @@ function apply(target, text, file, scope) {
         throw new UsageError(`${file}: ${e.message.split('\n')[0]}`);
     }
     for (const [key, value] of flatten(doc, file)) {
+        // The claude judge runs the user's own claude sign-in now, so the folder key of older configs is only a leftover.
+        if (key === 'judge.claude_code')
+            throw new UsageError(`${file}: judge.claude_code is gone, so delete it: the claude judge uses your own claude sign-in`, `Delete the judge.claude_code lines from ${file}`);
         const spec = KEYS[key];
         if (!spec)
             throw new UsageError(`${file}: unknown key ${key}`);
@@ -140,16 +142,15 @@ function apply(target, text, file, scope) {
                     : spec.type === 'inputs' ? Array.isArray(value) && value.every((v) => typeof v === 'string' && inputPattern(v) !== '' && !isAbsolute(v) && !v.split('/').includes('..'))
                         : spec.type === 'agent' ? isAgent(value)
                             : spec.type === 'route' ? typeof value === 'string' && (value === 'claude-code' || Object.hasOwn(KEY_ROUTES, value) || ANSWERER_JUDGES.some((a) => value === `answerer:${a}`))
-                                : spec.type === 'claude_code' ? isMap(value) && Object.entries(value).every(([k, v]) => k === 'config_dir' && typeof v === 'string')
-                                    : spec.type === 'agent_config' ? isMap(value) && Object.entries(value).every(([a, c]) => isAgent(a) && isMap(c) && Object.entries(c).every(([k, m]) => ['model', 'effort'].includes(k) && typeof m === 'string'))
-                                        : spec.type === 'args' ? isMap(value) && Object.entries(value).every(([a, v]) => AGENTS.includes(a) && Array.isArray(v) && v.every((x) => typeof x === 'string'))
-                                            : spec.type === 'paths' ? isMap(value) && Object.entries(value).every(([a, v]) => AGENTS.includes(a) && isBin(v))
-                                                : spec.type === 'bin' ? isBin(value)
-                                                    : spec.type === 'duration' ? typeof value === 'string' && parseDuration(value) !== null
-                                                        : spec.type === 'auto_fix' ? isMap(value) && Object.entries(value).every(([k, n]) => AUTO_FIX_STEPS.includes(k) && Number.isInteger(n) && n >= 0)
-                                                            : spec.type === 'matrix' ? !checkMatrix(value)
-                                                                : spec.type === 'regexes' ? (key === 'secrets.allow' ? Array.isArray(value) : isMap(value)) && Object.values(value).every(isRegex)
-                                                                    : isMap(value) && Object.values(value).every((j) => j && typeof j.command === 'string' && (j.spends === undefined || (typeof j.spends === 'string' && j.spends.trim() !== '')));
+                                : spec.type === 'agent_config' ? isMap(value) && Object.entries(value).every(([a, c]) => isAgent(a) && isMap(c) && Object.entries(c).every(([k, m]) => ['model', 'effort'].includes(k) && typeof m === 'string'))
+                                    : spec.type === 'args' ? isMap(value) && Object.entries(value).every(([a, v]) => AGENTS.includes(a) && Array.isArray(v) && v.every((x) => typeof x === 'string'))
+                                        : spec.type === 'paths' ? isMap(value) && Object.entries(value).every(([a, v]) => AGENTS.includes(a) && isBin(v))
+                                            : spec.type === 'bin' ? isBin(value)
+                                                : spec.type === 'duration' ? typeof value === 'string' && parseDuration(value) !== null
+                                                    : spec.type === 'auto_fix' ? isMap(value) && Object.entries(value).every(([k, n]) => AUTO_FIX_STEPS.includes(k) && Number.isInteger(n) && n >= 0)
+                                                        : spec.type === 'matrix' ? !checkMatrix(value)
+                                                            : spec.type === 'regexes' ? (key === 'secrets.allow' ? Array.isArray(value) : isMap(value)) && Object.values(value).every(isRegex)
+                                                                : isMap(value) && Object.values(value).every((j) => j && typeof j.command === 'string' && (j.spends === undefined || (typeof j.spends === 'string' && j.spends.trim() !== '')));
         const want = {
             journeys: 'a map of name: {command: <string>, spends: <what a run spends>}',
             instance: '{command: <string>, ready: {url: <http url>} or {command: <shell command>}, ready_timeout: <duration>}',
@@ -163,7 +164,6 @@ function apply(target, text, file, scope) {
             regexes: key === 'secrets.allow' ? 'a list of valid regexes' : 'a map of <name>: <valid regex>',
             auto_fix: `a map of <step>: <attempts, 0 or more> for ${AUTO_FIX_STEPS.join(', ')}`,
             route: `claude-code (for claude), answerer:<agent> for one of ${ANSWERER_JUDGES.join(', ')}, or a key route (${Object.keys(KEY_ROUTES).join(', ')}); an acp:<target> agent cannot judge, since done-done cannot send it an image`,
-            claude_code: 'a map with config_dir, a string (the claude binary is agent_path_override.claude)',
             inputs: 'a list of repo-relative paths or globs, not absolute and with no .. segment',
         };
         if (key === 'judge.route' && (value === 'auto' || value === ''))
@@ -262,7 +262,7 @@ function defaultConfig(repo) {
         evidence: { local_root: join(home(), 'evidence'), root: '', allow_dirty: false, ignore_paths: [] },
         secrets: { patterns: {}, allow: [] },
         checks: { not_proven: 'inconclusive', fix_title: '^(fix|bugfix|hotfix)\\b' },
-        judge: { route: '', model: '', allow_same: false, claude_code: { config_dir: join(home(), 'claude') } },
+        judge: { route: '', model: '', allow_same: false },
         trusted: false,
         from: {},
     };
@@ -280,7 +280,6 @@ export function loadConfig(repo, projectText) {
     cfg.acpx_path = tilde(cfg.acpx_path);
     for (const a of Object.keys(cfg.agent_path_override))
         cfg.agent_path_override[a] = tilde(cfg.agent_path_override[a]);
-    cfg.judge.claude_code.config_dir = tilde(cfg.judge.claude_code.config_dir);
     // A relative root is under the repo (and dies with the checkout); an absolute one is used as-is.
     cfg.evidence.root = cfg.evidence.root ? resolve(repo, cfg.evidence.root) : join(local, cfg.app);
     return cfg;
@@ -345,8 +344,5 @@ judge:
   model: ""
   # Accept a judge that is the author's own agent and model in a fresh session.
   allow_same: false
-  claude_code:
-    # The claude-code judge's own Claude sign-in folder, never your ~/.claude.
-    config_dir: ${short(join(home(), 'claude'))}
 `;
 }

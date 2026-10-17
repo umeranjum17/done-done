@@ -82,7 +82,7 @@ const CONFIG_TEXT = `config: ~/.done-done/config.yaml (global; DONE_DONE_HOME mo
   agent (either file): claude, codex, opencode, pi, gemini or acp:<target>, set by the user (done-done init --agent); done-done never picks one.
   global only: agent_config.<agent>.{model,effort} (effort: minimal, low, medium, high, xhigh, max), agent_args_override.<agent>
   (extra flags), agent_path_override.<agent> (binary), acpx_path, agent_timeout (one agent call, default 30m; a streaming agent that prints nothing for 5m is stopped early),
-  evidence.local_root, judge.{route,model,allow_same,claude_code.config_dir} (the judge, set by the user with
+  evidence.local_root, judge.{route,model,allow_same} (the judge, set by the user with
   init --judge; never picked). done-done doctor shows where each agent setting came from.`;
 // One table drives `--help` and every `<command> --help`: each command's usage lines and the flags it takes.
 const FLAGS = {

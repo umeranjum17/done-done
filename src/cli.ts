@@ -981,7 +981,7 @@ function checkHelp(code: number, findings: Finding[], files: string[], { cfg, re
   return help;
 }
 
-function report(findings: Finding[], files: string[], ctx: ReportContext, note = ''): { code: number; result: Record<string, unknown> } {
+function report(findings: Finding[], files: string[], ctx: ReportContext): { code: number; result: Record<string, unknown> } {
   const code = findings.some((f) => f.level === 'fail') ? FAIL : findings.length ? INCONCLUSIVE : PASS;
   const result: Record<string, unknown> = {
     command: 'check',
@@ -989,7 +989,6 @@ function report(findings: Finding[], files: string[], ctx: ReportContext, note =
   };
   if (ctx.claim) result.claim = ctx.claim;
   if (ctx.source) result.source = ctx.source;
-  if (note) result.note = note;
   if (files.length) {
     const ev = cap(files);
     result.files = files.length;

@@ -977,7 +977,7 @@ function checkHelp(code, findings, files, { cfg, repo, claim, source, citationBa
         help.push(`Commit your change, re-capture with ${capture}, then check the new files`);
     return help;
 }
-function report(findings, files, ctx, note = '') {
+function report(findings, files, ctx) {
     const code = findings.some((f) => f.level === 'fail') ? FAIL : findings.length ? INCONCLUSIVE : PASS;
     const result = {
         command: 'check',
@@ -987,8 +987,6 @@ function report(findings, files, ctx, note = '') {
         result.claim = ctx.claim;
     if (ctx.source)
         result.source = ctx.source;
-    if (note)
-        result.note = note;
     if (files.length) {
         const ev = cap(files);
         result.files = files.length;

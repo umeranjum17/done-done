@@ -317,9 +317,9 @@ export function agentPath(agent: string, cfg?: Pick<Config, 'acpx_path' | 'agent
 }
 
 // The judge: a fresh, tools-off, single-shot call through BYOKit, never the author's agent and model unless the user
-// accepts that. claude judges through the kit's claude-code route; any other agent whose CLI reads images with every
-// tool off, through the kit's answerer backend over that CLI; a key route (openai:key) through the kit's own backend on
-// the user's API key, with no agent CLI. independence: agent (another agent), model (the author's agent at
+// accepts that. claude and any other agent whose CLI reads images judge through the kit's answerer backend over that
+// CLI (claude with its normal sign-in); a key route (openai:key) through the kit's own backend on the user's API key,
+// with no agent CLI. independence: agent (another agent), model (the author's agent at
 // another model) or session-only (the author's agent and model in a fresh session).
 export type JudgeChoice = { route: string; agent: string; model: string; independence: 'agent' | 'model' | 'session-only'; author: { agent: string; model: string } };
 

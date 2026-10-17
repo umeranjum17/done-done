@@ -116,7 +116,7 @@ async function kit() {
   if (major < 22 || (major === 22 && minor < 18))
     throw new UsageError(`judge: the judge needs Node 22.18 or later (this is ${process.versions.node})`, 'Install Node 22.18 or later, then re-run this command');
   try {
-    return { ...(await import('@byokit/decide/claude-code')), ...(await import('@byokit/decide')) };
+    return await import('@byokit/decide');
   } catch (e) {
     if ((e as NodeJS.ErrnoException).code !== 'ERR_MODULE_NOT_FOUND') throw e;
     // A verify run's detached runner has no command of the user's to repeat, so it names the rerun of its run.
@@ -129,7 +129,7 @@ async function kit() {
 export type Judge = { ask: Backend['ask']; resolve: typeof import('@byokit/decide/slim').resolve; lastError: () => string; signIn: string; signedIn: () => boolean };
 
 // The backend for one judge choice. It checks everything that needs no model call, so doctor can use it too.
-// record: where the answerer writes its agent call record (the claude-code route starts no agent of ours);
+// record: where each agent call writes its call record (the claude-code and answerer routes both run a real agent call);
 // questions: what each request asks, so the answerer can ask its agent for that answer shape; attempts: asks per request
 // when the answer is malformed.
 export async function backend(cfg: Config, choice: JudgeChoice, record: (request: number) => string = () => '', questions: Record<string, Question> = { relevance: QUESTION }, attempts = 1): Promise<Judge & { detail: string }> {

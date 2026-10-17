@@ -147,7 +147,7 @@ No journey yet? `done-done verify --outcome "<what a user can now do>"` has your
 
 With `auto_fix: { verify: <n> }` (0, the default, reports only), a failed verify is fixed with your own agent: your judge first sorts each wrong screen (a product bug to fix, or a question that waits at the gate for you), then your agent fixes the product in a done-done worktree with your ignored files copied in, and verify runs again there, up to n times. A pass ends `changed`, with the fix on a `done-done/verify-<run-id>` branch and your branch untouched ([details](docs/reference.md#fix-the-product)).
 
-While a `verify` or `maintain` run goes, `done-done status` shows its steps and next move, `done-done attach` streams its events, and `done-done logs --step <name>` shows one step's log. `done-done rerun` runs a failed run again from the failed step, `done-done abort` stops a live run, `done-done signoff` writes its sign-off message, and `done-done history` lists past runs.
+While a `verify` or `maintain` run goes, `done-done status` shows its steps and next move, `done-done attach` streams its events, and `done-done logs --step <name>` shows one step's log. `done-done rerun` runs a failed verify run again from the failed step, `done-done abort` stops a live run, `done-done signoff` writes a verify run's sign-off message, and `done-done history` lists past runs.
 
 Run `done-done` with no arguments to see the current config and the next step.
 

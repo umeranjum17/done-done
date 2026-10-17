@@ -30,6 +30,8 @@ mkdirSync(join(repo, 'src'), { recursive: true });
 const env = {
   ...process.env,
   DONE_DONE_HOME: home,
+  DONE_DONE_TEST_CLI: CLI,
+  DONE_DONE_LOOK_FIXTURES: join(REPO, 'test', 'fixtures', 'look'),
   GIT_AUTHOR_NAME: 'e2e', GIT_AUTHOR_EMAIL: 'e2e@example.com',
   GIT_COMMITTER_NAME: 'e2e', GIT_COMMITTER_EMAIL: 'e2e@example.com',
 };
@@ -60,11 +62,13 @@ try {
 
   // Fixture repo: minimal app with its own journeys, judge off (deterministic). The look journeys call the look step on a
   // phone screen with a clipped card title and on the same screen fixed.
-  const look = (page) => `node ${JSON.stringify(CLI)} look ${JSON.stringify(join(REPO, 'test', 'fixtures', 'look', `${page}.html`))} --out "$DONE_DONE_EVIDENCE_ROOT/${page}.png"`;
+  // The committed recipe names the CLI and the fixture pages through env, so it holds no path of this checkout.
+  const look = (page) => `node "\${DONE_DONE_TEST_CLI:?}" look "\${DONE_DONE_LOOK_FIXTURES:?}/${page}.html" --out "$DONE_DONE_EVIDENCE_ROOT/${page}.png"`;
   writeFileSync(join(repo, '.done-done.yaml'), `app: fixture\njudge:\n  enabled: false\njourneys:\n  shots:\n    command: node make-shots.mjs \${RUN_ID}\n${['clipped', 'fixed'].map((p) => `  look-${p}:\n    command: ${JSON.stringify(look(p))}\n`).join('')}`);
+  // The screen is committed beside the recipe and named relative to it, so the fixture holds no absolute path.
+  writeFileSync(join(repo, 'screen.png'), png(3));
   writeFileSync(join(repo, 'make-shots.mjs'),
-    `import { copyFileSync } from 'node:fs';\ncopyFileSync(${JSON.stringify(join(tmp, 'screen.png'))}, process.env.DONE_DONE_EVIDENCE_ROOT + '/home.png');\n`);
-  writeFileSync(join(tmp, 'screen.png'), png(3));
+    `import { copyFileSync } from 'node:fs';\ncopyFileSync('screen.png', process.env.DONE_DONE_EVIDENCE_ROOT + '/home.png');\n`);
   writeFileSync(join(repo, 'src', 'app.js'), 'export const app = 1;\n');
   sh('init', '-q', '-b', 'main'); sh('add', '-A'); sh('commit', '-qm', 'init');
   const head = sh('rev-parse', 'HEAD').trim();
@@ -74,6 +78,7 @@ try {
   const runOut = dd('run', 'shots');
   const runId = /run_id:\s*"?([^\s"]+)"?/.exec(runOut)?.[1];
   if (!runId) throw new Error('could not parse run_id from run output');
+  assert.equal(JSON.parse(dd('--json', 'status', '--run', runId)).run_id, runId, 'status shows the run record that run printed');
   const shot = join(home, 'evidence', 'fixture', runId, 'home.png');
   dd('check', '--outcome', 'fixture home renders', shot);
   // Relative citations select the explicit base, never a same-named cwd file.

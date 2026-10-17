@@ -3850,7 +3850,7 @@ test('attach streams a running run to its end', async () => {
 // Stub pi, gemini and codex CLIs that log how they were started (argv, stdin, cwd) and answer like the real ones:
 // pi -p --mode json streams JSONL with the answer in the assistant message_end text parts (fenced, as models
 // often do); gemini -p -o json prints one object with the answer in `response` (its headless.md); codex exec --json
-// streams JSONL events whose last agent_message holds the answer, after a narration message (seen live 13 Oct).
+// streams JSONL events whose last agent_message holds the answer, after a narration message.
 // Mode 'retry' answers garbage on the first call (counted from the log) so ask-again is exercised, 'bad'
 // always does, and 'auth' fails like a signed-out CLI.
 function stubPiGemini(env, answer = '{"ok":true}', mode = 'ok') {
@@ -3876,7 +3876,7 @@ const stdin = readFileSync(0, 'utf8');
 const policy = argv.includes('--policy') ? readFileSync(argv[argv.indexOf('--policy') + 1], 'utf8') : undefined;
 const attached = (argv[1].match(/@\\S+/g) ?? []).map((a) => readFileSync(a.slice(1)).subarray(1, 4).toString());
 appendFileSync(${JSON.stringify(log)}, JSON.stringify({ agent: 'gemini', argv, stdin, policy, attached, cwd: process.cwd() }) + '\\n');
-// A signed-out gemini (seen 13 Oct): the stack of its auth error, a warning, then the one useful line in red.
+// A signed-out gemini: the stack of its auth error, a warning, then the one useful line in red.
 if (${JSON.stringify(mode)} === 'auth') {
   process.stderr.write('Error authenticating: FatalCancellationError: Authentication cancelled by user.\\n    at initOauthClient (file:///gemini/bundle/chunk.js:1:1)\\n  exitCode: 130\\n}\\nSkill conflict detected: a skill overrides another\\n\\u001b[31mAuthentication cancelled by user.\\u001b[0m\\nUpdate available: 0.57.0\\n');
   process.exit(130);
@@ -3891,7 +3891,7 @@ appendFileSync(${JSON.stringify(log)}, JSON.stringify({ agent: 'codex', argv, st
 const say = (e) => console.log(JSON.stringify(e));
 say({ type: 'thread.started', thread_id: 't1' });
 say({ type: 'turn.started' });
-// A model a ChatGPT sign-in cannot use (seen 13 Oct): the API error comes as JSON text in an error event and turn.failed.
+// A model a ChatGPT sign-in cannot use: the API error comes as JSON text in an error event and turn.failed.
 if (${JSON.stringify(mode)} === 'auth') {
   const message = JSON.stringify({ type: 'error', status: 400, error: { type: 'invalid_request_error', message: "The 'x' model is not supported when using Codex with a ChatGPT account." } });
   say({ type: 'error', message });

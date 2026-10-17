@@ -2253,7 +2253,7 @@ function ensureIgnored(repo: string, rel: string): boolean {
 }
 
 // `init` also scaffolds the project's verify skill from the repo's own files: a port of the
-// fleet create-verification-skill interview (surface, run, drive, observe, isolate).
+// the create-verification-skill interview (surface, run, drive, observe, isolate).
 // Every line is an action: a detected handle gets concrete drive and capture steps, and a blank detection cannot
 // fill gets the steps to find it and record it there, never an invented command. An existing skill is never
 // overwritten, so re-run is idempotent.

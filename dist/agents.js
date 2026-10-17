@@ -151,12 +151,12 @@ const ADAPTERS = {
             return m ? `it asked for permission to ${m[1]} (${m[2]}), which a headless run cannot answer and auto-rejects` : '';
         },
     },
-    // pi -p reads the prompt on stdin (probed 12 Oct: with no positional message, stdin becomes the user
+    // pi -p reads the prompt on stdin (probed: with no positional message, stdin becomes the user
     // message); --mode json streams JSONL events whose assistant message_end holds the answer text,
     // --no-session keeps the probe ephemeral. An @<file> argument attaches an image to that message.
-    // --no-tools turns every built-in and extension tool off (probed 13 Oct: a canary file outside the cwd went unread).
+    // --no-tools turns every built-in and extension tool off (probed: a canary file outside the cwd went unread).
     // A tool-less call also loads no extensions, skills, prompt templates or context files: they would add the user's own
-    // context to a fresh judge, and extension loading took 2 minutes on a real setup (probed 13 Oct), past the judge's timeout.
+    // context to a fresh judge, and extension loading took 2 minutes on a real setup (probed), past the judge's timeout.
     // Pi has no permission gate for edit steps, so doctor warns about it. Without a model, pi runs its own default.
     pi: {
         argv: (c, dir) => ['-p', '--mode', 'json', '--no-session', ...(c.tools === 'edit' ? [] : PI_TOOL_LESS), ...(c.model ? ['--model', c.model] : []), ...(c.images ?? []).map((i) => `@${join(dir, i.name)}`)],
@@ -187,11 +187,11 @@ const ADAPTERS = {
     // answer, and --ephemeral keeps no session. An edit step runs in codex's workspace-write sandbox, which writes only the
     // repo, the run's folders (--add-dir) and $TMPDIR; it may use the network, since the drive launches the app and talks
     // to it, and it keeps the user's config.toml. Without a model, codex runs its own default.
-    // A tool-less call is refused: probed live 13 Oct, codex with the user's config.toml kept its MCP server, which read a
+    // A tool-less call is refused: codex with the user's config.toml kept its MCP server, which read a
     // canary file outside the folder, and --disable does not turn off its multi-agent tools.
     codex: {
         editOnly: 'codex cannot run tool-less: with your config.toml it keeps its MCP tools, which read files outside the folder',
-        // Seen live 13 Oct: each sandboxed command runs in its own process namespace, so a server or browser bridge started in the
+        // Each sandboxed command runs in its own process namespace, so a server or browser bridge started in the
         // background by one command was gone by the next one, and a drive that launched the app and then browsed it captured nothing.
         editNote: 'Your shell sandbox ends every process a command started, background ones too, when that command ends. So start what a task needs (an app, a server, a browser bridge), use it, save what it produces and stop it within one shell command (a script in $TMPDIR is fine).',
         argv: (c) => ['exec', '--json', '--ephemeral', ...(c.model ? ['-m', c.model] : []),
@@ -406,7 +406,7 @@ export async function askAgent(c) {
         for (;;) {
             attempts++;
             // An ask-again names what was wrong with the last answer. The trailer ends on words, not the schema: a weak model
-            // (Go Muse, 13 Oct) copied a schema that closed the prompt back as its answer.
+            // (seen with one opencode model) copied a schema that closed the prompt back as its answer.
             const schemaTrailer = `\n\nAnswer with only one JSON object that matches this JSON schema:\n${JSON.stringify(c.schema)}\nThat object holds your own values, never the schema itself, and you send no other text.\n`;
             const prompt = c.tools === 'edit' && adapter.editNote ? `${c.prompt}\n\n${adapter.editNote}` : c.prompt;
             const promptText = (attempts === 1 ? prompt : `${prompt}\n\nYour previous answer was not valid (${lastError}).`) + schemaTrailer;

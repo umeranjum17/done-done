@@ -244,11 +244,51 @@ test('the same evidence cannot prove a second, different claim', () => {
   assert.match(toon(r).findings[0].why, /already used as proof of a different claim \(claim id main\), not this one \(claim id checkout-flow, from the current branch\)/);
   assert.equal(dd('check', '--claim-id', 'main', '--outcome', 'home renders', ...files).code, 0, '--claim-id names the claim');
   sh('checkout', '-q', '--detach');
+  // A detached HEAD has no branch, so its claim is its commit: this evidence was already used under other claims.
   const detached = dd('check', '--outcome', 'home renders', ...files);
-  assert.equal(detached.code, 2, detached.out);
-  assert.match(toon(detached).error, /HEAD is detached.*pass --claim-id/);
+  assert.equal(detached.code, 1, detached.out);
+  assert.match(toon(detached).findings[0].why, /already used as proof of a different claim \(claim id main\), not this one \(claim id [0-9a-f]{40}, from the detached HEAD commit\)/);
   assert.equal(dd('check', '--claim-id', 'main', '--outcome', 'home and settings render', ...files).code, 0, 'a detached HEAD names its claim with --claim-id');
   assert.equal(dd('check', '--claim-id', ' ', '--outcome', 'x', ...files).code, 2, 'an empty claim id is a usage error');
+});
+
+test('a detached HEAD checks its commit as the claim id, so a fresh capture passes', () => {
+  const { repo, dd, sh, shots, head } = setup();
+  sh('checkout', '-q', '--detach');
+  const { files } = shots();
+  const r = dd('check', '--outcome', 'home renders', ...files);
+  assert.equal(r.code, 0, r.out);
+  assert.ok(readFileSync(join(repo, '.proof', '.done-done', 'ledger'), 'utf8').includes(` ${head()}\n`), 'the ledger names the commit as the claim');
+  assert.equal(dd('check', '--outcome', 'home renders', ...files).code, 0, 're-checking the same claim on the same commit is fine');
+});
+
+test('a run id from run resolves in status, and a capture from an uncommitted tree says to commit and capture again', () => {
+  const { repo, dd, head } = setup();
+  const id = toon(dd('run', 'shots')).run_id;
+  const s = toon(dd('status', '--run', id));
+  assert.deepEqual([s.command, s.run_id, s.commit], ['status', id, head()]);
+  assert.equal(dd('status', '--run', 'nope').code, 2, 'an unknown run id is still a usage error');
+  writeFileSync(join(repo, 'src', 'app.js'), 'export const app = 2;\n');
+  const dirty = dd('run', 'shots');
+  const c = dd('check', '--outcome', 'home renders', `.proof/${toon(dirty).run_id}/home.png`);
+  assert.equal(c.code, 1, c.out);
+  assert.match(c.out, /captured from a tree with uncommitted changes \(run [^)]+\); commit them, then capture again/);
+});
+
+test('init says to commit the config and verify skill before the first capture', () => {
+  const { dd } = setup();
+  assert.match(dd('init').out, /Commit \.done-done\.yaml and \.agents\/skills\/verify-notes before your first capture/);
+});
+
+test('init --journey refuses an absolute path inside the repo and names the relative form', () => {
+  const { repo, dd } = bareRepo();
+  const r = dd('init', '--journey', 'smoke', '--', `bash ${join(repo, 'scripts', 'chat.sh')} "$DONE_DONE_EVIDENCE_ROOT"`);
+  assert.equal(r.code, 2, r.out);
+  assert.match(r.out, /absolute path inside this repo/);
+  assert.match(r.out, /done-done init --journey smoke -- bash scripts\/chat\.sh/);
+  assert.equal(existsSync(join(repo, '.done-done.yaml')), false, 'a refused recipe writes nothing');
+  dd('init', '--journey', 'smoke', '--', 'bash scripts/chat.sh "$DONE_DONE_EVIDENCE_ROOT"');
+  assert.match(readFileSync(join(repo, '.done-done.yaml'), 'utf8'), /command: bash scripts\/chat\.sh/, 'the relative form is recorded');
 });
 
 test('two repos never see each other\'s reuse ledger', () => {

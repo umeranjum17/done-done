@@ -734,7 +734,7 @@ async function runCheck(argv: string[], run?: { dir: string; judge: boolean; jud
     }
     const stale = staleness(repo, cfg, rec.commit, now.commit);
     if (stale) findings.push({ level: 'fail', why: `${name}: ${stale} (run ${rec.run_id})` });
-    if (rec.dirty && !cfg.evidence.allow_dirty) findings.push({ level: 'fail', why: `${name}: captured from a tree with uncommitted changes (run ${rec.run_id})` });
+    if (rec.dirty && !cfg.evidence.allow_dirty) findings.push({ level: 'fail', why: `${name}: captured from a tree with uncommitted changes (run ${rec.run_id}); commit them, then capture again` });
     if (rec.exit !== null && rec.exit !== 0) findings.push({ level: 'fail', why: `${name}: its run command exited ${rec.exit} (run ${rec.run_id})` });
   }
   // A head capture of a base_ref run with no base capture of its name is reported, then judged alone.
@@ -749,9 +749,10 @@ async function runCheck(argv: string[], run?: { dir: string; judge: boolean; jud
   // evidence root next to the run records it guards: one per app (repo), shared by every checkout of it, never in git.
   const ledger = join(cfg.evidence.root, '.done-done', 'ledger');
   const given = values['claim-id']?.replace(/\s+/g, ' ').trim();
-  const claimId = given || prBranch || git(repo, 'branch', '--show-current');
-  const idFrom = given ? '--claim-id' : prBranch ? 'the PR branch' : 'the current branch';
-  if (!claimId && claim) throw new UsageError('HEAD is detached, so no branch names this claim; pass --claim-id <id>', 'Re-run with --claim-id <the branch or task this claim is for>');
+  // A detached HEAD (a worktree, a PR checkout) has no branch, so its claim is the commit it checks.
+  const branch = git(repo, 'branch', '--show-current');
+  const claimId = given || prBranch || branch || (claim ? now.commit : '');
+  const idFrom = given ? '--claim-id' : prBranch ? 'the PR branch' : branch ? 'the current branch' : 'the detached HEAD commit';
   const used = new Map<string, Set<string>>();
   if (existsSync(ledger))
     for (const line of readFileSync(ledger, 'utf8').split('\n')) {
@@ -1951,11 +1952,33 @@ async function cmdMaintain(argv: string[]): Promise<number> {
   return launch(dir, cfg, 'maintain', values);
 }
 
+// `run` writes an evidence record, not a verify run: status shows it too, so the run id that `run` printed resolves here.
+function showRecord(repo: string, cfg: Config, rec: RunRecord): number {
+  const rel = (p: string) => citable(repo, join(cfg.evidence.root, p));
+  const evidence: unknown[] = FULL ? rec.files.map((f) => ({ path: rel(f.path), sha256: f.sha256, bytes: f.bytes })) : rec.files.map((f) => rel(f.path));
+  const rows = cap(evidence);
+  emit({
+    command: 'status',
+    run_id: rec.run_id,
+    commit: rec.commit,
+    dirty: rec.dirty,
+    files: rec.files.length,
+    record: shown(repo, join(recordsDir(cfg), `${rec.run_id}.json`)),
+    evidence: rows.items,
+    ...(rows.omitted && { evidence_omitted: rows.omitted }),
+    help: [rec.files.length ? `Check this proof: done-done check --outcome "<what you proved>" ${rel(rec.files[0].path)}` : `Read the run's folder: ${shown(repo, runDir(cfg, rec.run_id))}`],
+  });
+  return PASS;
+}
+
 function cmdStatus(argv: string[]): number {
   const { values } = parseArgs({ args: argv, options: { run: { type: 'string' } } });
   const repo = repoRoot();
   const cfg = loadConfig(repo);
   const root = runsRoot(cfg.app);
+  const verify = values.run ? /^[\w-]+$/.test(values.run) && existsSync(join(root, values.run, 'run.json')) : runsIn(root).some((r) => r.repo === repo);
+  const rec = verify ? undefined : loadRecords(cfg).filter((r) => !values.run || r.run_id === values.run).sort((a, b) => a.started_at.localeCompare(b.started_at)).pop();
+  if (rec) return showRecord(repo, cfg, rec);
   return showRun(join(root, pickId(root, repo, 'status', cfg, values.run)), cfg, 'status');
 }
 
@@ -2808,6 +2831,11 @@ function checkJudge(cfg: Config, agent: string, model: string) {
   if (cfg.agent) selectJudge({ ...cfg, judge: { ...cfg.judge, route: routeOf(agent), model } }, selectAgent(cfg));
 }
 
+const commitFirst = (skill: string) => `.done-done.yaml and ${skill} before your first capture: check refuses proof from a tree with uncommitted changes`;
+
+// An absolute path inside the repo in a recipe: the recipe is committed, so it would name this checkout only.
+const absoluteInside = (command: string, repo: string) => [...command.matchAll(/(?:^|[\s"'=])(\/[^\s"'`;|&<>]*)/g)].map((m) => m[1]).find((p) => p === repo || p.startsWith(`${repo}/`));
+
 async function cmdInit(argv: string[]): Promise<number> {
   const dash = argv.indexOf('--');
   const { values } = parseArgs({
@@ -2866,6 +2894,8 @@ async function cmdInit(argv: string[]): Promise<number> {
     // Record the capture recipe in the repo so any checkout can re-run the proof.
     // The command is built once, the same way `run --` builds it, so the recipe re-runs exactly; ${RUN_ID} in it becomes the run id.
     const command = commandOf(parts);
+    const inside = absoluteInside(command, repo);
+    if (inside) throw new UsageError(`init --journey ${journey}: ${inside} is an absolute path inside this repo, and the recipe is committed to .done-done.yaml, so other checkouts cannot run it`, `Name it relative to the repo, e.g.: done-done init --journey ${journey} -- ${command.replaceAll(inside, relative(repo, inside) || '.')}`);
     const doc = existed ? parseDocument(readFileSync(file, 'utf8')) : new Document({ app: cfg.app });
     const top = (doc.toJS() ?? {}) as Record<string, any>;
     if (typeof top !== 'object' || Array.isArray(top)) throw new UsageError(`${file}: top level must be a mapping`);
@@ -2898,7 +2928,7 @@ async function cmdInit(argv: string[]): Promise<number> {
       gitignore: added ? `added ${rel!.replace(/\/+$/, '')}/` : 'unchanged',
       verify_skill: verify,
       ...agentHook.out,
-      help: [`Capture proof: done-done run ${journey}, then: ${check}`, ...agentHook.help, ...ag.help, ...jg.help],
+      help: [`Capture proof: done-done run ${journey}, then: ${check}`, ...agentHook.help, ...ag.help, ...jg.help, `Commit ${commitFirst(fresh.skill)}`],
     });
     return ag.code;
   }
@@ -2943,6 +2973,7 @@ app: ${JSON.stringify(cfg.app)}
       ...agentHook.help,
       ...ag.help,
       ...jg.help,
+      `Commit ${commitFirst(cfg.skill)}`,
     ],
   });
   return ag.code;

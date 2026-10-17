@@ -22,6 +22,7 @@ export type AgentCall = {
   schema: { required?: string[] } & Record<string, unknown>;
   cwd: string;
   timeoutMs: number;
+  idleMs?: number; // a streaming agent that prints nothing (stdout or stderr) this long is stopped; default AGENT_IDLE_MS
   tools: 'none' | 'read' | 'edit'; // none for the judge and most readers; read for the claude reader; edit (the drive) may also run commands
   record: string; // where the call record is written
   images?: { name: string; bytes: Buffer }[]; // attached to the prompt for the answerer judge, written into the call's scratch folder
@@ -30,11 +31,14 @@ export type AgentCall = {
   env?: Record<string, string>; // extra environment for the agent
   onSpawn?: (pgid: number) => void; // an edit step runs in its own process group; this gets its id
 };
-export type AgentAnswer = { ok: boolean; answer?: Record<string, unknown>; error?: string; record?: string; recordError?: string };
+export type AgentAnswer = { ok: boolean; answer?: Record<string, unknown>; error?: string; record?: string; recordError?: string; stderr?: string };
 
 // argv never carries the prompt: it goes on stdin, or (file: true) into a 0600 prompt file the argv points at.
 // done-done parses the answer, validates it against the schema, and asks a tool-less call again, at most ASK_ATTEMPTS calls.
 const ASK_ATTEMPTS = 3;
+// A streaming agent that prints nothing for this long is stopped, so a hung CLI ends in minutes, not at the agent_timeout.
+// Only streaming adapters are watched: claude and gemini print their one answer at the end, so silence is their normal state.
+export const AGENT_IDLE_MS = 5 * 60_000;
 // What a user sees of an agent's error: no colour codes, only the last line that names an error (not a
 // stack frame, an indented field or a lone brace), at most 200 characters. The call record keeps the raw stderr.
 const ERROR_WORD = /\b(error|failed|denied|cancelled|refused|not|invalid|unauthorized)\b/i;
@@ -43,6 +47,14 @@ function errorLine(text: string): string {
   const top = lines.filter((l) => !/^\s/.test(l));
   const line = (top.findLast((l) => ERROR_WORD.test(l)) ?? top.at(-1) ?? lines.at(-1) ?? '').trim();
   return line.length > 200 ? `${line.slice(0, 199)}…` : line;
+}
+// A provider's rate limit (HTTP 429, a usage limit with its reset time). The CLI may retry it for many minutes, so the call stops at the first line that says so.
+const RATE_LIMIT = /\b429\b|rate[ -]?limit|usage limit|too many requests/i;
+// The first lines of an agent's stderr, one line: what it said before it failed or went quiet. Indented lines (stack frames, fields) are
+// left out, as in errorLine. '' when it said nothing.
+function stderrHead(stderr: string): string {
+  const head = stripVTControlCharacters(stderr).split(/\r?\n/).filter((l) => /\w/.test(l) && !/^\s/.test(l)).slice(0, 2).map((l) => l.trim()).join(' | ');
+  return head.length > 300 ? `${head.slice(0, 299)}…` : head;
 }
 // opencode prints this on stderr and auto-rejects the ask when a headless run reaches a permission a non-interactive
 // call can never answer. The drive then ends with no answer, so name the permission and paths it refused instead of
@@ -58,7 +70,8 @@ class ProviderError extends Error {
 // files: name -> text the call needs in its scratch folder (gemini's deny-all policy).
 // editOnly: the agent cannot run a tool-less call, so only an edit step may start it; the reason is what the caller shows.
 // editNote: what an edit step's prompt adds about how this agent's own shell runs commands.
-type Adapter = { argv: (c: AgentCall, dir: string) => string[]; answer: (stdout: string, c: AgentCall) => unknown; file?: boolean; hint?: string; editOnly?: string; editNote?: string; env?: (c: AgentCall) => Record<string, string>; files?: (c: AgentCall) => Record<string, string>; reject?: (stderr: string) => string };
+// streams: the CLI writes its events as it works, so silence means it is stuck (AGENT_IDLE_MS applies).
+type Adapter = { argv: (c: AgentCall, dir: string) => string[]; answer: (stdout: string, c: AgentCall) => unknown; file?: boolean; streams?: boolean; hint?: string; editOnly?: string; editNote?: string; env?: (c: AgentCall) => Record<string, string>; files?: (c: AgentCall) => Record<string, string>; reject?: (stderr: string) => string };
 
 // The answer object in an agent's free text: the first top-level '{'..'}' span that parses to an object with every
 // required key, skipping braces and quotes in narration. With no such span, the last span that parsed is returned, so
@@ -98,6 +111,7 @@ export function extractJsonObject(text: string, required: string[] = []): unknow
 // message chunks of acpx's JSON-RPC event stream. Every tool is denied, and a permission prompt is denied too, since
 // nobody can answer it. No model means the target's own default.
 const ACP: Adapter = {
+  streams: true,
   argv: (c, dir) => ['--cwd', c.tools === 'none' ? dir : c.cwd, '--format', 'json', '--json-strict', '--deny-all',
     '--non-interactive-permissions', 'deny', ...(c.model ? ['--model', c.model] : []), c.agent.slice('acp:'.length), 'exec', '--file', '-'],
   answer: (out, c) => {
@@ -130,6 +144,7 @@ const ADAPTERS: Record<string, Adapter> = {
   // and the answer is the JSON object in the text parts of its JSON event stream.
   opencode: {
     file: true,
+    streams: true,
     argv: (c, dir) => ['run', 'Follow the attached instructions.', '--format', 'json', '-m', c.model, '-f', join(dir, 'prompt.md'), ...(c.images ?? []).flatMap((i) => ['-f', join(dir, i.name)])],
     answer: (out, c) => {
       const events = out.split('\n').filter((l) => l.startsWith('{')).map((l) => JSON.parse(l));
@@ -170,6 +185,7 @@ const ADAPTERS: Record<string, Adapter> = {
   // context to a fresh judge, and extension loading took 2 minutes on a real setup (probed), past the judge's timeout.
   // Pi has no permission gate for edit steps, so doctor warns about it. Without a model, pi runs its own default.
   pi: {
+    streams: true,
     argv: (c, dir) => ['-p', '--mode', 'json', '--no-session', ...(c.tools === 'edit' ? [] : PI_TOOL_LESS), ...(c.model ? ['--model', c.model] : []), ...(c.images ?? []).map((i) => `@${join(dir, i.name)}`)],
     answer: (out, c) => {
       let text = '';
@@ -196,6 +212,7 @@ const ADAPTERS: Record<string, Adapter> = {
   // A tool-less call is refused: codex with the user's config.toml kept its MCP server, which read a
   // canary file outside the folder, and --disable does not turn off its multi-agent tools.
   codex: {
+    streams: true,
     editOnly: 'codex cannot run tool-less: with your config.toml it keeps its MCP tools, which read files outside the folder',
     // Each sandboxed command runs in its own process namespace, so a server or browser bridge started in the
     // background by one command was gone by the next one, and a drive that launched the app and then browsed it captured nothing.
@@ -335,7 +352,7 @@ const OUTPUT_CAP = 64 << 20;
 
 // One agent process. An edit step gets its own process group, so whatever it started (a dev server, a browser) is
 // killed with it when it ends, times out or writes past the output cap.
-function start(bin: string, argv: string[], c: AgentCall, cwd: string, input: string, env: NodeJS.ProcessEnv): Promise<Ran> {
+function start(bin: string, argv: string[], c: AgentCall, cwd: string, input: string, env: NodeJS.ProcessEnv, idleMs: number): Promise<Ran> {
   const group = c.tools === 'edit';
   return new Promise((done) => {
     const child = spawn(bin, argv, { cwd, env, detached: group });
@@ -343,6 +360,24 @@ function start(bin: string, argv: string[], c: AgentCall, cwd: string, input: st
     let stderr = '';
     let error: Error | undefined;
     let drain: NodeJS.Timeout | undefined;
+    let idle: NodeJS.Timeout | undefined;
+    // A rate-limit line ends the call with that line, whatever the agent does next. On stdout the line must also say when it resets or retries,
+    // so an answer that only quotes a 429 from the app's code does not stop the call.
+    const limited = (text: string, stdoutLine: boolean) => {
+      const line = stripVTControlCharacters(text).split(/\r?\n/).find((l) => RATE_LIMIT.test(l) && (!stdoutLine || /reset|retry/i.test(l)));
+      if (!line || error) return;
+      error = new Error(`${c.agent} hit a rate limit and stopped: ${line.trim().slice(0, 200)}`);
+      kill();
+    };
+    // Any output (stdout or stderr) shows the agent is working; silence for idleMs is a hang.
+    const quiet = () => {
+      if (!idleMs) return;
+      clearTimeout(idle);
+      idle = setTimeout(() => {
+        error = new Error(`${c.agent} printed nothing for ${Math.round(idleMs / 1000)}s`);
+        kill();
+      }, idleMs);
+    };
     const kill = () => {
       try {
         if (group) process.kill(-child.pid!, 'SIGKILL');
@@ -361,15 +396,21 @@ function start(bin: string, argv: string[], c: AgentCall, cwd: string, input: st
     }, c.timeoutMs);
     child.on('error', (e) => {
       clearTimeout(timer);
+      clearTimeout(idle);
       done({ status: null, stdout, stderr, error: e });
     });
     if (!child.pid) return;
     if (group) c.onSpawn?.(child.pid);
+    quiet();
     child.stdout.setEncoding('utf8').on('data', (d) => {
+      quiet();
+      limited(d, true);
       stdout += d;
       if (stdout.length > OUTPUT_CAP) overflow();
     });
     child.stderr.setEncoding('utf8').on('data', (d) => {
+      quiet();
+      limited(d, false);
       stderr += d;
       if (stderr.length > OUTPUT_CAP) overflow();
     });
@@ -381,6 +422,7 @@ function start(bin: string, argv: string[], c: AgentCall, cwd: string, input: st
     });
     child.on('close', (status) => {
       clearTimeout(timer);
+      clearTimeout(idle);
       clearTimeout(drain);
       if (group) kill();
       done({ status, stdout, stderr, error });
@@ -418,7 +460,7 @@ export async function askAgent(c: AgentCall): Promise<AgentAnswer> {
       const prompt = c.tools === 'edit' && adapter.editNote ? `${c.prompt}\n\n${adapter.editNote}` : c.prompt;
       const promptText = (attempts === 1 ? prompt : `${prompt}\n\nYour previous answer was not valid (${lastError}).`) + schemaTrailer;
       if (adapter.file) writeFileSync(join(dir, 'prompt.md'), promptText, { mode: 0o600 });
-      res = await start(bin, argv(dir), c, cwd, adapter.file ? '' : promptText, { ...process.env, ...c.env, ...adapter.env?.(c) });
+      res = await start(bin, argv(dir), c, cwd, adapter.file ? '' : promptText, { ...process.env, ...c.env, ...adapter.env?.(c) }, adapter.streams ? c.idleMs ?? AGENT_IDLE_MS : 0);
       if (res.error) throw res.error;
       // A permission the run refused explains a call with no answer; name it rather than the exit code text.
       const refused = adapter.reject?.(String(res.stderr ?? '')) ?? '';
@@ -451,8 +493,13 @@ export async function askAgent(c: AgentCall): Promise<AgentAnswer> {
       }
     }
   } catch (e) {
-    out = { ok: false, error: (e as Error).message };
-    failure = e instanceof ProviderError ? e.detail : (e as Error).message;
+    // A silent, hung or timed-out agent says why only on stderr, so its no-answer reason quotes that. A provider error already
+    // carries its own line, so it is left as it is.
+    const said = stderrHead(String(res?.stderr ?? ''));
+    const provider = e instanceof ProviderError;
+    const note = (text: string) => (!provider && said && !text.includes(said.split(' | ')[0]) ? `${text}; ${c.agent} stderr: ${said}` : text);
+    out = { ok: false, error: note((e as Error).message), ...(!provider && said ? { stderr: said } : {}) };
+    failure = note(e instanceof ProviderError ? e.detail : (e as Error).message);
   } finally {
     if (dir) rmSync(dir, { recursive: true, force: true });
   }

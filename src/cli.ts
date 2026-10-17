@@ -84,7 +84,7 @@ const DOCTOR_TEXT = `doctor changes nothing except the --probe call record (the 
 const CONFIG_TEXT = `config: ~/.done-done/config.yaml (global; DONE_DONE_HOME moves it) and .done-done.yaml (the repo), repo over global.
   agent (either file): claude, codex, opencode, pi, gemini or acp:<target>, set by the user (done-done init --agent); done-done never picks one.
   global only: agent_config.<agent>.{model,effort} (effort: minimal, low, medium, high, xhigh, max), agent_args_override.<agent>
-  (extra flags), agent_path_override.<agent> (binary), acpx_path, agent_timeout (one agent call, default 30m),
+  (extra flags), agent_path_override.<agent> (binary), acpx_path, agent_timeout (one agent call, default 30m; a streaming agent that prints nothing for 5m is stopped early),
   evidence.local_root, judge.{route,model,allow_same,claude_code.config_dir} (the judge, set by the user with
   init --judge; never picked). done-done doctor shows where each agent setting came from.`;
 
@@ -1417,7 +1417,7 @@ async function runSteps(dir: string): Promise<void> {
       const picked = typeof answer?.feature === 'string' ? answer.feature.replace(/^.*features\//, '').replace(/\.md$/, '') : '';
       if (skillFeatures(at, cfg).includes(picked)) run.feature ??= picked;
       log('drive', { agent: author.agent, model: author.model, feature: run.feature ?? 'none', ...(a.ok ? { captures: answer?.captures, blocker } : { error: a.error }), record: a.record ?? a.recordError });
-      const why = !a.ok ? `${author.agent} did not finish the drive: ${a.error}`
+      const why = !a.ok ? `${author.agent} did not finish the drive: ${a.error}${a.record ? `; call record ${a.record}` : ''}`
         : blocker ? `${author.agent} could not drive the feature: ${blocker}`
         : changed ? `${author.agent} changed tracked files in the repo during the drive (see git status), so its captures are not of the committed code`
         : sealed.code !== PASS ? sealed.reason : '';
@@ -3010,6 +3010,8 @@ function writableDir(p: string): boolean {
 }
 
 const PROBE_SCHEMA = { type: 'object', properties: { ok: { type: 'boolean' } }, required: ['ok'], additionalProperties: false };
+// A tool-less probe starts in seconds; an agent silent for this long is stuck, so doctor says why instead of waiting the agent_timeout.
+const PROBE_IDLE_MS = 30_000;
 type DoctorCheck = { check: string; status: 'ok' | 'warning' | 'missing'; detail: string; fix: string };
 const unknownRow = (check: string, detail = 'unknown without a valid config', fix = ''): DoctorCheck => ({ check, status: 'missing', detail, fix });
 // Each effective setting of the agent and the file it came from: the global config, the repo's .done-done.yaml, or the built-in default.
@@ -3177,11 +3179,11 @@ async function cmdDoctor(argv: string[]): Promise<number> {
   else if (values.probe && agent) {
     const record = join(home(), 'agents', `probe-${new Date().toISOString().replace(/[:.]/g, '-')}-${agent.agent}.json`);
     const probe: AgentAnswer & { fix?: string } = !agent.path ? { ok: false, error: notFound, fix: installFix }
-      : await askAgent({ ...agent, prompt: 'This is a connectivity probe from done-done doctor. Use no tools. Answer with ok set to true.', schema: PROBE_SCHEMA, cwd: repo ?? process.cwd(), tools: 'none', record });
+      : await askAgent({ ...agent, prompt: 'This is a connectivity probe from done-done doctor. Use no tools. Answer with ok set to true.', schema: PROBE_SCHEMA, cwd: repo ?? process.cwd(), tools: 'none', record, idleMs: PROBE_IDLE_MS });
     checks.push(
       probe.ok && probe.answer?.ok === true
         ? { check: 'probe', status: 'ok', detail: `${agent.agent} (${modelPhrase(agent.agent, agent.model)}) answered the schema question; ${probe.recordError ? `the call record could not be written: ${probe.recordError}` : `record ${record}`}`, fix: '' }
-        : { check: 'probe', status: 'missing', detail: `${agent.agent} did not answer: ${probe.error ?? `answer ${JSON.stringify(probe.answer)}`}${probe.record ? `; record ${record}` : ''}${probe.recordError ? `; the call record could not be written: ${probe.recordError}` : ''}`, fix: probe.fix ?? `Check that ${agent.agent} is signed in${agent.model ? ` and can use model ${agent.model}` : ''}, or set agent_config.${agent.agent}.model` },
+        : { check: 'probe', status: 'missing', detail: `${agent.agent} did not answer: ${probe.error ?? `answer ${JSON.stringify(probe.answer)}`}${probe.record ? `; record ${record}` : ''}${probe.recordError ? `; the call record could not be written: ${probe.recordError}` : ''}`, fix: probe.fix ?? `${probe.stderr ? `${agent.agent} stderr: ${probe.stderr}. ` : ''}Check that ${agent.agent} is signed in${agent.model ? ` and can use model ${agent.model}` : ''}, or set agent_config.${agent.agent}.model` },
     );
   }
   if (agent) checks.push({ check: 'agent_settings', status: 'ok', detail: agentSettings(agentCfg!, agent.agent), fix: '' });

@@ -399,7 +399,14 @@ function openRun(repo: string, cfg: Config, journey: string | null, command: str
   return { schema: 1, run_id: runId, journey, command, ...h, started_at: new Date().toISOString(), ended_at: null, exit: null, files: [] };
 }
 
-function closeRun(repo: string, cfg: Config, rec: RunRecord): { code: number; result: Record<string, unknown>; reason: string } {
+// The first line of a run's log that names a failure, trimmed: what a non-zero exit is about. Empty when none does.
+function firstFailure(log: string): string {
+  if (!existsSync(log)) return '';
+  const line = readFileSync(log, 'utf8').split('\n').map((l) => l.replace(/\x1b\[[\d;]*m/g, '').trim()).find((l) => /\b(FAIL|FAILED|Error|failed|timed out)\b/.test(l));
+  return line ? line.slice(0, 200) : '';
+}
+
+function closeRun(repo: string, cfg: Config, rec: RunRecord, log?: string): { code: number; result: Record<string, unknown>; reason: string } {
   const now = head(repo);
   rec.files = captured(cfg, rec.run_id)
     .sort()
@@ -413,7 +420,10 @@ function closeRun(repo: string, cfg: Config, rec: RunRecord): { code: number; re
   const rel = (p: string) => citable(repo, join(cfg.evidence.root, p));
   let reason = '';
   if (now.commit !== rec.commit) reason = `HEAD moved from ${rec.commit} to ${now.commit} during the run; evidence is not tied to one commit`;
-  else if (rec.exit !== null && rec.exit !== 0) reason = `the run command exited ${rec.exit}`;
+  else if (rec.exit !== null && rec.exit !== 0) {
+    const failure = log ? firstFailure(log) : '';
+    reason = `the run command exited ${rec.exit}${failure ? `: ${failure}` : ''}`;
+  }
   else if (!rec.files.length) reason = `the run wrote no files into its folder ${shown(repo, runDir(cfg, rec.run_id))}; the command gets it as $DONE_DONE_EVIDENCE_ROOT and its run id as $DONE_DONE_RUN_ID (or \${RUN_ID} in the command)`;
   const evidence: unknown[] = FULL ? rec.files.map((f) => ({ path: rel(f.path), sha256: f.sha256, bytes: f.bytes })) : rec.files.map((f) => rel(f.path));
   const rows = cap(evidence);
@@ -511,14 +521,19 @@ async function cmdRun(argv: string[]): Promise<number> {
   // With a matrix block the journey runs once per required cell with that cell in env.
   const matrix = hasMatrix(cfg.matrix) ? splitMatrix(cfg.matrix!) : null;
   const failed: string[] = []; rec.exit = 0;
+  // The run's log lives with its run store, never in the evidence folder the judge reads: a failure names its first failing line.
+  const logFile = join(runsRoot(cfg.app), rec.run_id, 'logs', 'run.log');
+  mkdirSync(dirname(logFile), { recursive: true });
   for (const cell of matrix?.required ?? [{}]) {
     // The journey's own stdout goes to our stderr, never our stdout: stdout carries only done-done's
     // result document (TOON or --json), so a noisy journey cannot break `run --json | JSON.parse`.
     const r = await new Promise<number | null>((done) => {
-      spawn(expanded, {
-        cwd: repo, shell: true, stdio: ['inherit', process.stderr, 'inherit'],
+      const child = spawn(expanded, {
+        cwd: repo, shell: true, stdio: ['inherit', 'pipe', 'pipe'],
         env: { ...process.env, DONE_DONE_RUN_ID: rec.run_id, DONE_DONE_EVIDENCE_ROOT: runDir(cfg, rec.run_id), ...inst?.env, ...(matrix ? cellEnv(cell) : {}) },
-      }).on('error', () => done(null)).on('close', done);
+      });
+      for (const out of [child.stdout, child.stderr]) out?.on('data', (b: Buffer) => { process.stderr.write(b); appendFileSync(logFile, b); });
+      child.on('error', () => done(null)).on('close', done);
     });
     const code = r ?? 1;
     if (code !== 0) {
@@ -527,13 +542,15 @@ async function cmdRun(argv: string[]): Promise<number> {
     }
   }
   reap();
-  const sealed = closeRun(repo, cfg, rec);
+  const sealed = closeRun(repo, cfg, rec, logFile);
   if (matrix && failed.length) return emitted({ code: FAIL, result: { ...sealed.result, reason: `the run command failed for cell ${failed.join('; ')}` } });
   return emitted(sealed);
 }
 
 type Claim = { outcome: string; files: string[]; title: string; notProven?: string };
-type Finding = { level: 'fail' | 'inconclusive'; why: string; file?: string }; // file: the capture a judge finding is about
+// file: the capture a judge finding is about. missing: a named file that is not there, by where it should be (checkout: cited
+// from another folder; run: under the evidence root, so a re-capture puts it back).
+type Finding = { level: 'fail' | 'inconclusive'; why: string; file?: string; missing?: 'checkout' | 'run' };
 
 // The newest "## Checks" block: outcome, repro, proof and evidence lines.
 function claimFromChecks(body: string, title: string, repo: string, cfg: Config, out: Finding[]): Claim | undefined {
@@ -671,7 +688,8 @@ async function runCheck(argv: string[], run?: { dir: string; judge: boolean; jud
       bytes = readFileSync(path);
     } catch (e) {
       const atCwd = !isAbsolute(name) && resolve(name) !== path ? ` or ${resolve(name)}` : '';
-      findings.push({ level: 'fail', why: `${name}: no such file (looked for ${path}${atCwd}${(e as NodeJS.ErrnoException).code ? `, ${(e as NodeJS.ErrnoException).code}` : ''})` });
+      const missing: Finding['missing'] = (e as NodeJS.ErrnoException).code !== 'ENOENT' ? undefined : under(cfg.evidence.root, path) === null ? 'checkout' : 'run';
+      findings.push({ level: 'fail', why: `${name}: no such file (looked for ${path}${atCwd}${(e as NodeJS.ErrnoException).code ? `, ${(e as NodeJS.ErrnoException).code}` : ''})`, missing });
       continue;
     }
     const v = checkMedia(path, bytes);
@@ -935,7 +953,7 @@ type ReportContext = { cfg: Config; repo: string; claim?: string; source?: strin
 // Quote an argument only when a shell would split it.
 const arg = (a: string) => (/^[\w./@:+-]+$/.test(a) ? a : `'${a.replaceAll("'", `'\\''`)}'`);
 
-function checkHelp(code: number, files: string[], { cfg, repo, claim, source, citationBase, notProven, judgeLevel }: ReportContext): string[] {
+function checkHelp(code: number, findings: Finding[], files: string[], { cfg, repo, claim, source, citationBase, notProven, judgeLevel }: ReportContext): string[] {
   if (notProven) return ['Capture real proof and replace "not proven:", or set checks.not_proven: allow and re-check from a trusted ref'];
   if (judgeLevel === 'fail' && code === FAIL) return [`Capture the screen the outcome describes, then re-run this check: ${captureHint(cfg)}`];
   if (judgeLevel && code === INCONCLUSIVE) return ['Look at the capture yourself, or capture a clearer screen of the outcome and re-run this check'];
@@ -948,7 +966,17 @@ function checkHelp(code: number, files: string[], { cfg, repo, claim, source, ci
   }
   const capture = captureHint(cfg);
   if (code === INCONCLUSIVE) return [`Capture this proof through a run so it is tied to a commit, then re-run this check: ${capture}`];
-  return [`Commit your change, re-capture with ${capture}, then check the new files`];
+  // A named file outside this checkout is not lost: point at the folder that holds it first. Re-capture is for proof the run should have written here.
+  const help: string[] = [];
+  const absent = findings.filter((f) => f.missing === 'checkout').length;
+  if (absent) {
+    const form = source ? `done-done check --from ${arg(source)} --citation-base <dir>` : 'done-done check --outcome <claim> <files...> --citation-base <dir>';
+    help.push(citationBase === undefined
+      ? `${absent} named file${absent > 1 ? 's are' : ' is'} not in this checkout. If the evidence is in another folder, check against it: ${form}`
+      : `${absent} named file${absent > 1 ? 's are' : ' is'} not under --citation-base ${arg(citationBase)} either: check the paths in the Checks block`);
+  }
+  if (findings.some((f) => f.level === 'fail' && f.missing !== 'checkout')) help.push(`Commit your change, re-capture with ${capture}, then check the new files`);
+  return help;
 }
 
 function report(findings: Finding[], files: string[], ctx: ReportContext, note = ''): { code: number; result: Record<string, unknown> } {
@@ -970,7 +998,7 @@ function report(findings: Finding[], files: string[], ctx: ReportContext, note =
   const rows = cap(findings.map((f) => ({ level: f.level, why: f.why })));
   if (rows.items.length) result.findings = rows.items;
   if (rows.omitted) result.findings_omitted = rows.omitted;
-  result.help = checkHelp(code, files, ctx);
+  result.help = checkHelp(code, findings, files, ctx);
   return { code, result };
 }
 
@@ -3111,7 +3139,7 @@ async function cmdDoctor(argv: string[]): Promise<number> {
       check: 'judge_choice',
       status: apartOk ? 'ok' : 'warning',
       detail: `${choice.route} (model ${choice.model}; from config) judges the author ${choice.author.agent} (model ${choice.author.model || 'none'}): ${apart}${accepted}`,
-      fix: apartOk ? '' : `Ask the user whether to judge with another agent (${JUDGES.join(' or ')}) and save it: done-done init --judge <agent> --judge-model <model>`,
+      fix: apartOk ? '' : `Ask the user whether to judge with another agent or model (${JUDGES.join(' or ')}) and save it: done-done init --judge <agent> --judge-model <model>`,
     });
   }
   if (values.probe && !agent) checks.push(unknownRow('probe'));

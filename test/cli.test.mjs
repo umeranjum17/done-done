@@ -49,7 +49,10 @@ function setup(projectYaml = JUDGED.replace('journeys:', 'judge:\n  enabled: fal
   const dir = mkdtempSync(join(tmpdir(), 'done-done-test-'));
   after(() => rmSync(dir, { recursive: true, force: true }));
   const repo = join(dir, 'repo');
-  const env = { ...process.env, DONE_DONE_HOME: join(dir, 'home'), GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@example.com', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@example.com' };
+  // The fixture never inherits the machine's git config or hooks: GIT_CONFIG_* env (it can set core.hooksPath) is dropped, and the global config is an empty file in the fixture.
+  writeFileSync(join(dir, 'gitconfig'), '');
+  const host = Object.fromEntries(Object.entries(process.env).filter(([k]) => !k.startsWith('GIT_CONFIG')));
+  const env = { ...host, GIT_CONFIG_GLOBAL: join(dir, 'gitconfig'), GIT_CONFIG_NOSYSTEM: '1', DONE_DONE_HOME: join(dir, 'home'), GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@example.com', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@example.com' };
   mkdirSync(join(repo, 'src'), { recursive: true });
   mkdirSync(join(repo, 'docs'));
   writeFileSync(join(repo, '.gitignore'), '.proof/\n');
